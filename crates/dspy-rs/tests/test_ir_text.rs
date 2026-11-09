@@ -15,7 +15,9 @@ const JS_CITE_FILTER: &str = r#"(a) => ({
 
 fn fixture(name: &str) -> String {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"))
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("read {path}: {e}"))
+        .replace("\r\n", "\n")
 }
 
 fn model_config(name: &str) -> LMConfig {

@@ -370,6 +370,20 @@ cargo test -- --nocapture
 cargo run --example 01-simple
 ```
 
+On Windows, use the checked-in Cargo configuration for the full `dspy-rs`
+integration suite when the default parallel build exceeds available memory:
+
+```powershell
+$env:CARGO_BUILD_JOBS = '2'
+cargo --config config/windows-tests.toml test -p dspy-rs --no-default-features --tests --no-fail-fast --locked
+```
+
+This limits concurrent build jobs and reduces test-profile debug information
+to lower peak linker and compiler memory use. It changes build concurrency only;
+the environment variable also applies the job limit to nested Cargo invocations
+started by compile-fail integration tests. The test harness retains its normal
+threading behavior.
+
 ## 🛠️ Other Features
 
 ### Chain of Thought (CoT) Reasoning

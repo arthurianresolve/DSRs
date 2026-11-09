@@ -1,0 +1,8 @@
+[build]
+# Keep peak rustc and linker memory use predictable on Windows.
+jobs = 2
+
+[profile.test]
+# Reduce linker memory use while retaining useful line-level debug information.
+debug = 1
+incremental = false
