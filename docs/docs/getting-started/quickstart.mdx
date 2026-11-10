@@ -1,264 +1,95 @@
 ---
 title: "Quickstart"
-description: "Build your first LM pipeline in minutes"
+description: "Make a typed LM call, inspect its prompt and read its history"
 icon: "rocket"
 ---
 
-DSRs lets you call language models with typed Rust structs. Define your inputs and outputs as a struct, and the library handles prompt formatting and response parsing.
+A signature declares typed input and output fields. `Predict<S>` renders its prompt, sends it through an LM, and parses the response into `Predicted<S::Output>`.
 
-This guide walks you through building your first typed LM pipeline.
-Call `init_tracing()` once at startup in your app examples.
-
-<Steps>
-<Step title="Install DSRs">
-
-Add to your `Cargo.toml`:
+## Install
 
 ```toml
 [dependencies]
-dspy-rs = "0.7"
-tokio = { version = "1", features = ["full"] }
+dspy-rs = "0.7.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
+serde_json = "1"
 ```
 
-Or via cargo:
+These guides describe the repository checkout. A published crate may not yet include every documented API. For a local checkout, replace the version dependency with `dspy-rs = { path = "../DSRs/crates/dspy-rs" }`.
 
-```bash
-cargo add dspy-rs tokio anyhow
-```
-
-DSRs enables the `data` and `cache` Cargo features by default:
+The default Cargo features are `data` and `cache`. For typed prediction without the heavy dataset and disk-cache dependencies, use `default-features = false`.
 
 | Features | Dataset loading | Response caching | Execution history |
 |---|---|---|---|
 | Default (`data`, `cache`) | JSON/JSONL, CSV, Parquet, Hugging Face | Available | Available |
-| `default-features = false` | JSON/JSONL | Unavailable | Available |
-| `default-features = false, features = ["cache"]` | JSON/JSONL | Available | Available |
-| `default-features = false, features = ["data"]` | JSON/JSONL, CSV, Parquet, Hugging Face | Unavailable | Available |
+| No defaults | JSON/JSONL | Unavailable | Available |
+| `cache` only | JSON/JSONL | Available | Available |
+| `data` only | JSON/JSONL, CSV, Parquet, Hugging Face | Unavailable | Available |
 
-For a minimal build, use `dspy-rs = { version = "0.7", default-features = false }`. The `data` feature enables Arrow, Parquet, Hugging Face and CSV dependencies; `cache` enables foyer and tempfile. HTTP support remains part of the core library for LM providers and JSON/JSONL loading. Tests use tempfile independently as a development dependency.
-
-The `cache` feature makes response caching available; enable it for an LM with `.cache(true)`. That setting returns an error when the feature is absent.
-
-</Step>
-
-<Step title="Configure the LM">
-
-Tell DSRs which model to use. This sets a global default that all predictors will use:
-
-```rust
-use dspy_rs::{configure, init_tracing, LM};
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    init_tracing()?;
-
-    configure(
-        LM::builder()
-            .model("openai:gpt-4o-mini".to_string())
-            .build()
-            .await?,
-    );
-
-    Ok(())
-}
-```
-
-<Note>
-Set `OPENAI_API_KEY` in your environment. For other providers, use the appropriate prefix (e.g., `anthropic:claude-3-haiku`).
-</Note>
-
-</Step>
-
-<Step title="Define a signature">
-
-A [signature](/docs/components/signatures) declares your task's inputs and outputs:
-
-```rust
-use dspy_rs::Signature;
-
-/// Answer questions accurately and concisely.
-#[derive(Signature, Clone, Debug)]
-struct QA {
-    /// The question to answer
-    #[input]
-    question: String,
-
-    /// A clear, direct answer
-    #[output]
-    answer: String,
-}
-```
-
-The doc comments become:
-- **Struct docstring** → instruction for the LM
-- **Field docstrings** → field descriptions in the prompt
-
-</Step>
-
-<Step title="Call the LM">
-
-Create a [predictor](/docs/components/predict) and call it:
-
-```rust
-use dspy_rs::Predict;
-
-let predict = Predict::<QA>::new();
-
-// QAInput is auto-generated from your #[input] fields
-let output = predict.call(QAInput {
-    question: "What is the capital of France?".into(),
-}).await?;
-
-println!("Answer: {}", output.answer);
-```
-
-The `#[derive(Signature)]` macro generates `QAInput` from your `#[input]` fields. You get back a `QA` struct with both input and output fields filled in - `output.answer` is a typed `String`.
-
-</Step>
-</Steps>
+The `cache` feature makes caching available; enable it on an LM with `.cache(true)`. That setting returns an error if the feature is absent. History remains available independently of caching.
 
 ## Complete example
 
+Save this as `src/main.rs`. Set `OPENAI_API_KEY` in your environment before running `cargo run`. To preview the prompt offline, run `cargo run -- --inspect-only`; this sends no request and needs no key.
+
 ```rust
-use dspy_rs::{configure, init_tracing, LM, Predict, Signature};
+use dspy_rs::{LM, Predict, Signature};
 
 /// Answer questions accurately and concisely.
 #[derive(Signature, Clone, Debug)]
 struct QA {
     #[input]
     question: String,
-
     #[output]
     answer: String,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init_tracing()?;
-
-    configure(
-        LM::builder()
-            .model("openai:gpt-4o-mini".to_string())
-            .build()
-            .await?,
-    );
-
-    let predict = Predict::<QA>::new();
-
-    let output = predict.call(QAInput {
+    let inspect_only = std::env::args().any(|arg| arg == "--inspect-only");
+    let api_key = if inspect_only {
+        "unused-for-prompt-inspection".to_string()
+    } else {
+        std::env::var("OPENAI_API_KEY")?
+    };
+    let lm = LM::builder()
+        .model("openai:gpt-4o-mini".to_string())
+        .api_key(api_key)
+        .build()
+        .await?;
+    let predict = Predict::<QA>::builder().lm(lm.clone()).build();
+    let input = QAInput {
         question: "What is the capital of France?".into(),
-    }).await?;
+    };
 
-    println!("Answer: {}", output.answer);
+    // Building a chat formats the prompt without sending a provider request.
+    let chat = predict.build_chat(&input).await?;
+    println!("{}", serde_json::to_string_pretty(&chat.to_json())?);
+    if inspect_only {
+        return Ok(());
+    }
 
+    let (prediction, _conversation) = predict.call_and_parse(chat).await?;
+    println!("Answer: {}", prediction.answer);
+    for entry in lm.inspect_history(1).await {
+        println!("Raw output: {:?}", entry.raw_output);
+        println!("Parsed output: {:?}", entry.output);
+    }
     Ok(())
 }
 ```
 
-## Next steps
+The same source is maintained as [00-quickstart.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/00-quickstart.rs). From this repository, run `cargo run -p dspy-rs --no-default-features --example 00-quickstart -- --inspect-only`.
 
-<CardGroup cols={2}>
-<Card title="How DSRs thinks" icon="compass" href="/docs/getting-started/how-dsrs-thinks">
-The mental model behind the library
-</Card>
-<Card title="Signatures" icon="pen-ruler" href="/docs/components/signatures">
-Every attribute, every supported type, constraints
-</Card>
-<Card title="Predict" icon="robot" href="/docs/components/predict">
-Builder surface, demos, metadata, errors
-</Card>
-<Card title="Modules" icon="circle-nodes" href="/docs/components/modules">
-ChainOfThought, predictor discovery, composition
-</Card>
-</CardGroup>
+The derive generates `QAInput` and `QAOutput`. Struct documentation becomes the LM instruction; field documentation describes individual fields. The successful prediction contains `QAOutput`, accessed directly through `Deref`, and metadata via `.metadata()`. Use `.into_inner()` to take ownership of the output.
 
-## Adding complexity
+`build_chat` uses the configured LM to resolve the prompt but performs no provider request. Sending that same chat with `call_and_parse` avoids rebuilding the inspected prompt and returns the updated conversation. For a normal one-shot call, use `predict.call(input).await?`.
 
-### Input formatting and rendering
+History records the executed call, its raw response and parsed output. Building a prompt alone does not create a history entry. History is bounded and is not persistent storage. See [LM history](/docs/components/lm#inspecting-history) for capacities, failure records and module scopes. Treat printed prompts and responses as potentially sensitive application data.
 
-Use `#[format("json")]` for serialization, or `#[render(jinja = "...")]` for custom field text.
-See the full attribute reference in [Signatures & types](/docs/components/signatures) and runtime behavior in [Adapters](/docs/components/adapters).
+## Predictors and modules
 
-### Custom types
+A `Predict<QA>` is a module with one LM task. A `ChainOfThought<QA>` adds a typed reasoning field. Compose stages by implementing `Module::forward` and call the resulting module with `Module::call`. Declare its optimizer-visible leaves using `predictors!`.
 
-When you need more than primitives, add [`#[Schema]`](/docs/components/signatures):
-
-```rust
-use dspy_rs::{Signature, Schema};
-
-#[Schema]
-#[derive(Clone, Debug)]
-enum Sentiment {
-    Positive,
-    Negative,
-    Neutral,
-}
-
-#[derive(Signature, Clone, Debug)]
-/// Analyze the sentiment of the text.
-struct SentimentAnalysis {
-    #[input]
-    text: String,
-
-    #[output]
-    sentiment: Sentiment,
-
-    #[output]
-    confidence: f64,
-}
-```
-
-### Few-shot demos
-
-Add examples to guide the LM:
-
-```rust
-use dspy_rs::Demo;
-
-let predict = Predict::<QA>::builder()
-    .demo(Demo::<QA>::new(
-        QAInput { question: "What is 2+2?".into() },
-        QAOutput { answer: "4".into() },
-    ))
-    .build();
-```
-
-### Constraints
-
-Validate outputs with [`#[check]` and `#[assert]`](/docs/components/signatures):
-
-```rust
-#[derive(Signature, Clone, Debug)]
-struct Rating {
-    #[input]
-    text: String,
-
-    #[output]
-    #[assert("this >= 1 && this <= 5")]
-    score: i32,
-}
-```
-
-### Multi-step pipelines
-
-Chain [predictors](/docs/components/predict) for complex workflows:
-
-```rust
-struct SummarizeAndRate {
-    summarizer: Predict<Summarize>,
-    rater: Predict<Rate>,
-}
-
-impl SummarizeAndRate {
-    async fn run(&self, text: String) -> anyhow::Result<RateOutput> {
-        let summary = self.summarizer.call(SummarizeInput { text }).await?;
-        let rating = self.rater.call(RateInput {
-            summary: summary.summary,
-        }).await?;
-        Ok(rating.into_inner())
-    }
-}
-```
-
-See [Modules](/docs/components/modules) for how to make this optimizer-compatible.
+See [Modules](/docs/components/modules) for a complete pipeline, [Predict](/docs/components/predict) for demos and validation retries, [Signatures](/docs/components/signatures) for custom types and constraints, and [LM](/docs/components/lm) for providers, scoped configuration and history. The [examples index](/docs/guides/examples) lists complete programs and their feature requirements.
