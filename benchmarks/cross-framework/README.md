@@ -1,5 +1,10 @@
 # Cross-framework benchmarks
 
+For a reproducible three-stage HotpotQA reflection workload with retained raw
+samples, per-stage timing, separate adapter replay and provenance, use the
+[HotpotQA profiling protocol](hotpotqa/README.md). It has correctness checks and
+an explicitly simulated waiting phase; it does not measure live inference.
+
 Apples-to-apples framework-overhead comparison: DSRs vs DSPy (Python) vs a
 minimal LangChain chain. Every benchmark mocks the LM so provider latency is
 excluded — what remains is the framework's own CPU cost per call and its
@@ -25,7 +30,7 @@ DSRs: tokio + `buffered(16)` via `evaluate_trainset_with_concurrency`).
 
 ```bash
 # Rust (from repo root)
-cargo run --release --example 97-perf-microbench
+cargo run -p dspy-rs --release --features cache --example 97-perf-microbench
 cargo run --release --example 98-orchestration-bench
 cargo run --release --example 99-deep-harness-bench
 
@@ -38,6 +43,13 @@ venv/bin/python bench_langchain.py
 
 ## Results (2026-07-27, Apple Silicon, dspy 3.2.1, langchain-core 1.5.1)
 
+These are historical figures from the original report. This repository does not
+retain their exact source revisions, raw samples or complete environment. They
+are not measurements of the current checkout and should not serve as an
+acceptance baseline. In particular, the topology differences below prevent a
+general cross-framework speedup claim. Use the reproducible protocol above for
+new evidence.
+
 ### Per-call framework overhead (mocked LM)
 
 | framework | 0 demos | 2 demos |
@@ -46,8 +58,8 @@ venv/bin/python bench_langchain.py
 | DSPy 3.2.1 | 239.3 µs | 291.0 µs |
 | LangChain (minimal chain, fewer features) | 135.1 µs | — |
 
-DSRs is ~100x faster than DSPy per call and ~50x faster than a LangChain chain
-that does a fraction of the work.
+The reported ratios apply only to these mocked workloads. The LangChain chain
+also performs less validation work, so it is not an equivalent implementation.
 
 ### Orchestration (256 × 20 ms simulated calls @ 16 concurrent)
 
@@ -90,11 +102,9 @@ Notes:
   concurrently with `try_join_all` inside the module — idiomatic async Rust.
   A plain DSPy module executes sub-calls sequentially; parallelism requires
   manual threading. Both numbers are "what the natural implementation costs."
-- DSRs' margin *widens* with depth (89× → 111×) — per-stage overhead amortizes
-  in Rust while Python's per-call floor is fixed.
-- DSRs demo scaling (6.8 µs @ 16 → 21.3 µs @ 64) is the residual per-call cost
-  of cloning the cached prompt prefix into rig form; caching the rig-converted
-  prefix (a known follow-up) would flatten it further.
+- The depth and demo-scaling figures are historical observations. Confirm the
+  current execution paths with a profile before attributing them to a specific
+  allocation or proposing a prompt-prefix cache.
 
 ## Caveats
 
@@ -102,7 +112,7 @@ Notes:
   single call is dominated by 300 ms–2 s of provider latency; per-call CPU is
   invisible there. The gap matters in high-concurrency evaluation, optimizer
   loops over cached responses, and local inference at high QPS.
-- Cross-language comparisons carry inherent noise (allocator, interpreter
-  warmup). The ~100x margin is far above that noise floor.
+- Cross-language comparisons depend on allocator, interpreter warmup and runtime
+  versions. Retain raw repeated samples before interpreting a ratio.
 - Both orchestration measurements include OS timer slop on the 20 ms sleeps;
   the protocol is identical on both sides.
