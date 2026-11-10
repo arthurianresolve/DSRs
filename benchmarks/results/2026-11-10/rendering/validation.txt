@@ -1,0 +1,79 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 47s
+     Running tests\test_chat_adapter_schema.rs (<shared-target>\debug\deps\test_chat_adapter_schema-a0ddf60428b78f38.exe)
+
+running 2 tests
+test parse_output_def_uses_canonical_field_names ... ok
+test parse_output_def_accepts_dotted_field_markers ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests\test_chat_prompt_composition.rs (<shared-target>\debug\deps\test_chat_prompt_composition-221e8a82fdec8efc.exe)
+
+running 8 tests
+test assistant_builder_orders_fields_and_ends_with_completed_marker ... ok
+test instruction_override_is_used_in_objective_section ... ok
+test system_prompt_field_descriptions_and_structure_are_present ... ok
+test response_instruction_line_orders_output_fields ... ok
+test system_prompt_includes_all_sections_in_order_with_boundaries ... ok
+test demo_format_composes_user_and_assistant_parts ... ok
+test user_builder_appends_requirements ... ok
+test empty_instruction_uses_generated_fallback_objective ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\test_chat_prompt_golden.rs (<shared-target>\debug\deps\test_chat_prompt_golden-b45039a444cf1c0b.exe)
+
+running 4 tests
+test golden_user_prompt_is_stable ... ok
+test golden_assistant_prompt_is_stable ... ok
+test golden_demo_messages_are_stable ... ok
+test golden_system_prompt_is_stable ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\test_input_format.rs (<shared-target>\debug\deps\test_input_format-cfde1bb2862a449f.exe)
+
+running 13 tests
+test typed_input_appends_response_instruction_reminder ... ok
+test typed_input_default_string_is_raw ... ok
+test typed_input_format_json_is_parsable ... ok
+test typed_input_format_toon_falls_back_to_json ... ok
+test typed_input_format_yaml_falls_back_to_json ... ok
+test typed_input_default_non_string_is_json ... ok
+test jinja_aliases_preserve_explicit_keys_and_missing_fields_stay_skipped ... ok
+test typed_input_render_jinja_exposes_field_metadata_and_vars ... ok
+test typed_input_render_jinja_non_string_primitives ... ok
+test typed_input_render_jinja_supports_contrib_filters ... ok
+test typed_input_render_jinja_uses_context_values ... ok
+test jinja_fields_share_aliases_but_each_call_sees_current_input ... ok
+test typed_input_render_jinja_missing_var_panics ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\test_ir_dynamic_render.rs (<shared-target>\debug\deps\test_ir_dynamic_render-03e56f0b21bf1bed.exe)
+
+running 6 tests
+test derive_bridged_input_honors_format_hints ... ok
+test derive_bridged_system_prompt_renders_aliases_docs_and_types ... ok
+test derive_bridged_jinja_input_renders_template ... ok
+test runtime_only_signature_enforces_asserts ... ok
+test runtime_only_signature_round_trips ... ok
+test derive_bridged_parse_assembles_typed_output_and_checks ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests\test_validation_feedback.rs (<shared-target>\debug\deps\test_validation_feedback-e027379e94934012.exe)
+
+running 10 tests
+test corrective_retries_reject_attached_tools_before_any_execution ... ok
+test provider_failures_are_not_retried_as_validation_failures ... ok
+test module_overrides_and_optimizer_discovery_are_preserved ... ok
+test malformed_output_gets_a_corrective_turn ... ok
+test one_attempt_is_the_default ... ok
+test soft_checks_stay_informational_unless_enabled ... ok
+test hard_asserts_are_repaired_and_custom_callbacks_only_see_parsed_values ... ok
+test exhaustion_returns_typed_feedback_last_response_and_total_usage ... ok
+test custom_field_and_signature_rules_send_feedback_and_accumulate_usage ... ok
+test enabled_soft_checks_are_sent_back_with_field_and_label ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

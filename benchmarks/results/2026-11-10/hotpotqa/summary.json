@@ -1,0 +1,70 @@
+[
+  {
+    "phase": "cpu",
+    "framework": "dsrs",
+    "pipeline_ns_median_of_run_means": 199136.1666666667,
+    "pipeline_ns_run_means": [
+      170967.16666666666,
+      228840.83333333334,
+      222946.5,
+      175325.83333333334
+    ],
+    "stage_ns_median_of_run_means": [
+      62798.16666666667,
+      64954.08333333333,
+      70149.33333333334
+    ],
+    "simulated_wait_ns_median_of_run_means": 0.0
+  },
+  {
+    "phase": "cpu",
+    "framework": "dspy",
+    "pipeline_ns_median_of_run_means": 5125880.166666666,
+    "pipeline_ns_run_means": [
+      4191694.6666666665,
+      5398699.833333333,
+      6517660.333333333,
+      4853060.5
+    ],
+    "stage_ns_median_of_run_means": [
+      1578345.1666666667,
+      1683674.8333333335,
+      1842304.6666666665
+    ],
+    "simulated_wait_ns_median_of_run_means": 0.0
+  },
+  {
+    "phase": "simulated-wait",
+    "framework": "dsrs",
+    "pipeline_ns_median_of_run_means": 45288125.83333333,
+    "pipeline_ns_run_means": [
+      44210461.666666664,
+      44929941.666666664,
+      47186946.666666664,
+      45646310
+    ],
+    "stage_ns_median_of_run_means": [
+      14640660.0,
+      15051035.0,
+      15380698.333333332
+    ],
+    "simulated_wait_ns_median_of_run_means": 44646517.5
+  },
+  {
+    "phase": "simulated-wait",
+    "framework": "dspy",
+    "pipeline_ns_median_of_run_means": 19451633.333333336,
+    "pipeline_ns_run_means": [
+      19220761.666666668,
+      19200435,
+      19682505,
+      19819635
+    ],
+    "stage_ns_median_of_run_means": [
+      6434619.166666666,
+      6496979.166666666,
+      6540214.166666666
+    ],
+    "simulated_wait_ns_median_of_run_means": 15931948.333333332
+  }
+]

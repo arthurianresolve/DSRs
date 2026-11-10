@@ -1,0 +1,17 @@
+{
+  "revision": "8534e97cb95f93adc9b66b1037ba39886b5b61ab",
+  "clean": true,
+  "build": "cargo build -p dspy-rs --release --no-default-features --example bench-hotpotqa-reflection --example 00-quickstart --locked -j1",
+  "rust_source_sha256": "794035DF2D4AB7FE012A4E8B7B7ECA77C240F1D74988BF47E9E083600B62ABB2",
+  "executable_sha256": "3B86E3EE7EA0A5B3D22C4232F51ABF157346437BC3E0B1EB965C8FBBA36A01FD",
+  "cpu": {
+    "Name": "Intel(R) Core(TM) i7-10610U CPU @ 1.80GHz",
+    "NumberOfCores": 4,
+    "NumberOfLogicalProcessors": 8,
+    "MaxClockSpeed": 2304
+  },
+  "power": "GUID des Energieschemas: 381b4222-f694-41f0-9685-ff5bb260df2e  (Ausbalanciert)\r\n",
+  "background_rust_compilers": [
+    "xtask"
+  ]
+}

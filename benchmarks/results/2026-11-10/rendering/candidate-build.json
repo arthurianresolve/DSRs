@@ -1,0 +1,7 @@
+{
+  "revision": "c0a5820090792fac5580aec8c64fc7de7cd3b191",
+  "clean": true,
+  "build": "cargo build -p dspy-rs --release --no-default-features --example bench-input-rendering --locked -j1",
+  "executable_sha256": "2CD3761EF90C5783825DBEDF0B3C6ED1BCABF69E5E859D43C69586F0E219BADC",
+  "lock_sha256": "5F53124CCE51B625B637AC902D19280F2EE923019AB03A0AB8FAC23A237969CD"
+}

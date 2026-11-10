@@ -1,0 +1,16 @@
+{
+  "revision": "ab48894f22320af8da9510bcbc5f8db79b9cdacd",
+  "clean": true,
+  "build": "cargo build -p dspy-rs --release --no-default-features --example bench-input-rendering --locked -j1",
+  "executable_sha256": "C16038268F3E1F5888629E94CCA257C37D3B057F0121552E7FE12E057EA2BED5",
+  "harness_sha256": "F17C2529CE635687A63AF8718A73A7B4B151DCD92B89B661D2305408095CCC53",
+  "lock_sha256": "5F53124CCE51B625B637AC902D19280F2EE923019AB03A0AB8FAC23A237969CD",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\r\nbinary: rustc\r\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\r\ncommit-date: 2026-09-01\r\nhost: x86_64-pc-windows-msvc\r\nrelease: 1.98.1\r\nLLVM version: 22.1.8\r\n",
+  "cpu": {
+    "Name": "Intel(R) Core(TM) i7-10610U CPU @ 1.80GHz",
+    "NumberOfCores": 4,
+    "NumberOfLogicalProcessors": 8,
+    "MaxClockSpeed": 2304
+  },
+  "power": "GUID des Energieschemas: 381b4222-f694-41f0-9685-ff5bb260df2e  (Ausbalanciert)\r\n"
+}
