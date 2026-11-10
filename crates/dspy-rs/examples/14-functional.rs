@@ -19,8 +19,7 @@ cargo run --example 14-functional
 
 use anyhow::Result;
 use dspy_rs::{
-    LM, LMClient, PredictError, Predicted, Signature, TestCompletionModel, configure,
-    fx,
+    LM, LMClient, PredictError, Predicted, Signature, TestCompletionModel, configure, fx,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -85,7 +84,9 @@ async fn main() -> Result<()> {
     ]);
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("offline"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await?
     .with_client(LMClient::Test(client))
@@ -101,7 +102,10 @@ async fn main() -> Result<()> {
     // 2. Same function under a capture scope with candidate params injected.
     let mut candidate = fx::Params::new();
     candidate.set_instruction("drafter", "Draft thoroughly; include one supporting fact.");
-    candidate.set_instruction("refiner", "Refine into one precise sentence, keep the fact.");
+    candidate.set_instruction(
+        "refiner",
+        "Refine into one precise sentence, keep the fact.",
+    );
 
     let (result, trace) =
         dspy_rs::trace::capture(|| fx::with_params(candidate.clone(), pipeline(question))).await;

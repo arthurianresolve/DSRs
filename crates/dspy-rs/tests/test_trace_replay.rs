@@ -28,7 +28,9 @@ async fn make_test_lm(responses: Vec<AssistantContent>) -> LM {
     let client = TestCompletionModel::new(responses);
     temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await
     .unwrap()
@@ -138,8 +140,10 @@ async fn strict_replay_diverges_on_mutated_instruction() {
         .lm(make_test_lm(vec![]).await)
         .build();
 
-    let (result, report) =
-        replay(&trace, ReplayMode::Strict, || run_pipeline(&drafter, &refiner)).await;
+    let (result, report) = replay(&trace, ReplayMode::Strict, || {
+        run_pipeline(&drafter, &refiner)
+    })
+    .await;
 
     let err = result.expect_err("mutated instruction must refuse strict replay");
     let refiner_span = &trace.spans[2];
@@ -202,7 +206,13 @@ async fn strict_replay_reports_divergence_seq_for_repeat_invocations() {
     let err = result.expect_err("changed second input must diverge");
     match err {
         PredictError::Replay {
-            source: ReplayError::Divergence { component, seq, expected_span, .. },
+            source:
+                ReplayError::Divergence {
+                    component,
+                    seq,
+                    expected_span,
+                    ..
+                },
         } => {
             assert_eq!(component, "drafter");
             assert_eq!(seq, 1);
@@ -221,13 +231,20 @@ async fn strict_replay_refuses_incomplete_spans() {
     // Redaction/truncation marks spans incomplete; those refuse strict replay.
     trace.spans[0].complete = false;
 
-    let (result, report) =
-        replay(&trace, ReplayMode::Strict, || run_pipeline(&drafter, &refiner)).await;
+    let (result, report) = replay(&trace, ReplayMode::Strict, || {
+        run_pipeline(&drafter, &refiner)
+    })
+    .await;
 
     let err = result.expect_err("incomplete span must refuse strict replay");
     match err {
         PredictError::Replay {
-            source: ReplayError::Incomplete { component, seq, span },
+            source:
+                ReplayError::Incomplete {
+                    component,
+                    seq,
+                    span,
+                },
         } => {
             assert_eq!(component, "drafter");
             assert_eq!(seq, 0);
@@ -266,7 +283,10 @@ async fn strict_replay_exhausts_when_live_run_calls_more() {
         }
         other => panic!("expected Exhausted, got {other:?}"),
     }
-    assert_eq!(report.served, 3, "the recorded pipeline itself replays fine");
+    assert_eq!(
+        report.served, 3,
+        "the recorded pipeline itself replays fine"
+    );
     assert!(report.diverged_at.is_none(), "no recorded span to blame");
     assert!(matches!(
         report.divergence,

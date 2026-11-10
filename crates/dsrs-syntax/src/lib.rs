@@ -34,7 +34,11 @@ pub struct ParseError {
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "line {}, column {}: {}", self.line, self.col, self.message)
+        write!(
+            f,
+            "line {}, column {}: {}",
+            self.line, self.col, self.message
+        )
     }
 }
 

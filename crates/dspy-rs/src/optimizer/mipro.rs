@@ -68,13 +68,21 @@ fn format_leaf_fields(leaf: &LeafInfo) -> String {
 
     result.push_str("Input Fields:\n");
     for (name, docs) in &leaf.input_fields {
-        let desc = if docs.is_empty() { "No description" } else { docs };
+        let desc = if docs.is_empty() {
+            "No description"
+        } else {
+            docs
+        };
         result.push_str(&format!("  - {name}: {desc}\n"));
     }
 
     result.push_str("\nOutput Fields:\n");
     for (name, docs) in &leaf.output_fields {
-        let desc = if docs.is_empty() { "No description" } else { docs };
+        let desc = if docs.is_empty() {
+            "No description"
+        } else {
+            docs
+        };
         result.push_str(&format!("  - {name}: {desc}\n"));
     }
 
@@ -320,8 +328,7 @@ impl Optimizer for MIPROv2 {
                 }
             }
 
-            let (_, best_instruction) =
-                best.ok_or_else(|| anyhow!("no candidates to evaluate"))?;
+            let (_, best_instruction) = best.ok_or_else(|| anyhow!("no candidates to evaluate"))?;
             current.set_instruction(&leaf.name, best_instruction);
         }
 

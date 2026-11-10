@@ -1,6 +1,5 @@
 use dspy_rs::{
-    LM, LMClient, ParseError, Predict, PredictError, Signature, TestCompletionModel,
-    configure,
+    LM, LMClient, ParseError, Predict, PredictError, Signature, TestCompletionModel, configure,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;

@@ -7,9 +7,7 @@ use std::sync::LazyLock;
 
 use dspy_rs::ir::StepKind;
 use dspy_rs::trace::{SpanEvent, capture};
-use dspy_rs::{
-    LM, LMClient, TestCompletionModel, agent, configure, module, tool,
-};
+use dspy_rs::{LM, LMClient, TestCompletionModel, agent, configure, module, tool};
 use rig::completion::AssistantContent;
 use rig::message::{Text, ToolCall, ToolFunction};
 use serde_json::json;
@@ -133,8 +131,14 @@ fn agent_step_metadata() {
 fn module_lowers_agent_step_and_tool() {
     let program = agentic::program();
     let printed = program.to_dsrs();
-    assert!(printed.contains("caps { demo:shout }"), "ceiling printed:\n{printed}");
-    assert!(printed.contains("tool shout"), "host tool declared:\n{printed}");
+    assert!(
+        printed.contains("caps { demo:shout }"),
+        "ceiling printed:\n{printed}"
+    );
+    assert!(
+        printed.contains("tool shout"),
+        "host tool declared:\n{printed}"
+    );
     assert!(printed.contains("agent "), "agent loop node:\n{printed}");
     assert!(
         program.param_id("tool.shout.desc").is_some(),

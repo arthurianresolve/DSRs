@@ -13,10 +13,12 @@ struct SmokeSig {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Smoke Label: Slice 2 ChainOfThought
-    configure(LM::builder()
+    configure(
+        LM::builder()
             .model("openai:gpt-5.2".to_string())
             .build()
-            .await?);
+            .await?,
+    );
 
     let module = ChainOfThought::<SmokeSig>::new();
     let input = SmokeSigInput {

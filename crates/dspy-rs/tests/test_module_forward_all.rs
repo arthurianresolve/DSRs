@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use dspy_rs::{Schema, CallMetadata, Module, PredictError, Predicted, forward_all};
+use dspy_rs::{CallMetadata, Module, PredictError, Predicted, Schema, forward_all};
 use tokio::time::sleep;
 
 struct DelayEcho;

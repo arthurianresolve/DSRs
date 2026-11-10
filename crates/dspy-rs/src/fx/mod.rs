@@ -373,7 +373,9 @@ where
     }
     let predictor = Arc::new(predictor);
 
-    let mut cache = PREDICTOR_CACHE.write().expect("fx predictor cache poisoned");
+    let mut cache = PREDICTOR_CACHE
+        .write()
+        .expect("fx predictor cache poisoned");
     let entry = cache.insert(key, predictor as Arc<dyn Any + Send + Sync>);
     Ok(entry
         .downcast::<Predict<S>>()

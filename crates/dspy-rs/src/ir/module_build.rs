@@ -380,7 +380,9 @@ pub fn build_module_program(spec: ModuleSpec) -> Result<Program, ModuleBuildErro
                     if let Some(until_parse) = agent.until_parse {
                         ns = ns.until_parse(until_parse);
                     }
-                    ns = ns.budget(agent.budget.clone()).context(agent.context.clone());
+                    ns = ns
+                        .budget(agent.budget.clone())
+                        .context(agent.context.clone());
                 }
                 for (i, arg) in args.iter().enumerate() {
                     ns = ns.bind(&def.sig.inputs[i].name, as_port(arg));
@@ -423,5 +425,7 @@ pub fn unbound_model_config(name: &str) -> LMConfig {
 /// generated module code to bind the `default` model ref at load.
 pub fn default_lm() -> Option<std::sync::Arc<crate::LM>> {
     let guard = crate::core::settings::GLOBAL_SETTINGS.read().ok()?;
-    guard.as_ref().map(|settings| std::sync::Arc::clone(&settings.lm))
+    guard
+        .as_ref()
+        .map(|settings| std::sync::Arc::clone(&settings.lm))
 }

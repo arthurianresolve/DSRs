@@ -39,9 +39,8 @@ use crate::LMConfig;
 use crate::core::Signature;
 use crate::ir::graph::{
     AgentLoopNode, Binding, CapSet, ForkJoinNode, HoleImpl, HoleNode, Interner, LoopNode, ModelDef,
-    ModelId,
-    Node, NodeBudget, NodeId, PortRef, PredictNode, Program, ProgramMeta, RefineNode, RetryNode,
-    RouteNode, SeqNode, SigId, StopSpec, ToolDef, ToolId, ToolKind,
+    ModelId, Node, NodeBudget, NodeId, PortRef, PredictNode, Program, ProgramMeta, RefineNode,
+    RetryNode, RouteNode, SeqNode, SigId, StopSpec, ToolDef, ToolId, ToolKind,
 };
 use crate::ir::params::{
     CodeLang, ContextPolicy, DemoRow, ParamId, ParamKind, ParamOwner, ParamSlot, ParamValue,

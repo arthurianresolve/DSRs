@@ -313,7 +313,9 @@ enum StepModel {
 /// `<path>(<args>).await?` — the step-call shape.
 fn as_step_call(expr: &Expr) -> Option<(&syn::Path, &Punctuated<Expr, Token![,]>)> {
     let Expr::Try(t) = expr else { return None };
-    let Expr::Await(a) = &*t.expr else { return None };
+    let Expr::Await(a) = &*t.expr else {
+        return None;
+    };
     let Expr::Call(c) = &*a.base else { return None };
     let Expr::Path(p) = &*c.func else { return None };
     if p.qself.is_some() {
@@ -334,7 +336,10 @@ fn expand_module_inner(
     let attrs = parse_module_attr(attr)?;
     let sig = &func.sig;
     if sig.asyncness.is_none() {
-        return Err(syn::Error::new_spanned(sig, "#[module] functions are async"));
+        return Err(syn::Error::new_spanned(
+            sig,
+            "#[module] functions are async",
+        ));
     }
     if !sig.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -423,7 +428,10 @@ fn expand_module_inner(
             return Err(syn::Error::new_spanned(local, "`let` needs an initializer"));
         };
         if init.diverge.is_some() {
-            return Err(syn::Error::new_spanned(local, "`let … else` is not supported"));
+            return Err(syn::Error::new_spanned(
+                local,
+                "`let … else` is not supported",
+            ));
         }
 
         // Binding: `ident` (step) or `ident: Type` (hole ascription).
@@ -554,8 +562,7 @@ fn expand_module_inner(
             StepModel::Call(call) => {
                 let binding = &call.binding;
                 let callee = &call.callee;
-                let args: Vec<TokenStream2> =
-                    call.args.iter().map(|p| p.tokens(runtime)).collect();
+                let args: Vec<TokenStream2> = call.args.iter().map(|p| p.tokens(runtime)).collect();
                 quote! {
                     #runtime::ir::ModuleStep {
                         binding: #binding,
@@ -828,7 +835,9 @@ fn parse_tail(expr: &Expr, ctx: &Ctx) -> syn::Result<Vec<(String, PortTok)>> {
              field a fn param, `binding.field`, or literal",
         )
     };
-    let Expr::Call(call) = expr else { return Err(err()) };
+    let Expr::Call(call) = expr else {
+        return Err(err());
+    };
     if single_ident(&call.func).as_deref() != Some("Ok") || call.args.len() != 1 {
         return Err(err());
     }

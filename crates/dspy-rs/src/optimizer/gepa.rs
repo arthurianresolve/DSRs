@@ -352,11 +352,7 @@ impl GEPA {
                     ),
                     (None, None) => "-".to_string(),
                 };
-                let _ = writeln!(
-                    text,
-                    "  call {}: input={input}; output={output}",
-                    span.seq
-                );
+                let _ = writeln!(text, "  call {}: input={input}; output={output}", span.seq);
                 for event in &span.events {
                     if let crate::trace::SpanEvent::ToolRun {
                         name,
@@ -540,10 +536,11 @@ impl Optimizer for GEPA {
         let val_cols = target.val_columns();
         let train_pool = target.train_columns();
 
-        let reflector = self
-            .prompt_model
-            .as_ref()
-            .map(|lm| Predict::<ReflectOnInstruction>::builder().lm(lm.clone()).build());
+        let reflector = self.prompt_model.as_ref().map(|lm| {
+            Predict::<ReflectOnInstruction>::builder()
+                .lm(lm.clone())
+                .build()
+        });
         let mut rng = self.common().rng();
 
         let mut lineage = Lineage::new();
@@ -798,7 +795,11 @@ mod tests {
     fn concat_mutation_caps_appended_feedback() {
         let huge = "x".repeat(50_000);
         let child = GEPA::concat_child_instruction("seed", &huge, 0.5, 3);
-        assert!(child.len() < 3_000, "feedback must be capped: {}", child.len());
+        assert!(
+            child.len() < 3_000,
+            "feedback must be capped: {}",
+            child.len()
+        );
         assert!(child.starts_with("seed\n\n[GEPA gen 4]"));
     }
 }

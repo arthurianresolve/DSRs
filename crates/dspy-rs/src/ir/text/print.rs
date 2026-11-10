@@ -685,7 +685,11 @@ impl<'p> Printer<'p> {
                 }
             }
             HoleImpl::Host { hash } => {
-                let _ = write!(self.out, " caps [{}] extern \"{hash:016x}\"", caps.join(" "));
+                let _ = write!(
+                    self.out,
+                    " caps [{}] extern \"{hash:016x}\"",
+                    caps.join(" ")
+                );
             }
         }
     }

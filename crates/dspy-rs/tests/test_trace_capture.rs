@@ -27,7 +27,9 @@ async fn make_test_lm(responses: Vec<AssistantContent>) -> LM {
     let client = TestCompletionModel::new(responses);
     temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await
     .unwrap()
@@ -120,7 +122,10 @@ async fn capture_records_spans_with_component_names_and_seq() {
     // Typed input/output captured as JSON maps.
     assert_eq!(d0.input.as_ref().unwrap()["question"], "q0");
     assert_eq!(d0.output.as_ref().unwrap()["answer"], "a0");
-    assert_eq!(d0.raw_output.as_deref(), Some(&*response_with_fields(&[("answer", "a0")])));
+    assert_eq!(
+        d0.raw_output.as_deref(),
+        Some(&*response_with_fields(&[("answer", "a0")]))
+    );
     assert!(d0.error.is_none());
     assert!(d0.complete);
     assert_eq!(trace.successes().count(), 3);
@@ -133,7 +138,11 @@ async fn capture_records_spans_with_component_names_and_seq() {
     assert!(matches!(d0.events.as_slice(), [SpanEvent::Exchange { .. }]));
 
     // Model interning: one distinct config per LM instance, deduplicated.
-    assert_eq!(trace.models.len(), 1, "identical configs intern to one entry");
+    assert_eq!(
+        trace.models.len(),
+        1,
+        "identical configs intern to one entry"
+    );
     assert!(trace.models[0].config.api_key.is_none());
 }
 
@@ -225,10 +234,16 @@ async fn jsonl_round_trip_preserves_the_trace() {
     // Serialize→deserialize→serialize equality.
     assert_eq!(jsonl, parsed.to_jsonl().expect("re-serialize"));
     assert_eq!(parsed.spans.len(), 1);
-    assert_eq!(parsed.component_name(parsed.spans[0].component), "roundtrip");
+    assert_eq!(
+        parsed.component_name(parsed.spans[0].component),
+        "roundtrip"
+    );
     assert_eq!(parsed.spans[0].request_hash, trace.spans[0].request_hash);
     let outcome = parsed.outcome.expect("footer parsed");
-    assert_eq!(outcome.eval, Some(dspy_rs::Eval::with_feedback(0.8, "good")));
+    assert_eq!(
+        outcome.eval,
+        Some(dspy_rs::Eval::with_feedback(0.8, "good"))
+    );
 }
 
 // --- Tool loop event ordering ----------------------------------------------
@@ -422,7 +437,8 @@ impl dspy_rs::TypedMetric<(CapQAInput, CapQAOutput), OneStep> for TraceInspectin
         anyhow::ensure!(spans.len() == 1, "expected one step invocation");
         let feedback = format!(
             "step saw question={} and answered={}",
-            spans[0].input.as_ref().unwrap()["question"], prediction.answer
+            spans[0].input.as_ref().unwrap()["question"],
+            prediction.answer
         );
         Ok(dspy_rs::Eval::with_feedback(1.0, feedback))
     }
@@ -474,6 +490,9 @@ async fn capture_with_meta_records_rollout_metadata() {
     assert!(!trace.meta.trace_id.is_empty(), "trace id is minted");
     assert!(trace.meta.started_at_us > 0);
     assert_eq!(trace.meta.candidate_hash, Some(99));
-    assert_eq!(trace.meta.input.as_ref().unwrap()["question"], "rollout input");
+    assert_eq!(
+        trace.meta.input.as_ref().unwrap()["question"],
+        "rollout input"
+    );
     assert_eq!(trace.meta.tags["optimizer"], "test");
 }

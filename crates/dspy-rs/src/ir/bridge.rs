@@ -226,9 +226,15 @@ pub(crate) fn entry_slot_values(
                 path: instruction_path,
             })?;
     if entry.clear_instruction {
-        values.push((instruction_id, program.params[instruction_id].default.clone()));
+        values.push((
+            instruction_id,
+            program.params[instruction_id].default.clone(),
+        ));
     } else if let Some(text) = &entry.state.instruction_override {
-        values.push((instruction_id, ParamValue::Instruction { text: text.clone() }));
+        values.push((
+            instruction_id,
+            ParamValue::Instruction { text: text.clone() },
+        ));
     }
 
     if entry.explicit_demos || !entry.state.demos.is_empty() {

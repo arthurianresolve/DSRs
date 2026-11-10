@@ -10,8 +10,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.90.0
-      - run: cargo build
+          toolchain: 1.98.1
+      - run: cargo build --locked --workspace
 
   test:
     name: Test
@@ -20,33 +20,42 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.90.0
-      - run: cargo test --all-features
+          toolchain: 1.98.1
+      - run: cargo test --locked --workspace --all-features
   
   miri-test:
     name: MIRI Test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       MIRIFLAGS: -Zmiri-disable-isolation
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly-2026-01-25
+          toolchain: nightly-2026-11-09
           components: miri
-      - run: cargo miri setup
-      - run: cargo miri test --all-features
+      - run: cargo +nightly-2026-11-09 miri setup
+      # Miri cannot execute QuickJS's C FFI or subprocess-based integration tests.
+      # The native Test job above runs the complete suite, including those paths.
+      - run: cargo +nightly-2026-11-09 miri test --locked --workspace --all-features --lib
+      - run: >-
+          cargo +nightly-2026-11-09 miri test --locked -p dspy-rs --all-features
+          --test test_adapters --test test_call_outcome --test test_chat
+          --test test_chat_adapter_schema --test test_chat_prompt_composition
+          --test test_chat_prompt_golden
+      - run: cargo +nightly-2026-11-09 miri test --locked -p dsrs-syntax --test fixture_parity
 
   clippy:
     name: Clippy Lint
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
-    timeout-minutes: 5
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.90.0
+          toolchain: 1.98.1
           components: rustfmt, clippy
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets --all-features
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features

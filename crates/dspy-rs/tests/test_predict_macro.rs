@@ -25,7 +25,9 @@ async fn install_test_lm(responses: Vec<String>) -> TestCompletionModel {
     let client = TestCompletionModel::new(responses.into_iter().map(text_response));
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await
     .unwrap()
@@ -105,7 +107,9 @@ async fn cot_macro_adds_reasoning_field() {
     ])])
     .await;
 
-    let out = solve("2+2?".to_string()).await.expect("cot fn should succeed");
+    let out = solve("2+2?".to_string())
+        .await
+        .expect("cot fn should succeed");
     assert_eq!(out.reasoning, "2 and 2 make 4");
     assert_eq!(out.solve, "4"); // through WithReasoning's Deref
 }

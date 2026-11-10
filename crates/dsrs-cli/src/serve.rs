@@ -89,17 +89,22 @@ pub async fn load(config: &ServeConfig, env: dspy_rs::ir::RuntimeEnv) -> anyhow:
         Some(path) => {
             let text = std::fs::read_to_string(path)
                 .with_context(|| format!("failed to read overlay `{}`", path.display()))?;
-            let named: BTreeMap<String, ParamValue> = serde_json::from_str(&text)
-                .with_context(|| {
+            let named: BTreeMap<String, ParamValue> =
+                serde_json::from_str(&text).with_context(|| {
                     format!(
                         "overlay `{}` is not a named overlay JSON object \
                          ({{\"<param path>\": <value>, ...}})",
                         path.display()
                     )
                 })?;
-            Some(Arc::new(Overlay::from_named(&program, named).with_context(
-                || format!("overlay `{}` does not apply to this program", path.display()),
-            )?))
+            Some(Arc::new(
+                Overlay::from_named(&program, named).with_context(|| {
+                    format!(
+                        "overlay `{}` does not apply to this program",
+                        path.display()
+                    )
+                })?,
+            ))
         }
         None => None,
     };

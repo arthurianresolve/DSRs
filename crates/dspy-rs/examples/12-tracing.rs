@@ -17,8 +17,8 @@ cargo run --example 12-tracing
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    CallMetadata, LM, Module, Predict, PredictError, Predicted, Signature, configure,
-    init_tracing, trace,
+    CallMetadata, LM, Module, Predict, PredictError, Predicted, Signature, configure, init_tracing,
+    trace,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -100,10 +100,12 @@ impl Module for QARater {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder()
+    configure(
+        LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?);
+            .await?,
+    );
 
     let module = QARater::builder().build();
 

@@ -147,7 +147,9 @@ async fn code_mode_toolset_chains_two_tools_in_one_run_js_call() {
     ])
     .await;
 
-    let chat = Chat::new(vec![Message::user("Weather in Tokyo, and bump the counter.")]);
+    let chat = Chat::new(vec![Message::user(
+        "Weather in Tokyo, and bump the counter.",
+    )]);
     let response = lm
         .call_with_toolset(chat, &toolset, ToolLoopMode::Auto)
         .await

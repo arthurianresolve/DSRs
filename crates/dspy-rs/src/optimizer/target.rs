@@ -31,14 +31,14 @@ use futures::future::LocalBoxFuture;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::Module;
 use crate::core::{PredictState, PredictorInfo, Predictors, ToInput};
 use crate::evaluate::{Eval, TypedMetric, evaluator::rollout_traced};
+use crate::ir::graph::Node;
 use crate::ir::interp::{Budget as RunBudget, Interpreter};
 use crate::ir::params::{DemoRow, Overlay, ParamValue};
-use crate::ir::graph::Node;
 use crate::optimizer::engine::{BoundCandidate, Candidate, CandidatePayload, canonical_hash};
 use crate::trace::{JsonMap, Trace, TraceMeta, TraceOutcome, capture_with_meta};
-use crate::Module;
 
 /// How a program-lane strategy tells the engine what "good" means: score one
 /// interpreter output (`JsonMap` of the program's output signature fields)
@@ -106,12 +106,20 @@ impl LeafInfo {
         let mut result = String::new();
         result.push_str("Input fields:\n");
         for (name, docs) in &self.input_fields {
-            let docs = if docs.is_empty() { "No description" } else { docs };
+            let docs = if docs.is_empty() {
+                "No description"
+            } else {
+                docs
+            };
             result.push_str(&format!("  - {name}: {docs}\n"));
         }
         result.push_str("Output fields:\n");
         for (name, docs) in &self.output_fields {
-            let docs = if docs.is_empty() { "No description" } else { docs };
+            let docs = if docs.is_empty() {
+                "No description"
+            } else {
+                docs
+            };
             result.push_str(&format!("  - {name}: {docs}\n"));
         }
         result
@@ -131,11 +139,8 @@ pub(crate) trait Lane {
         bound: BoundCandidate,
         candidate_hash: u64,
     ) -> LocalBoxFuture<'s, Result<(Eval, Trace)>>;
-    fn output<'s>(
-        &'s self,
-        idx: usize,
-        bound: BoundCandidate,
-    ) -> LocalBoxFuture<'s, Result<Value>>;
+    fn output<'s>(&'s self, idx: usize, bound: BoundCandidate)
+    -> LocalBoxFuture<'s, Result<Value>>;
     fn install(&mut self, winner: &Candidate) -> Result<()>;
     fn winner_overlay(&self) -> Option<Arc<Overlay>>;
 }

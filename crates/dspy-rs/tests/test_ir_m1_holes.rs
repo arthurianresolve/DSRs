@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
+use dspy_rs::ir::FieldType as T;
 use dspy_rs::ir::{
     self, Budget, CodeK, Interpreter, LoadError, Overlay, Program, ProgramBuilder, RunError,
     RuntimeEnv, SignatureDef,
 };
-use dspy_rs::ir::FieldType as T;
 use dspy_rs::trace::JsonMap;
 use dspy_rs::{LM, LMClient, LMConfig, ReplayMode, TestCompletionModel, capture, replay};
 use rig::completion::AssistantContent;
@@ -119,7 +119,8 @@ fn predict_then_hole_program(js: &str) -> Program {
             .unwrap(),
     );
     let drafter = ir::predict("drafter", qa).bind("question", ir::input("question"));
-    let shouter = ir::hole("shouter", shout_sig, js, &[]).bind("answer", ir::out("drafter", "answer"));
+    let shouter =
+        ir::hole("shouter", shout_sig, js, &[]).bind("answer", ir::out("drafter", "answer"));
     b.main(
         main_sig,
         ir::seq([drafter, shouter]).out("shout", ir::out("shouter", "shout")),
@@ -160,16 +161,17 @@ fn extern_hash_must_be_hex() {
 #[tokio::test]
 async fn host_hole_binds_and_executes() {
     let (lm, _client) = canned_lm(vec![]).await;
-    let env = RuntimeEnv::new()
-        .bind_model("m", lm)
-        .bind_host_hole("shouter", |input: JsonMap| async move {
+    let env = RuntimeEnv::new().bind_model("m", lm).bind_host_hole(
+        "shouter",
+        |input: JsonMap| async move {
             let q = input
                 .get("question")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_uppercase();
             Ok(json!({ "shout": q }))
-        });
+        },
+    );
     // No sandbox in the env: extern holes must not require one.
     let interp = Interpreter::load(extern_program(), env).await.unwrap();
 
@@ -186,7 +188,10 @@ async fn host_hole_binds_and_executes() {
     assert_eq!(trace.components, vec!["shouter"]);
     let span = &trace.spans[0];
     assert_eq!(trace.model(span).model, "host:extern");
-    assert_ne!(span.request_hash, 0, "hole spans must carry a real preimage");
+    assert_ne!(
+        span.request_hash, 0,
+        "hole spans must carry a real preimage"
+    );
     assert_eq!(span.output.as_ref().unwrap()["shout"], "HELLO");
 }
 
@@ -251,10 +256,8 @@ async fn distinct_holes_record_distinct_request_hashes() {
         .with_sandbox(Arc::new(dsrs_tools::QuickJsExecutor::new()));
     let interp = Interpreter::load(program, env).await.unwrap();
 
-    let (result, trace) = capture(|| {
-        interp.run(obj(&[("question", json!("hi"))]), None, Budget::unlimited())
-    })
-    .await;
+    let (result, trace) =
+        capture(|| interp.run(obj(&[("question", json!("hi"))]), None, Budget::unlimited())).await;
     result.unwrap();
 
     assert_eq!(trace.spans.len(), 2);
@@ -373,16 +376,17 @@ async fn changed_hole_code_diverges_and_runs_live() {
 async fn strict_replay_refuses_changed_host_hole_hash() {
     // Record with one extern implementation hash…
     let (lm, _client) = canned_lm(vec![]).await;
-    let env = RuntimeEnv::new()
-        .bind_model("m", lm)
-        .bind_host_hole("shouter", |input: JsonMap| async move {
+    let env = RuntimeEnv::new().bind_model("m", lm).bind_host_hole(
+        "shouter",
+        |input: JsonMap| async move {
             let q = input
                 .get("question")
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_uppercase();
             Ok(json!({ "shout": q }))
-        });
+        },
+    );
     let interp = Interpreter::load(extern_program(), env).await.unwrap();
     let (result, trace) = capture(|| {
         interp.run(
@@ -422,11 +426,12 @@ async fn strict_replay_refuses_changed_host_hole_hash() {
         .unwrap();
 
     let (lm2, _client2) = canned_lm(vec![]).await;
-    let env2 = RuntimeEnv::new()
-        .bind_model("m", lm2)
-        .bind_host_hole("shouter", |input: JsonMap| async move {
+    let env2 = RuntimeEnv::new().bind_model("m", lm2).bind_host_hole(
+        "shouter",
+        |input: JsonMap| async move {
             Ok(json!({ "shout": input.get("question").cloned().unwrap_or_default() }))
-        });
+        },
+    );
     let interp2 = Interpreter::load(changed, env2).await.unwrap();
 
     let (replayed, report) = replay(&trace, ReplayMode::Strict, || {

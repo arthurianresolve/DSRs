@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use dspy_rs::{
-    CallMetadata, Eval, Module, Predicted, PredictError, Signature, TypedMetric,
+    CallMetadata, Eval, Module, PredictError, Predicted, Signature, TypedMetric,
     evaluate_trainset_with_concurrency,
 };
 
@@ -78,8 +78,8 @@ async fn main() -> Result<()> {
     evaluate_trainset_with_concurrency(&SleepEcho, &trainset[..32], &Exact, CONCURRENCY).await?;
 
     let start = Instant::now();
-    let outcomes = evaluate_trainset_with_concurrency(&SleepEcho, &trainset, &Exact, CONCURRENCY)
-        .await?;
+    let outcomes =
+        evaluate_trainset_with_concurrency(&SleepEcho, &trainset, &Exact, CONCURRENCY).await?;
     let wall = start.elapsed();
 
     let score: f64 = outcomes.iter().map(|o| o.score).sum::<f64>() / outcomes.len() as f64;

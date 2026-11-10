@@ -4,7 +4,7 @@
 )]
 
 use dspy_rs::ir::SignatureDef;
-use dspy_rs::{Schema, ChatAdapter, Signature};
+use dspy_rs::{ChatAdapter, Schema, Signature};
 
 #[derive(Clone, Debug)]
 #[Schema]

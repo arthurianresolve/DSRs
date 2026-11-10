@@ -1,5 +1,5 @@
 use dspy_rs::ir::SignatureDef;
-use dspy_rs::{Schema, ChatAdapter, Signature};
+use dspy_rs::{ChatAdapter, Schema, Signature};
 use serde_json::Value;
 
 fn json_map<T: serde::Serialize>(value: &T) -> serde_json::Map<String, Value> {
@@ -308,9 +308,7 @@ fn typed_input_render_jinja_missing_var_panics() {
         question: "Question".to_string(),
     };
 
-    let result = std::panic::catch_unwind(|| {
-        user_message::<RenderJinjaStrictSig>(&input)
-    });
+    let result = std::panic::catch_unwind(|| user_message::<RenderJinjaStrictSig>(&input));
     assert!(result.is_err(), "missing Jinja variables should panic");
 }
 

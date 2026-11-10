@@ -155,7 +155,9 @@ fn answer_response(text: &str) -> AssistantContent {
 async fn make_test_lm(client: TestCompletionModel) -> LM {
     temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await
     .unwrap()
@@ -398,7 +400,11 @@ async fn budget_stops_cleanly_and_reports_spend() {
         EvalOutcome::BudgetExhausted { needed } => assert_eq!(needed, 3),
         EvalOutcome::Complete(_) => panic!("engine must stop at the budget"),
     }
-    assert_eq!(engine.spend().metric_calls, 3, "nothing ran past the budget");
+    assert_eq!(
+        engine.spend().metric_calls,
+        3,
+        "nothing ran past the budget"
+    );
 
     // Cache-served batches are free even at the budget edge.
     let replay = engine
@@ -630,7 +636,11 @@ async fn install_changes_baseline_identity_and_invalidates_the_cache() {
         .unwrap()
         .completed()
         .unwrap();
-    assert_eq!(engine.spend().lm_calls, 4, "new baseline means fresh rollouts");
+    assert_eq!(
+        engine.spend().lm_calls,
+        4,
+        "new baseline means fresh rollouts"
+    );
     assert_eq!(engine.spend().cache_hits, 0);
     assert!(eval.rollouts.iter().all(|r| r.trace.is_some()));
 }
@@ -640,7 +650,9 @@ async fn install_is_the_single_mutation_seam() {
     let mut module = EchoModule::new();
     let before = ModuleState::from_module(&module).unwrap();
     assert_eq!(
-        before.predictors["predictor"].instruction_override.as_deref(),
+        before.predictors["predictor"]
+            .instruction_override
+            .as_deref(),
         Some("seed")
     );
     assert!(before.predictors["predictor"].demos.is_empty());
@@ -665,13 +677,17 @@ async fn install_is_the_single_mutation_seam() {
 
     // Unknown predictor names are rejected.
     let bad = Candidate::with_instruction("missing", "nope");
-    let err = target.install(&bad).expect_err("unknown predictor must fail");
+    let err = target
+        .install(&bad)
+        .expect_err("unknown predictor must fail");
     assert!(err.to_string().contains("missing"));
     drop(target);
 
     let applied = ModuleState::from_module(&module).unwrap();
     assert_eq!(
-        applied.predictors["predictor"].instruction_override.as_deref(),
+        applied.predictors["predictor"]
+            .instruction_override
+            .as_deref(),
         Some("installed")
     );
     assert_eq!(applied.predictors["predictor"].demos.len(), 1);

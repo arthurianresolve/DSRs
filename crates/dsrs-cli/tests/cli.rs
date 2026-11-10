@@ -158,7 +158,9 @@ async fn spawn_server(app: Arc<serve::App>) -> SocketAddr {
         .expect("bind ephemeral port");
     let addr = listener.local_addr().expect("local addr");
     tokio::spawn(async move {
-        axum::serve(listener, serve::router(app)).await.expect("serve");
+        axum::serve(listener, serve::router(app))
+            .await
+            .expect("serve");
     });
     addr
 }

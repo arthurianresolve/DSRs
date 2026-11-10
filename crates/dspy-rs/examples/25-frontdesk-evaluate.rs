@@ -81,18 +81,12 @@ fn inline_trainset() -> Vec<LabeledTicket> {
             "PLEASE add a dark mode, my starter and I feed at 2am",
             Category::FeatureRequest,
         ),
-        (
-            "App crashes every time I open the photo tab",
-            Category::Bug,
-        ),
+        ("App crashes every time I open the photo tab", Category::Bug),
         (
             "Can I move my subscription to a new email address?",
             Category::Billing,
         ),
-        (
-            "Where do I see my starter's rise history?",
-            Category::HowTo,
-        ),
+        ("Where do I see my starter's rise history?", Category::HowTo),
     ]
     .into_iter()
     .map(|(ticket, category)| LabeledTicket {

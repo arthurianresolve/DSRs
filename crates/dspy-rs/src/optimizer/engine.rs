@@ -44,11 +44,11 @@ use anyhow::{Result, anyhow};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
+use crate::LmUsage;
 use crate::evaluate::{DEFAULT_EVAL_CONCURRENCY, Eval};
 use crate::optimizer::target::OptimizeTarget;
 use crate::trace::{JsonMap, Trace};
 use crate::utils::hash::StableHasher;
-use crate::LmUsage;
 
 /// Score tolerance for Pareto win/tie comparisons (matches the historical
 /// `ParetoFrontier` tolerance).
@@ -327,11 +327,13 @@ impl RolloutCache {
     }
 
     pub fn get(&self, baseline: u64, candidate: u64, example: u64, salt: u64) -> Option<&Eval> {
-        self.entries.get(&Self::key(baseline, candidate, example, salt))
+        self.entries
+            .get(&Self::key(baseline, candidate, example, salt))
     }
 
     pub fn insert(&mut self, baseline: u64, candidate: u64, example: u64, salt: u64, eval: Eval) {
-        self.entries.insert(Self::key(baseline, candidate, example, salt), eval);
+        self.entries
+            .insert(Self::key(baseline, candidate, example, salt), eval);
     }
 
     pub fn len(&self) -> usize {
@@ -410,7 +412,13 @@ impl ScoreMatrix {
 
     /// Mean over the cells this candidate has been scored on (`None` if none).
     pub fn mean(&self, candidate: usize) -> Option<f64> {
-        let filled: Vec<f64> = self.rows.get(candidate)?.iter().flatten().copied().collect();
+        let filled: Vec<f64> = self
+            .rows
+            .get(candidate)?
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
         if filled.is_empty() {
             None
         } else {
@@ -487,7 +495,9 @@ impl ParetoView {
 
     /// Candidate indices on the frontier (winning on ≥ 1 example), ascending.
     pub fn frontier(&self) -> Vec<usize> {
-        (0..self.wins.len()).filter(|&idx| self.wins[idx] > 0).collect()
+        (0..self.wins.len())
+            .filter(|&idx| self.wins[idx] > 0)
+            .collect()
     }
 
     /// Frontier statistics in the shape GEPA reports.
@@ -595,7 +605,9 @@ pub enum EvalOutcome {
     /// The batch's uncached portion didn't fit in the remaining budget;
     /// nothing ran and spend is unchanged. `needed` is the number of rollouts
     /// that would have executed.
-    BudgetExhausted { needed: usize },
+    BudgetExhausted {
+        needed: usize,
+    },
 }
 
 impl EvalOutcome {
@@ -738,9 +750,9 @@ impl Engine {
     /// Returns its index.
     pub fn register(&mut self, candidate: Candidate) -> usize {
         let hash = candidate.stable_hash();
-        if let Some(existing) = self.candidates.iter().position(
-            |(h, payload)| *h == hash && matches!(payload, CandidatePayload::Params { .. }),
-        ) {
+        if let Some(existing) = self.candidates.iter().position(|(h, payload)| {
+            *h == hash && matches!(payload, CandidatePayload::Params { .. })
+        }) {
             return existing;
         }
         let params = std::sync::Arc::new(candidate.to_params());
@@ -755,13 +767,17 @@ impl Engine {
     /// its index.
     pub fn register_overlay(&mut self, overlay: crate::ir::Overlay) -> usize {
         let hash = overlay.hash();
-        if let Some(existing) = self.candidates.iter().position(
-            |(h, payload)| *h == hash && matches!(payload, CandidatePayload::Overlay(_)),
-        ) {
+        if let Some(existing) = self
+            .candidates
+            .iter()
+            .position(|(h, payload)| *h == hash && matches!(payload, CandidatePayload::Overlay(_)))
+        {
             return existing;
         }
-        self.candidates
-            .push((hash, CandidatePayload::Overlay(std::sync::Arc::new(overlay))));
+        self.candidates.push((
+            hash,
+            CandidatePayload::Overlay(std::sync::Arc::new(overlay)),
+        ));
         self.matrix.ensure_rows(self.candidates.len());
         self.candidates.len() - 1
     }
@@ -1059,10 +1075,16 @@ mod tests {
     fn candidate_hash_is_stable_across_orderings() {
         let mut a = Candidate::new();
         a.set_instruction("drafter", "be brief");
-        a.set_demos("refiner", vec![demo(&[("q", "one"), ("a", "1"), ("b", "2")])]);
+        a.set_demos(
+            "refiner",
+            vec![demo(&[("q", "one"), ("a", "1"), ("b", "2")])],
+        );
 
         let mut b = Candidate::new();
-        b.set_demos("refiner", vec![demo(&[("q", "one"), ("a", "1"), ("b", "2")])]);
+        b.set_demos(
+            "refiner",
+            vec![demo(&[("q", "one"), ("a", "1"), ("b", "2")])],
+        );
         b.set_instruction("drafter", "be brief");
 
         assert_eq!(a.stable_hash(), b.stable_hash());

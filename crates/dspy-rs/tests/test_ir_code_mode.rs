@@ -169,7 +169,12 @@ fn two_tool_program(tool_a: &str, tool_b: &str) -> Program {
             .unwrap(),
     );
     let weather = b.host_tool(tool_a, "Weather by city", weather_sig, &["net:tools"]);
-    let counter = b.host_tool(tool_b, "Bump and read the counter", counter_sig, &["net:tools"]);
+    let counter = b.host_tool(
+        tool_b,
+        "Bump and read the counter",
+        counter_sig,
+        &["net:tools"],
+    );
     let researcher = ir::agent("researcher", research)
         .bind("question", ir::input("question"))
         .tools([weather, counter])
@@ -262,7 +267,10 @@ async fn agent_loop_code_mode_chains_two_tools_in_one_run_js() {
     assert!(description.contains("get_weather(args)"), "{description}");
     assert!(description.contains("counter(args)"), "{description}");
     assert!(description.contains("Weather by city"), "{description}");
-    assert!(description.contains("Bump and read the counter"), "{description}");
+    assert!(
+        description.contains("Bump and read the counter"),
+        "{description}"
+    );
     assert!(description.contains("{city: string}"), "{description}");
 }
 
@@ -300,7 +308,12 @@ async fn stop_tools_stay_individual_next_to_run_js() {
             .unwrap(),
     );
     let counter = b.host_tool("counter", "Bump the counter", counter_sig, &["net:tools"]);
-    let submit = b.host_tool("submit", "Submit the final answer", submit_sig, &["net:tools"]);
+    let submit = b.host_tool(
+        "submit",
+        "Submit the final answer",
+        submit_sig,
+        &["net:tools"],
+    );
     let researcher = ir::agent("researcher", research)
         .bind("question", ir::input("question"))
         .tools([counter, submit])
@@ -383,8 +396,19 @@ async fn sandboxed_tools_join_the_js_api() {
             .finish()
             .unwrap(),
     );
-    let weather = b.host_tool("get-weather", "Weather by city", weather_sig, &["net:tools"]);
-    let double = b.sandboxed_tool("double", "Double a number", double_sig, &[], "(args) => args.n * 2");
+    let weather = b.host_tool(
+        "get-weather",
+        "Weather by city",
+        weather_sig,
+        &["net:tools"],
+    );
+    let double = b.sandboxed_tool(
+        "double",
+        "Double a number",
+        double_sig,
+        &[],
+        "(args) => args.n * 2",
+    );
     let researcher = ir::agent("researcher", research)
         .bind("question", ir::input("question"))
         .tools([weather, double])
@@ -457,14 +481,8 @@ async fn script_failure_is_conversational_and_recorded() {
         .await
         .unwrap();
 
-    let (result, trace) = capture(|| {
-        interp.run(
-            obj(&[("question", json!("hm"))]),
-            None,
-            Budget::unlimited(),
-        )
-    })
-    .await;
+    let (result, trace) =
+        capture(|| interp.run(obj(&[("question", json!("hm"))]), None, Budget::unlimited())).await;
     // The syntax error went back to the model as a tool result; the loop and
     // the run both completed.
     assert_eq!(result.unwrap()["answer"], "gave up on js");
@@ -474,7 +492,12 @@ async fn script_failure_is_conversational_and_recorded() {
         .find(|event| matches!(event, SpanEvent::ToolRun { .. }))
         .expect("ToolRun recorded")
     {
-        SpanEvent::ToolRun { name, result, error, .. } => {
+        SpanEvent::ToolRun {
+            name,
+            result,
+            error,
+            ..
+        } => {
             assert_eq!(name, RUN_JS_TOOL_NAME);
             assert!(error.is_some());
             assert!(result.contains("\"kind\":\"js\""), "{result}");

@@ -72,7 +72,10 @@ fn projection_mismatch_is_a_clear_runtime_error() {
     let err = projected.expect_err("no `question` field to project");
     let message = format!("{err:#}");
     assert!(message.contains("WrongRow"), "names the row: {message}");
-    assert!(message.contains("RowQAInput"), "names the target: {message}");
+    assert!(
+        message.contains("RowQAInput"),
+        "names the target: {message}"
+    );
 }
 
 #[test]

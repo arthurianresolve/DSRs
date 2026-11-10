@@ -14,7 +14,9 @@ async fn main() -> Result<()> {
     })]);
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("offline"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await?
     .with_client(LMClient::Test(client))
