@@ -1,5 +1,5 @@
 use dspy_rs::ir::SignatureDef;
-use dspy_rs::{Schema, ChatAdapter, Signature};
+use dspy_rs::{ChatAdapter, Schema, Signature};
 use serde_json::Value;
 
 fn json_map<T: serde::Serialize>(value: &T) -> serde_json::Map<String, Value> {
@@ -308,9 +308,7 @@ fn typed_input_render_jinja_missing_var_panics() {
         question: "Question".to_string(),
     };
 
-    let result = std::panic::catch_unwind(|| {
-        user_message::<RenderJinjaStrictSig>(&input)
-    });
+    let result = std::panic::catch_unwind(|| user_message::<RenderJinjaStrictSig>(&input));
     assert!(result.is_err(), "missing Jinja variables should panic");
 }
 
@@ -360,4 +358,70 @@ fn typed_input_render_jinja_supports_contrib_filters() {
     let context_value = extract_field(&message, "context");
 
     assert_eq!(context_value, "abcde");
+}
+
+#[derive(Signature, Clone, Debug)]
+struct SharedContextSig {
+    #[input]
+    #[alias("query")]
+    #[render(
+        jinja = "{{ this }}|{{ input.query }}|{{ input.second }}|{{ field.name }}|{{ vars|length }}"
+    )]
+    first: String,
+    #[input]
+    #[render(
+        jinja = "{{ this }}|{{ input.first }}|{{ input.query }}|{{ field.rust_name }}|{{ vars|length }}"
+    )]
+    second: String,
+    #[output]
+    answer: String,
+}
+
+#[test]
+fn jinja_fields_share_aliases_but_each_call_sees_current_input() {
+    let def = SignatureDef::of::<SharedContextSig>();
+    let mut input = json_map(&SharedContextSigInput {
+        first: "one".into(),
+        second: "two".into(),
+    });
+    let original = input.clone();
+    let message = ChatAdapter.format_input_def(def, &input);
+    assert_eq!(extract_field(&message, "query"), "one|one|two|query|0");
+    assert_eq!(extract_field(&message, "second"), "two|one|one|second|0");
+    assert_eq!(input, original);
+
+    input.insert("first".into(), Value::String("changed".into()));
+    let message = ChatAdapter.format_input_def(def, &input);
+    assert_eq!(
+        extract_field(&message, "query"),
+        "changed|changed|two|query|0"
+    );
+    assert_eq!(
+        extract_field(&message, "second"),
+        "two|changed|changed|second|0"
+    );
+}
+
+#[test]
+fn jinja_aliases_preserve_explicit_keys_and_missing_fields_stay_skipped() {
+    let def = SignatureDef::of::<SharedContextSig>();
+    let mut input = json_map(&SharedContextSigInput {
+        first: "one".into(),
+        second: "two".into(),
+    });
+    input.insert("query".into(), Value::String("explicit".into()));
+    let message = ChatAdapter.format_input_def(def, &input);
+    assert_eq!(extract_field(&message, "query"), "one|explicit|two|query|0");
+    assert_eq!(
+        extract_field(&message, "second"),
+        "two|one|explicit|second|0"
+    );
+
+    input.remove("first");
+    // Keep the template's other references valid while skipping the first field.
+    let mut def = def.clone();
+    def.inputs[1].render = dspy_rs::ir::RenderSpec::Default;
+    let message = ChatAdapter.format_input_def(&def, &input);
+    assert!(!message.contains("[[ ## query ## ]]"));
+    assert_eq!(extract_field(&message, "second"), "two");
 }

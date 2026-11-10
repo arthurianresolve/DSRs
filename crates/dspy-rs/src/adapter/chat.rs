@@ -4,6 +4,7 @@ use minijinja::UndefinedBehavior;
 use minijinja::value::{Kwargs, Value as MiniJinjaValue};
 use regex::Regex;
 use serde_json::{Map, Value, json};
+use std::cell::OnceCell;
 use std::sync::LazyLock;
 use tracing::{debug, trace};
 
@@ -315,12 +316,19 @@ impl ChatAdapter {
     /// RFC 0002 IR-1 removed.
     pub fn format_input_def(&self, def: &SignatureDef, input: &JsonMap) -> String {
         let mut result = String::new();
+        let input_context = OnceCell::new();
         for field in def.inputs.iter() {
             let Some(value) = input.get(&*field.name) else {
                 continue;
             };
             result.push_str(&format!("[[ ## {} ## ]]\n", field.lm_name));
-            result.push_str(&render_input_field_def(def, field, value, input));
+            result.push_str(&render_input_field_def(
+                def,
+                field,
+                value,
+                input,
+                &input_context,
+            ));
             result.push_str("\n\n");
         }
 
@@ -540,6 +548,7 @@ fn render_input_field_def(
     field: &crate::ir::FieldDef,
     value: &Value,
     input: &JsonMap,
+    input_context: &OnceCell<MiniJinjaValue>,
 ) -> String {
     match &field.render {
         RenderSpec::Default => match value {
@@ -560,25 +569,26 @@ fn render_input_field_def(
                 .get_template(INPUT_RENDER_TEMPLATE_NAME)
                 .expect("template registered above");
 
-            let context = json!({
-                "this": value,
-                "input": build_input_context_def(def, input),
-                "field": {
-                    "name": field.lm_name,
-                    "rust_name": field.name,
-                    "type": type_name(&field.ty, None),
-                },
-                "vars": Value::Object(Map::new()),
+            let field_context = json!({
+                "name": field.lm_name,
+                "rust_name": field.name,
+                "type": type_name(&field.ty, None),
             });
+            let context = minijinja::context! {
+                this => value,
+                input => input_context.get_or_init(|| {
+                    MiniJinjaValue::from_serialize(build_input_context_def(def, input))
+                }),
+                field => field_context,
+                vars => Value::Object(Map::new()),
+            };
 
-            compiled
-                .render(minijinja::Value::from_serialize(context))
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to render input field `{}` (rust `{}`) with jinja template `{}`: {err}",
-                        field.lm_name, field.name, template
-                    )
-                })
+            compiled.render(context).unwrap_or_else(|err| {
+                panic!(
+                    "failed to render input field `{}` (rust `{}`) with jinja template `{}`: {err}",
+                    field.lm_name, field.name, template
+                )
+            })
         }
     }
 }
@@ -598,4 +608,3 @@ fn build_input_context_def(def: &SignatureDef, input: &JsonMap) -> Value {
     }
     Value::Object(root)
 }
-
