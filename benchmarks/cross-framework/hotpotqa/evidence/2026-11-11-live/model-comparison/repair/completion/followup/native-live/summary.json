@@ -1,0 +1,102 @@
+{
+  "binary_sha256": "e0614ca92609f469cd6b0f43403c6ef0715d53e1fd76a04d49be3929e0684f80",
+  "not_performance_evidence": true,
+  "runs": [
+    {
+      "name": "baseline",
+      "native_exit": 2,
+      "provider_requests": 9,
+      "samples": 3,
+      "recipe": false,
+      "exact_matches": 1,
+      "quality_status": "failed",
+      "answers": [
+        "Yes",
+        "United States ambassador to Ghana and to Czechoslovakia",
+        "The Hork-Bajir Chronicles"
+      ]
+    },
+    {
+      "name": "original",
+      "native_exit": 2,
+      "provider_requests": 9,
+      "samples": 3,
+      "recipe": true,
+      "exact_matches": 2,
+      "quality_status": "failed",
+      "answers": [
+        "yes",
+        "ambassador",
+        "Animorphs"
+      ]
+    },
+    {
+      "name": "fresh",
+      "native_exit": 0,
+      "provider_requests": 12,
+      "samples": 4,
+      "recipe": true,
+      "exact_matches": 4,
+      "quality_status": "passed",
+      "answers": [
+        "yes",
+        "no",
+        "governor",
+        "Copper Sky"
+      ]
+    },
+    {
+      "name": "clarified",
+      "native_exit": 0,
+      "provider_requests": 3,
+      "samples": 1,
+      "recipe": true,
+      "exact_matches": 1,
+      "quality_status": "passed",
+      "answers": [
+        "Chief of Protocol"
+      ]
+    },
+    {
+      "name": "prospective",
+      "native_exit": 2,
+      "provider_requests": 24,
+      "samples": 8,
+      "recipe": true,
+      "exact_matches": 7,
+      "quality_status": "failed",
+      "answers": [
+        "ambassador",
+        "treasurer",
+        "governor",
+        "education secretary",
+        "Captain Orla",
+        "yes",
+        "no",
+        "Silverwind"
+      ]
+    },
+    {
+      "name": "repeat-original-and-clarified",
+      "native_exit": 2,
+      "provider_requests": 12,
+      "samples": 4,
+      "recipe": true,
+      "exact_matches": 3,
+      "quality_status": "failed",
+      "answers": [
+        "yes",
+        "ambassador",
+        "Animorphs",
+        "Chief of Protocol"
+      ]
+    },
+    {
+      "name": "excluded-only",
+      "native_exit": 1,
+      "provider_requests": 5,
+      "samples": 1,
+      "recipe": true
+    }
+  ]
+}

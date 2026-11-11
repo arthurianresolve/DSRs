@@ -1,0 +1,52 @@
+{
+  "examples": [
+    {
+      "id": "position-title-counterfactual",
+      "question": "What government position was held by the woman who portrayed Iona in the film Harbour Lights?",
+      "context": "Harbour Lights: The film starred Elena Brook as Iona.\nElena Brook: Elena was an actress, singer and diplomat.\nElena Brook: She was named ambassador to Velora and also served as Consul General.",
+      "answer": "Consul General"
+    },
+    {
+      "id": "position-exclusion-counterfactual",
+      "question": "What government position, other than envoy, did the woman who played Sera hold?",
+      "context": "The Orchard: Amara Field played Sera.\nAmara Field: She was named envoy to Torvia and also served as Treasurer.",
+      "answer": "Treasurer"
+    },
+    {
+      "id": "position-named-only",
+      "question": "What government position did the actor who portrayed Halden hold?",
+      "context": "Winter Road: Jonas Vale portrayed Halden.\nJonas Vale: He was an actor and was appointed governor.",
+      "answer": "governor"
+    },
+    {
+      "id": "position-excluded-served-role",
+      "question": "What office, other than governor, did the performer who played Tamsin hold?",
+      "context": "The Ridge: Mira Lorne played Tamsin.\nMira Lorne: She served as governor and was later appointed Education Secretary.",
+      "answer": "Education Secretary"
+    },
+    {
+      "id": "acting-role-is-not-office",
+      "question": "What role did the actress Dana Keene play in Night Ferry?",
+      "context": "Night Ferry: Dana Keene played Captain Orla.\nDana Keene: She later served as mayor.",
+      "answer": "Captain Orla"
+    },
+    {
+      "id": "nationality-same-counterfactual",
+      "question": "Were Petra and Milan of the same nationality?",
+      "context": "Petra: Petra was a Polish architect.\nMilan: Milan was a Polish musician.",
+      "answer": "yes"
+    },
+    {
+      "id": "nationality-different-counterfactual",
+      "question": "Are Ravi and Elna of the same nationality?",
+      "context": "Ravi: Ravi is an Indian painter.\nElna: Elna is a Norwegian painter.",
+      "answer": "no"
+    },
+    {
+      "id": "series-counterfactual",
+      "question": "What fantasy young adult series, told in first person, has The Ember Codex as a companion book?",
+      "context": "The Ember Codex: The Ember Codex is a companion book to the Silverwind series.\nThe Ember Codex: It narrates the lives of distant creatures.\nSilverwind: Silverwind is a fantasy young adult series told in first person.",
+      "answer": "Silverwind"
+    }
+  ]
+}

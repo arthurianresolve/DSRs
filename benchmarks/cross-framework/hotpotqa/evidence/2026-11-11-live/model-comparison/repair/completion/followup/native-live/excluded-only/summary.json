@@ -1,0 +1,7 @@
+{
+  "name": "excluded-only",
+  "native_exit": 1,
+  "provider_requests": 5,
+  "samples": 1,
+  "recipe": true
+}

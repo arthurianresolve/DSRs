@@ -1,5 +1,13 @@
 # Completed native DSRs QA correction
 
+> **Follow-up correction:** This report records the immutable `d4fd079` run,
+> not the current branch's quality result. That recipe suppressed a valid
+> ambassadorship and omitted a question-relevant companion-book passage. The
+> [follow-up run](followup/RESULTS.md) preserves both. Its unchanged strict
+> references score 2/3 original and 7/8 prospective because two broad office
+> questions admit the model's alternate `ambassador` answer. The 3/3 result
+> below remains historical evidence for the earlier executable.
+
 The corrected `--retrieval-recipe` passes the unchanged original strict quality
 gate using the existing Qwen3-0.6B-Tasks service. All additional positive checks
 pass, including the clarified position question. The baseline remains available

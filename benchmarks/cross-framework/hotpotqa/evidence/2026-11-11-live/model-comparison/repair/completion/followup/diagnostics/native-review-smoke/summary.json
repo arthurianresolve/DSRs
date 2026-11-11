@@ -1,0 +1,20 @@
+{
+  "binary_sha256": "6e3e87ef16870585b203192a2176a09eace30bea3d3dcdbda2213a51621d5ba7",
+  "not_performance_evidence": true,
+  "runs": [
+    {
+      "name": "original",
+      "native_exit": 2,
+      "provider_requests": 9,
+      "samples": 3,
+      "recipe": true,
+      "exact_matches": 2,
+      "quality_status": "failed",
+      "answers": [
+        "yes",
+        "ambassador",
+        "Animorphs"
+      ]
+    }
+  ]
+}

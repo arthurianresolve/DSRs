@@ -59,7 +59,8 @@ pub fn select_demonstrations<'a>(
 }
 
 /// Rank titled context documents and retain ties and documents they reference.
-/// Untitled text or a query without shared terms keeps the complete context.
+/// Incoming references also keep passages covering question terms absent from
+/// the selected documents. Untitled text keeps its complete document context.
 pub fn retrieve_context(question: &str, context: &str) -> String {
     focus_office_evidence(question, &retrieve_documents(question, context))
 }
@@ -115,15 +116,39 @@ fn retrieve_documents(question: &str, context: &str) -> String {
         }
         selected.extend(linked);
     }
-    lines
+    let mut incoming_titles = BTreeSet::new();
+    let mut retained: Vec<_> = lines
         .iter()
-        .zip(titled)
-        .filter_map(|(line, (title, _))| {
+        .zip(&titled)
+        .map(|(line, (title, _))| {
             let incoming_link = selected
                 .iter()
                 .any(|selected| line.to_lowercase().contains(&selected.to_lowercase()));
-            (selected.contains(title) || incoming_link).then_some(*line)
+            if incoming_link {
+                incoming_titles.insert(*title);
+            }
+            selected.contains(title) || incoming_link
         })
+        .collect();
+    let covered: BTreeSet<_> = lines
+        .iter()
+        .zip(&retained)
+        .filter(|(_, keep)| **keep)
+        .flat_map(|(line, _)| terms(line))
+        .collect();
+    let missing: BTreeSet<_> = query.difference(&covered).collect();
+    for ((title, text), keep) in titled.iter().zip(&mut retained) {
+        if !*keep
+            && incoming_titles.contains(title)
+            && terms(text).iter().any(|term| missing.contains(term))
+        {
+            *keep = true;
+        }
+    }
+    lines
+        .iter()
+        .zip(retained)
+        .filter_map(|(line, keep)| keep.then_some(*line))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -134,9 +159,10 @@ fn is_office_question(question: &str) -> bool {
     QUESTION.is_match(question)
 }
 
-/// For broad position questions, prefer explicit office-holding statements.
-/// Appointment questions retain appointment evidence; excluded roles are removed
-/// before choosing. Other question types and unrecognized prose keep their context.
+/// For broad position questions, place explicit office-holding statements last.
+/// Appointment questions place appointment statements last. Other eligible
+/// offices remain visible; only roles explicitly excluded by the question are
+/// removed. Other question types and unrecognized prose keep their context.
 fn focus_office_evidence(question: &str, context: &str) -> String {
     static HOLDING: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"(?i)\b(?:served|serves|serving) as\b").unwrap());
@@ -197,11 +223,10 @@ fn focus_office_evidence(question: &str, context: &str) -> String {
     if APPOINTMENT.is_match(question) && facts.iter().any(|(kind, _)| *kind == 1) {
         preferred = 1;
     }
-    background.extend(
-        facts
-            .into_iter()
-            .filter_map(|(kind, text)| (kind == preferred).then_some(text)),
-    );
+    let (preferred_facts, other_facts): (Vec<_>, Vec<_>) =
+        facts.into_iter().partition(|(kind, _)| *kind == preferred);
+    background.extend(other_facts.into_iter().map(|(_, text)| text));
+    background.extend(preferred_facts.into_iter().map(|(_, text)| text));
     background.join("\n")
 }
 
@@ -357,6 +382,18 @@ mod tests {
     }
 
     #[test]
+    fn keeps_question_relevant_passages_from_an_incoming_document() {
+        let context = "The Moon Archive: A companion book to Starbound.\nThe Moon Archive: It describes chapter numbering.\nThe Moon Archive: Its story describes an enslaved world.\nStarbound: A science fantasy series told in first person.";
+        assert_eq!(
+            retrieve_context(
+                "Which science fantasy series told in first person has a companion book about an enslaved world?",
+                context
+            ),
+            "The Moon Archive: A companion book to Starbound.\nThe Moon Archive: Its story describes an enslaved world.\nStarbound: A science fantasy series told in first person."
+        );
+    }
+
+    #[test]
     fn rejects_explicit_exclusions_without_using_reference_answers() {
         let question = "What office, other than city council member, did she hold?";
         assert!(validate_exclusion(question, "City Council Member").is_err());
@@ -392,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn focuses_office_holding_without_losing_the_actor_link() {
+    fn prioritizes_office_holding_without_erasing_other_offices_or_the_actor_link() {
         let context = "The Crossing: Lena Marsh played Captain Vale.\nLena Marsh: She was named envoy to Torvia and also served as Treasurer.";
         let focused = retrieve_context(
             "What government position did the woman who played Captain Vale hold?",
@@ -400,9 +437,9 @@ mod tests {
         );
         assert_eq!(
             focused,
-            "The Crossing: Lena Marsh played Captain Vale.\nLena Marsh: also served as Treasurer."
+            "The Crossing: Lena Marsh played Captain Vale.\nLena Marsh: She was named envoy to Torvia\nLena Marsh: also served as Treasurer."
         );
-        assert!(!focused.contains("envoy"));
+        assert!(focused.contains("envoy"));
     }
 
     #[test]
@@ -410,7 +447,7 @@ mod tests {
         let context = "She served as governor and was later appointed Education Secretary.";
         assert_eq!(
             focus_office_evidence("What office was she appointed to?", context),
-            "was later appointed Education Secretary."
+            "She served as governor\nwas later appointed Education Secretary."
         );
         assert_eq!(
             focus_office_evidence("What office, other than governor, did she hold?", context),

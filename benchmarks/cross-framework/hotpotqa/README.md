@@ -83,9 +83,11 @@ Its [answer-quality review](evidence/2026-11-11-live/QUALITY_REVIEW.md) distingu
 formatting mismatches, an ambiguous reference question and factual model errors.
 The [Qwen3-0.6B-Tasks rerun](evidence/2026-11-11-live/model-comparison/RESULTS.md)
 completed fresh native baseline pipelines with 1/3 exact matches each. Those
-baseline quality failures are retained. The corrected DSRs diagnostic recipe
-below passes the original strict references; browser transport excludes these
-quality checks from latency comparisons.
+baseline quality failures are retained. An earlier DSRs diagnostic recipe
+matched all three original references by suppressing a valid alternate office
+and omitting a question-relevant passage. The [follow-up review](evidence/2026-11-11-live/model-comparison/repair/completion/followup/RESULTS.md)
+preserves both and reports the ambiguous strict mismatches. Browser transport
+excludes these quality checks from latency comparisons.
 The [DSRs failure investigation](evidence/2026-11-11-live/model-comparison/diagnosis/RESULTS.md)
 also checks the previous full prompt, alternative layouts, grounding, sampling
 and a larger model. Its unsuccessful candidates are retained; they have not been
@@ -104,11 +106,13 @@ unchanged.
 ## DSRs retrieval and validation diagnostics
 
 DSRs supports an opt-in `--retrieval-recipe` for protocol/quality checks. It ranks
-the supplied context documents, retains question-named documents and incoming
-evidence links, and selects up to two synthetic demonstrations by their input
-questions. For broad position questions it prefers explicit office-holding
-statements; appointment questions retain appointment evidence. Excluded roles
-are removed before that choice. Other question types keep their document context.
+the supplied context documents, retains question-named documents, incoming
+evidence links and linked passages that cover otherwise missing question terms,
+and selects up to two synthetic demonstrations by their input questions. For
+broad position questions it places explicit office-holding statements last,
+while retaining other eligible offices. Appointment questions place appointment
+evidence last. Explicit exclusions are enforced by final validation. Other
+question types keep their document context.
 
 The typed draft reaches reflection even when it is factually wrong. Only the
 final revision receives bounded application validation: yes/no format, extraction
@@ -132,17 +136,19 @@ the four separate synthetic validation cases, which are absent from the training
 demonstrations. Custom fixtures and this recipe require diagnostic mode; they
 cannot silently change the timing workload.
 
-The completed native Qwen3-0.6B-Tasks verification passes **3/3 original strict
-references**, **4/4 earlier synthetic cases**, the **clarified position question**,
-and **8/8 additional synthetic boundary cases** in `prospective-fixture.json`.
-A repeat of the original and clarified questions passes 4/4. A question whose
-only stated office is explicitly excluded fails after three final-answer
-attempts, with five total pipeline requests. The unmodified baseline still scores
-1/3. The original position question remains ambiguous; the recipe's declared
-office-holding preference selects a supported answer that matches its reference.
-See the [completed correction report](evidence/2026-11-11-live/model-comparison/repair/completion/RESULTS.md)
-for all 74 real native requests, source/binary hashes, rejected trials and limits.
-These small diagnostic checks establish no general accuracy or speedup guarantee.
+The follow-up native Qwen3-0.6B-Tasks run scores **2/3 original strict
+references**, **4/4 earlier synthetic cases**, **1/1 clarified office question**,
+and **7/8 prospective boundary cases** in `prospective-fixture.json`. The two
+distinct mismatches are broad office questions for which the context supports
+both `ambassador` and the reference office. The model chooses `ambassador` when
+that evidence remains visible. A repeat of the original and clarified questions
+scores 3/4. A question whose only stated office is explicitly excluded fails
+after three final attempts and five total requests. The unmodified baseline
+still scores 1/3. See the [follow-up evidence](evidence/2026-11-11-live/model-comparison/repair/completion/followup/RESULTS.md)
+for all 74 real native requests, source/binary hashes and limits. The earlier
+[3/3 report](evidence/2026-11-11-live/model-comparison/repair/completion/RESULTS.md)
+is preserved as historical evidence for its previous executable. These small
+diagnostic checks establish no general accuracy or speedup guarantee.
 
 ## Offline controlled workload
 

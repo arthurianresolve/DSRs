@@ -1,0 +1,14 @@
+{
+  "name": "original",
+  "native_exit": 2,
+  "provider_requests": 9,
+  "samples": 3,
+  "recipe": true,
+  "exact_matches": 2,
+  "quality_status": "failed",
+  "answers": [
+    "yes",
+    "ambassador",
+    "Animorphs"
+  ]
+}

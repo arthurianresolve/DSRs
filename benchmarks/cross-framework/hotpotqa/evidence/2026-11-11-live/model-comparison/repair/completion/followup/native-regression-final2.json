@@ -1,0 +1,641 @@
+{
+  "kind": "native_cli_mock_provider_regressions",
+  "binary_sha256": "e0614ca92609f469cd6b0f43403c6ef0715d53e1fd76a04d49be3929e0684f80",
+  "cases": [
+    {
+      "name": "repair",
+      "exit": 0,
+      "stdout": "{\"framework\":\"dsrs\",\"kind\":\"protocol_check\",\"output_format\":\"json_schema\",\"iterations\":1,\"warmup\":0,\"live\":true,\"smoke\":false,\"instrumented\":false,\"simulated_wait_ms_per_stage\":0,\"cache\":false,\"history\":false,\"samples\":[{\"id\":\"repair-draft\",\"answer\":\"Consul General\",\"pipeline_ns\":27931700,\"stage_ns\":[10947100,2646000,14333400],\"simulated_wait_ns\":0,\"provider_ns\":[8529400,2323300,2269500],\"adapter_events\":[],\"expected_answer\":\"Consul General\",\"exact_match\":true,\"draft\":\"mayor\",\"critique\":\"The context states Consul General of Canada, not mayor.\",\"revised_answer\":\"Consul General of Canada\",\"context\":\"Mira: She served as Consul General of Canada.\"}],\"recipe\":\"retrieved_context_and_demonstrations\",\"quality_status\":\"passed\"}\n",
+      "stderr": "",
+      "requests": [
+        {
+          "model": "regression",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nAnswer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor an office or position, give only the office title without its country or jurisdiction. Keep words integral to the title."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"answer\":\"mayor\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat office did Mira hold?\n\n[[ ## context ## ]]\nMira: She served as Consul General of Canada.\n\nReturn a JSON object with every output field."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answer": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "answer"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "model": "regression",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `answer` (string)\n\nYour output fields are:\n1. `critique` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nCritique the answer against the supplied context. Put one brief sentence in the critique output field. Do not copy input fields."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\n[[ ## answer ## ]]\nEllis Vale\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"critique\":\"The question asks for a position rather than a person; the position was mayor.\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat office did Mira hold?\n\n[[ ## context ## ]]\nMira: She served as Consul General of Canada.\n\n[[ ## answer ## ]]\nmayor\n\nReturn a JSON object with every output field."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "critique": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "critique"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "model": "regression",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `draft` (string)\n4. `critique` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nRevise the answer using the critique and supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor an office or position, give only the office title without its country or jurisdiction. Keep words integral to the title."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\n[[ ## draft ## ]]\nEllis Vale\n\n[[ ## critique ## ]]\nThe question asks for a position rather than a person; the position was mayor.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"answer\":\"mayor\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat office did Mira hold?\n\n[[ ## context ## ]]\nMira: She served as Consul General of Canada.\n\n[[ ## draft ## ]]\nmayor\n\n[[ ## critique ## ]]\nThe context states Consul General of Canada, not mayor.\n\nReturn a JSON object with every output field."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answer": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "answer"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "reject",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "Error: failed to parse LLM response\n\nCaused by:\n    output validation failed: For this extractive question, answer with a contiguous phrase copied from the context. Do not add an explanation.\n",
+      "requests": [
+        {
+          "model": "regression",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nAnswer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor an office or position, give only the office title without its country or jurisdiction. Keep words integral to the title."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"answer\":\"mayor\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat office did Mira hold?\n\n[[ ## context ## ]]\nMira: She served as Consul General of Canada.\n\nReturn a JSON object with every output field."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answer": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "answer"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "model": "regression",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `answer` (string)\n\nYour output fields are:\n1. `critique` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nCritique the answer against the supplied context. Put one brief sentence in the critique output field. Do not copy input fields."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\n[[ ## answer ## ]]\nEllis Vale\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"critique\":\"The question asks for a position rather than a person; the position was mayor.\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat office did Mira hold?\n\n[[ ## context ## ]]\nMira: She served as Consul General of Canada.\n\n[[ ## answer ## ]]\nmayor\n\nReturn a JSON object with every output field."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "critique": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "critique"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "model": "regression",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `draft` (string)\n4. `critique` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nRevise the answer using the critique and supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor an office or position, give only the office title without its country or jurisdiction. Keep words integral to the title."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\n[[ ## draft ## ]]\nEllis Vale\n\n[[ ## critique ## ]]\nThe question asks for a position rather than a person; the position was mayor.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"answer\":\"mayor\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat office did Mira hold?\n\n[[ ## context ## ]]\nMira: She served as Consul General of Canada.\n\n[[ ## draft ## ]]\nmayor\n\n[[ ## critique ## ]]\nKeep mayor.\n\nReturn a JSON object with every output field."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answer": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "answer"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "model": "regression",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `draft` (string)\n4. `critique` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nRevise the answer using the critique and supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor an office or position, give only the office title without its country or jurisdiction. Keep words integral to the title."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\n[[ ## draft ## ]]\nEllis Vale\n\n[[ ## critique ## ]]\nThe question asks for a position rather than a person; the position was mayor.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"answer\":\"mayor\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat office did Mira hold?\n\n[[ ## context ## ]]\nMira: She served as Consul General of Canada.\n\n[[ ## draft ## ]]\nmayor\n\n[[ ## critique ## ]]\nKeep mayor.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"answer\": \"mayor\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "Your previous response failed validation:\nFor this extractive question, answer with a contiguous phrase copied from the context. Do not add an explanation.\nReturn a corrected response using the required output fields and format."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answer": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "answer"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "model": "regression",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `draft` (string)\n4. `critique` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nRevise the answer using the critique and supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor an office or position, give only the office title without its country or jurisdiction. Keep words integral to the title."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\n[[ ## draft ## ]]\nEllis Vale\n\n[[ ## critique ## ]]\nThe question asks for a position rather than a person; the position was mayor.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"answer\":\"mayor\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat office did Mira hold?\n\n[[ ## context ## ]]\nMira: She served as Consul General of Canada.\n\n[[ ## draft ## ]]\nmayor\n\n[[ ## critique ## ]]\nKeep mayor.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"answer\": \"mayor\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "Your previous response failed validation:\nFor this extractive question, answer with a contiguous phrase copied from the context. Do not add an explanation.\nReturn a corrected response using the required output fields and format."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"answer\": \"mayor\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "Your previous response failed validation:\nFor this extractive question, answer with a contiguous phrase copied from the context. Do not add an explanation.\nReturn a corrected response using the required output fields and format."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answer": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "answer"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "changed-reference",
+      "exit": 2,
+      "stdout": "{\"framework\":\"dsrs\",\"kind\":\"protocol_check\",\"output_format\":\"json_schema\",\"iterations\":1,\"warmup\":0,\"live\":true,\"smoke\":false,\"instrumented\":false,\"simulated_wait_ms_per_stage\":0,\"cache\":false,\"history\":false,\"samples\":[{\"id\":\"repair-draft\",\"answer\":\"Consul General\",\"pipeline_ns\":20611800,\"stage_ns\":[6097300,1847000,12662500],\"simulated_wait_ns\":0,\"provider_ns\":[5201900,1594500,1958100],\"adapter_events\":[],\"expected_answer\":\"Deliberately incorrect evaluation label\",\"exact_match\":false,\"draft\":\"mayor\",\"critique\":\"The context states Consul General of Canada, not mayor.\",\"revised_answer\":\"Consul General of Canada\",\"context\":\"Mira: She served as Consul General of Canada.\"}],\"recipe\":\"retrieved_context_and_demonstrations\",\"quality_status\":\"failed\"}\n",
+      "stderr": "",
+      "requests": [
+        {
+          "model": "regression",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nAnswer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor an office or position, give only the office title without its country or jurisdiction. Keep words integral to the title."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"answer\":\"mayor\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat office did Mira hold?\n\n[[ ## context ## ]]\nMira: She served as Consul General of Canada.\n\nReturn a JSON object with every output field."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answer": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "answer"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "model": "regression",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `answer` (string)\n\nYour output fields are:\n1. `critique` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nCritique the answer against the supplied context. Put one brief sentence in the critique output field. Do not copy input fields."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\n[[ ## answer ## ]]\nEllis Vale\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"critique\":\"The question asks for a position rather than a person; the position was mayor.\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat office did Mira hold?\n\n[[ ## context ## ]]\nMira: She served as Consul General of Canada.\n\n[[ ## answer ## ]]\nmayor\n\nReturn a JSON object with every output field."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "critique": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "critique"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        {
+          "model": "regression",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `draft` (string)\n4. `critique` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nRevise the answer using the critique and supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor an office or position, give only the office title without its country or jurisdiction. Keep words integral to the title."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\n[[ ## draft ## ]]\nEllis Vale\n\n[[ ## critique ## ]]\nThe question asks for a position rather than a person; the position was mayor.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "{\"answer\":\"mayor\"}"
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat office did Mira hold?\n\n[[ ## context ## ]]\nMira: She served as Consul General of Canada.\n\n[[ ## draft ## ]]\nmayor\n\n[[ ## critique ## ]]\nThe context states Consul General of Canada, not mayor.\n\nReturn a JSON object with every output field."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answer": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "answer"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

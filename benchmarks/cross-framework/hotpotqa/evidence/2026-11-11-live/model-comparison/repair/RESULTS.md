@@ -1,8 +1,9 @@
 # DSRs corrections and bounded quality validation
 
-This report preserves the first correction's 2/3 result. The subsequent
-[completed native correction](completion/RESULTS.md) passes 3/3 original
-references, the clarified question and the additional diagnostic cases.
+This report preserves the first correction's 2/3 result. A subsequent
+[native run](completion/RESULTS.md) passed 3/3 original references after
+filtering a valid alternate office. The [follow-up review](completion/followup/RESULTS.md)
+restores that evidence and reports the ambiguous strict mismatches.
 
 ## Changes
 

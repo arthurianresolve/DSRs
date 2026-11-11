@@ -1,8 +1,10 @@
 # Qwen3-0.6B-Tasks answer-quality rerun
 
-The [completed DSRs correction](repair/completion/RESULTS.md) subsequently passes
-the original strict references, clarified question and additional diagnostic
-cases. This report preserves the earlier unmodified baseline results.
+The earlier [DSRs correction](repair/completion/RESULTS.md) passed the original
+strict references by filtering a valid alternate office. The
+[follow-up review](repair/completion/followup/RESULTS.md) restores that evidence
+and reports the resulting ambiguous strict mismatches. This report preserves
+the earlier unmodified baseline results.
 
 ## Result
 

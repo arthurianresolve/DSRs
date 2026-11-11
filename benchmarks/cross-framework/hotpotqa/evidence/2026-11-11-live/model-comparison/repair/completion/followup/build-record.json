@@ -1,0 +1,34 @@
+{
+  "parent_commit": "d4fd0797031b3251ef8406840bf451ecd5cd0249",
+  "toolchain": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-pc-windows-msvc\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+  "build_command": "cargo build -p dspy-rs --release --no-default-features --locked --example bench-hotpotqa-reflection",
+  "binary_sha256": "e0614ca92609f469cd6b0f43403c6ef0715d53e1fd76a04d49be3929e0684f80",
+  "source_sha256": {
+    "crates/dspy-rs/examples/bench-hotpotqa-reflection.rs": "5f5e593fc0c3fbdd57b86bc13e37788c838e0d47cb5a8943ef4d3660b92849fc",
+    "crates/dspy-rs/examples/support/hotpotqa_retrieval.rs": "59d711b4a908dfafa359b0396a74523fc2f79eb9f6235be3273838b17baf06cb",
+    "benchmarks/cross-framework/hotpotqa/fixture.json": "535dd6f5b21afd77476cfe02afd51eea09e0e487278d37bc3f3981c3cd3b97ee",
+    "benchmarks/cross-framework/hotpotqa/prospective-fixture.json": "d356965d5eb163b1601aee68c21f17b24a1d4c55b687c6b99c278561a0af2203",
+    "benchmarks/cross-framework/hotpotqa/demonstrations.json": "3d996ad9f9c6ba69ba2a8350164050338889ab06c3763cd0d42b4bdcae029597",
+    "benchmarks/cross-framework/hotpotqa/data/territories.json": "1326fb3bcdf8b8cf63df73ea02ea7f8bf7a8362cbb60bd12bcdb53f3ad22bf04",
+    "benchmarks/cross-framework/hotpotqa/evidence/2026-11-11-live/model-comparison/repair/completion/relation-recipe/references.json": "ce52db947bb205c7b5fc6f1914d57b39a05937fdd1694973d99a73dcc143cefc",
+    "benchmarks/cross-framework/hotpotqa/evidence/2026-11-11-live/model-comparison/repair/completion/followup/run-native.py": "ec707ebd132d2dfd4da7b8440c0d32a015f0a08c0ee823bd2fcf20df9acc443c",
+    "Cargo.lock": "f9cea9f8ed91c895f9050e026b6908e2d9ce59f0f7db5185d50a2401b02382d1"
+  },
+  "rust_example_tests": 11,
+  "python_harness_tests": 11,
+  "native_cli_regressions": 3,
+  "native_provider_requests": 74,
+  "provider_model": "Qwen3-0.6B-Tasks",
+  "not_performance_evidence": true,
+  "source_blob_sha256": {
+    "crates/dspy-rs/examples/bench-hotpotqa-reflection.rs": "5f5e593fc0c3fbdd57b86bc13e37788c838e0d47cb5a8943ef4d3660b92849fc",
+    "crates/dspy-rs/examples/support/hotpotqa_retrieval.rs": "59d711b4a908dfafa359b0396a74523fc2f79eb9f6235be3273838b17baf06cb",
+    "benchmarks/cross-framework/hotpotqa/fixture.json": "0cd38baad74b035b795043d22b7059c452d0fc4f8828d0b39fd196b6c4865a88",
+    "benchmarks/cross-framework/hotpotqa/prospective-fixture.json": "d356965d5eb163b1601aee68c21f17b24a1d4c55b687c6b99c278561a0af2203",
+    "benchmarks/cross-framework/hotpotqa/demonstrations.json": "45115bdc9797fb4a021a28dd99c5caaddeff8f479d25e303ca2a95ea4e35734b",
+    "benchmarks/cross-framework/hotpotqa/data/territories.json": "1326fb3bcdf8b8cf63df73ea02ea7f8bf7a8362cbb60bd12bcdb53f3ad22bf04",
+    "benchmarks/cross-framework/hotpotqa/evidence/2026-11-11-live/model-comparison/repair/completion/relation-recipe/references.json": "ce52db947bb205c7b5fc6f1914d57b39a05937fdd1694973d99a73dcc143cefc",
+    "benchmarks/cross-framework/hotpotqa/evidence/2026-11-11-live/model-comparison/repair/completion/followup/run-native.py": "ec707ebd132d2dfd4da7b8440c0d32a015f0a08c0ee823bd2fcf20df9acc443c",
+    "Cargo.lock": "cc1e13c56880caa8197d489d6e7be3bd3b4f9eb019e4ee379be73d36efc15dd3"
+  }
+}

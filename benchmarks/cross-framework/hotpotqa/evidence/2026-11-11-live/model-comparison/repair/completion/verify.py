@@ -2,6 +2,7 @@
 import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
 
 root = Path(__file__).resolve().parent
@@ -32,7 +33,12 @@ def canonical(question, answer):
 
 build = load("build-record.json")
 for path, expected in build["working_source_sha256"].items():
-    assert hashlib.sha256((repo / path).read_bytes()).hexdigest() == expected, path
+    data = (repo / path).read_bytes()
+    if hashlib.sha256(data).hexdigest() != expected:
+        data = subprocess.check_output(
+            ["git", "show", f"{build['source_commit']}:{path}"], cwd=repo
+        )
+    assert hashlib.sha256(data).hexdigest() == expected, path
 source = json.loads((hotpotqa / "data/source.json").read_text(encoding="utf-8"))
 assert hashlib.sha256((hotpotqa / "data/territories.json").read_bytes()).hexdigest() == source["sha256"]
 assert hashlib.sha256((hotpotqa / "data/UNICODE-LICENSE.txt").read_bytes()).hexdigest() == source["license_sha256"]
@@ -52,10 +58,30 @@ rejected = load("relation-recipe/native-live/requests.json")
 assert [r["request"] for r in requests[:13]] == [r["request"] for r in rejected[:13]]
 assert [r["round"] for r in requests] == list(range(1, 75))
 for record in requests:
+    round_file = load(f"relation-recipe/native-live-fixed/round-{record['round']}.response.json")
+    assert round_file["round"] == record["round"]
+    sent = dict(round_file["request"])
+    assert sent.pop("seed") == 0 and sent == record["request"]
+    assert round_file["response"] == record["response"]
     response = record["response"]
     assert response["model"] == record["request"]["model"] == "Qwen3-0.6B-Tasks"
     assert response["choices"][0]["finish_reason"] == "stop"
     json.loads(response["choices"][0]["message"]["content"])
+
+for run in summary["runs"]:
+    folder = root / "relation-recipe/native-live-fixed" / run["name"]
+    assert load(f"relation-recipe/native-live-fixed/{run['name']}/summary.json") == run
+    assert len([r for r in requests if r["run"] == run["name"]]) == run["provider_requests"]
+    if run["name"] == "excluded-only":
+        assert not (folder / "stdout.json").read_text(encoding="utf-8").strip()
+        assert "output validation failed" in (folder / "stderr.txt").read_text(encoding="utf-8")
+        continue
+    report = json.loads((folder / "stdout.json").read_text(encoding="utf-8"))
+    assert len(report["samples"]) == run["samples"]
+    assert sum(sample["exact_match"] for sample in report["samples"]) == run["exact_matches"]
+    assert report["quality_status"] == run["quality_status"]
+    assert [sample["answer"] for sample in report["samples"]] == run["answers"]
+    assert run["native_exit"] == (0 if report["quality_status"] == "passed" else 2)
 
 for run in summary["runs"][:-1]:
     folder = root / "relation-recipe/native-live-fixed" / run["name"]
@@ -96,4 +122,12 @@ assert load("cache-repeatability/results.json")["model_sha256"] == "361cc6815904
 cleanup = load("relation-recipe/cleanup-result.json")
 assert cleanup["status"] == "completed" and len(cleanup["directories_removed"]) == 8
 assert cleanup["verified_files"] == 98 and all(cleanup["existing_services_running"].values())
+manifest_path = hotpotqa / "evidence/2026-11-11-live/artifact-sha256.json"
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+manifest_root = manifest_path.parent
+actual = {path.relative_to(manifest_root).as_posix() for path in manifest_root.rglob("*")
+          if path.is_file() and path != manifest_path}
+assert set(manifest) == actual
+for path, expected in manifest.items():
+    assert hashlib.sha256((manifest_root / path).read_bytes()).hexdigest() == expected, path
 print("Passed: 74 real native requests; original 3/3, earlier synthetic 4/4, clarified 1/1, prospective 8/8, repeat 4/4; bounded final rejection; references isolated.")
