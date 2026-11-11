@@ -1,0 +1,12 @@
+
+running 7 tests
+test native_schema_prompt_keeps_semantics_without_repeating_the_api_schema ... ok
+test complex_native_outputs_keep_nested_schema_descriptions_in_the_prompt ... ok
+test native_json_parser_preserves_string_values_and_field_metadata ... ok
+test native_schema_demos_match_the_compact_prompt_and_preserve_aliases ... ok
+test nested_native_schema_demos_keep_the_descriptive_json_format ... ok
+test parse_output_def_accepts_dotted_field_markers ... ok
+test parse_output_def_uses_canonical_field_names ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

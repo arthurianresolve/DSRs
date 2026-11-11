@@ -1,0 +1,28 @@
+{
+  "examples": [
+    {
+      "id": "fresh-same",
+      "question": "Were Nira and Oswin of the same nationality?",
+      "context": "Nira was a Japanese architect. Oswin was a Japanese composer.",
+      "answer": "yes"
+    },
+    {
+      "id": "fresh-different",
+      "question": "Are Pavel and Suri of the same nationality?",
+      "context": "Pavel is a Brazilian scientist. Suri is a Swedish scientist.",
+      "answer": "no"
+    },
+    {
+      "id": "fresh-office",
+      "question": "What public office did the performer who played Captain Vale subsequently hold?",
+      "context": "Lena Marsh played Captain Vale in The Crossing. Lena Marsh subsequently served as governor.",
+      "answer": "governor"
+    },
+    {
+      "id": "fresh-series",
+      "question": "Which series has The Glass Ledger as a companion volume?",
+      "context": "The Glass Ledger is a companion volume to the Copper Sky series. Copper Sky is a fantasy novel series.",
+      "answer": "Copper Sky"
+    }
+  ]
+}

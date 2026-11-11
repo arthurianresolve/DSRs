@@ -1,0 +1,30 @@
+[
+  {
+    "question": "Are Ana and Luis of the same nationality?",
+    "context": "Ana is Canadian. Luis is Canadian.",
+    "draft": "no",
+    "critique": "Both people are Canadian, so the answer should be yes.",
+    "answer": "yes"
+  },
+  {
+    "question": "Do Mara and Leon have the same nationality?",
+    "context": "Mara is a Canadian engineer. Leon is a French engineer.",
+    "draft": "no",
+    "critique": "The answer is correct: Canadian and French are different nationalities.",
+    "answer": "no"
+  },
+  {
+    "question": "What position did the actor who played Rowan later hold?",
+    "context": "In The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.",
+    "draft": "Ellis Vale",
+    "critique": "The question asks for a position rather than a person; the position was mayor.",
+    "answer": "mayor"
+  },
+  {
+    "question": "Which novel series has the companion book The Moon Archive?",
+    "context": "The Moon Archive is a companion book to the Starbound series. Starbound is a science fiction novel series.",
+    "draft": "Starbound",
+    "critique": "The answer is correct. Starbound is the series; The Moon Archive is a companion book.",
+    "answer": "Starbound"
+  }
+]

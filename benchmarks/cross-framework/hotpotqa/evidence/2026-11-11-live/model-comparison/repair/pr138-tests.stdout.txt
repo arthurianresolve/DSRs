@@ -1,0 +1,39 @@
+
+running 7 tests
+test complex_native_outputs_keep_nested_schema_descriptions_in_the_prompt ... ok
+test native_schema_prompt_keeps_semantics_without_repeating_the_api_schema ... ok
+test native_json_parser_preserves_string_values_and_field_metadata ... ok
+test parse_output_def_uses_canonical_field_names ... ok
+test parse_output_def_accepts_dotted_field_markers ... ok
+test native_schema_demos_match_the_compact_prompt_and_preserve_aliases ... ok
+test nested_native_schema_demos_keep_the_descriptive_json_format ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 22 tests
+test hole_without_sandbox_fails_the_load ... ok
+test caps_exceeding_grants_refuse_the_load ... ok
+test budget_gates_lm_calls_pre_call ... ok
+test bounded_loop_carries_values_and_stops_on_condition ... ok
+test agent_loop_is_one_span_with_tool_events ... ok
+test fork_join_runs_branches_concurrently ... ok
+test hole_that_does_not_compile_fails_the_load ... ok
+test jinja_render_failure_in_demo_returns_input_error ... ok
+test jinja_render_failure_returns_input_error_before_lm_call ... ok
+test missing_input_is_rejected_before_any_call ... ok
+test overlay_can_swap_the_model_ref ... ok
+test hole_executes_in_the_sandbox ... ok
+test overlays_read_through_at_render_time_without_mutation ... ok
+test refine_reruns_child_with_judge_feedback ... ok
+test refine_returns_earliest_highest_scoring_attempt_on_exhaustion ... ok
+test retry_intercepts_parse_failures_with_feedback ... ok
+test route_selects_the_matching_arm ... ok
+test seq_pipeline_end_to_end_with_trace ... ok
+test stale_overlay_is_refused ... ok
+test tool_set_overlay_selects_the_tool_surface ... ok
+test unbound_host_tool_refuses_the_load ... ok
+test worked_example_runs_end_to_end ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

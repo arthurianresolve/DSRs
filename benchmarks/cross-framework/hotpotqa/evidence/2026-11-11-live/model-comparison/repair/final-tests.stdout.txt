@@ -1,0 +1,52 @@
+
+running 22 tests
+test hole_without_sandbox_fails_the_load ... ok
+test caps_exceeding_grants_refuse_the_load ... ok
+test budget_gates_lm_calls_pre_call ... ok
+test fork_join_runs_branches_concurrently ... ok
+test agent_loop_is_one_span_with_tool_events ... ok
+test hole_that_does_not_compile_fails_the_load ... ok
+test bounded_loop_carries_values_and_stops_on_condition ... ok
+test jinja_render_failure_in_demo_returns_input_error ... ok
+test hole_executes_in_the_sandbox ... ok
+test jinja_render_failure_returns_input_error_before_lm_call ... ok
+test missing_input_is_rejected_before_any_call ... ok
+test overlay_can_swap_the_model_ref ... ok
+test overlays_read_through_at_render_time_without_mutation ... ok
+test refine_reruns_child_with_judge_feedback ... ok
+test refine_returns_earliest_highest_scoring_attempt_on_exhaustion ... ok
+test retry_intercepts_parse_failures_with_feedback ... ok
+test route_selects_the_matching_arm ... ok
+test seq_pipeline_end_to_end_with_trace ... ok
+test stale_overlay_is_refused ... ok
+test tool_set_overlay_selects_the_tool_surface ... ok
+test unbound_host_tool_refuses_the_load ... ok
+test worked_example_runs_end_to_end ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 11 tests
+test test_field_order_preserved ... ok
+test test_objective_line_present ... ok
+test test_nested_struct_with_comments ... ok
+test test_array_renders_with_brackets ... ok
+test test_optional_renders_as_nullable ... ok
+test test_completed_marker_present ... ok
+test test_enum_rendering ... ok
+test test_no_answer_in_schema_block ... ok
+test test_primitive_types ... ok
+test test_response_instruction_line_present ... ok
+test test_schema_is_separate_from_type_line ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 4 tests
+test retrieval::tests::answers_must_fit_the_query_and_retrieved_context ... ok
+test retrieval::tests::rejects_explicit_exclusions_without_using_reference_answers ... ok
+test retrieval::tests::follows_document_links_for_two_hop_questions ... ok
+test retrieval::tests::keeps_tied_subjects_and_falls_back_without_evidence ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

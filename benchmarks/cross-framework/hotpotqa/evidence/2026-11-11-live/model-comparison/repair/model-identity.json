@@ -1,0 +1,22 @@
+{
+  "version": 3,
+  "tensors": 311,
+  "metadata": {
+    "general.architecture": "qwen3",
+    "general.type": "model",
+    "general.sampling.top_k": 20,
+    "general.sampling.top_p": 0.949999988079071,
+    "general.sampling.temp": 0.6000000238418579,
+    "general.name": "Qwen3-0.6B",
+    "general.size_label": "752M",
+    "general.license": "apache-2.0",
+    "general.license.link": "https://huggingface.co/Qwen/Qwen3-0.6B/blob/main/LICENSE",
+    "general.base_model.count": 1,
+    "general.base_model.0.name": "Qwen3 0.6B Base",
+    "general.base_model.0.organization": "Qwen",
+    "general.base_model.0.repo_url": "https://huggingface.co/Qwen/Qwen3-0.6B-Base",
+    "general.quantization_version": 2,
+    "general.file_type": 7
+  },
+  "model_sha256": "361cc68159042c36ebff7715dc5a2e4612153e88f3e9c9c234820849d6dc9e1d"
+}

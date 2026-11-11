@@ -1,0 +1,61 @@
+{
+  "source_commit_before_recipe": "2c3153f41fa74e741e485370fa52b6150b6d2348",
+  "binary_sha256": "26233217c80db3842f9c3526fbef171ebe7532df3c345d58f8bb1263a2b0761e",
+  "rust_checks": {
+    "schema": 7,
+    "ir_no_cache": 22,
+    "typed_format": 11,
+    "recipe": 4,
+    "ir_cache_enabled": 1
+  },
+  "python_harness_checks": 11,
+  "native_validation": {
+    "binary_sha256": "26233217c80db3842f9c3526fbef171ebe7532df3c345d58f8bb1263a2b0761e",
+    "method": "native replay with exact real-provider request-body verification",
+    "not_performance_evidence": true,
+    "runs": [
+      {
+        "name": "baseline",
+        "native_exit": 2,
+        "exact_matches": 1,
+        "samples": 3,
+        "verified_requests": 9,
+        "quality_status": "failed"
+      },
+      {
+        "name": "retrieval-original",
+        "native_exit": 2,
+        "exact_matches": 2,
+        "samples": 3,
+        "verified_requests": 9,
+        "quality_status": "failed"
+      },
+      {
+        "name": "retrieval-fresh",
+        "native_exit": 0,
+        "exact_matches": 4,
+        "samples": 4,
+        "verified_requests": 12,
+        "quality_status": "passed"
+      }
+    ],
+    "invalid_cli_combinations_rejected": 3
+  },
+  "live_guarded_validation": {
+    "native_exit": 1,
+    "provider_requests": 3,
+    "not_performance_evidence": true
+  },
+  "performance_evidence": false,
+  "references_changed": false,
+  "temporary_test_directories_removed": 7,
+  "official_test_container_and_model_removed": true,
+  "persistent_server_configuration_changed": false,
+  "working_tree_source_sha256": {
+    "crates/dspy-rs/src/adapter/chat.rs": "d3d5e6fef03479adeca2b17ce277ed6c9928b027bddd16243e4c900d873bd273",
+    "crates/dspy-rs/src/ir/interp.rs": "bf13729de6c2601bf4892b6adb52ce87fc0f613a433b7084d3af69d5bb322657",
+    "crates/dspy-rs/examples/bench-hotpotqa-reflection.rs": "c29967a3fbcd551c16e368cc93c05495e1f1d331726b7964771312778d1f3bcb",
+    "crates/dspy-rs/examples/support/hotpotqa_retrieval.rs": "8f1faa8ac8cbb2df0c09e8d709bd6168875c7892e4faf6eba99726eec6f5122a",
+    "benchmarks/cross-framework/hotpotqa/demonstrations.json": "3d996ad9f9c6ba69ba2a8350164050338889ab06c3763cd0d42b4bdcae029597"
+  }
+}

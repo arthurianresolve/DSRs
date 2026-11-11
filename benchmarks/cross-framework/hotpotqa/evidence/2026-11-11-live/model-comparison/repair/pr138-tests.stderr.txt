@@ -1,0 +1,162 @@
+   Compiling dspy-rs v0.7.3 (C:\Users\georg\Documents\DSRs-worktrees\fix-inference-io-performance\crates\dspy-rs)
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\graph.rs:38:1
+   |
+38 | entity_impl!(Sym, "sym");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\graph.rs:38:1
+   |
+38 | entity_impl!(Sym, "sym");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\graph.rs:43:1
+   |
+43 | entity_impl!(NodeId, "n");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\graph.rs:48:1
+   |
+48 | entity_impl!(SigId, "sig");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\graph.rs:55:1
+   |
+55 | entity_impl!(ModelId, "m");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\graph.rs:60:1
+   |
+60 | entity_impl!(ToolId, "t");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\params.rs:22:1
+   |
+22 | entity_impl!(ParamId, "p");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated method `std::sync::atomic::Atomic::<u32>::fetch_update`: renamed to `try_update` for consistency
+   --> crates\dspy-rs\src\ir\interp.rs:114:18
+    |
+114 |                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
+    |                  ^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated method
+    |
+114 -                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
+114 +                 .try_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
+    |
+
+warning: fields `task_description`, `current_instruction`, `execution_feedback`, and `improved_instruction` are never read
+  --> crates\dspy-rs\src\optimizer\gepa.rs:28:5
+   |
+25 | struct ReflectOnInstruction {
+   |        -------------------- fields in this struct
+...
+28 |     task_description: String,
+   |     ^^^^^^^^^^^^^^^^
+...
+32 |     current_instruction: String,
+   |     ^^^^^^^^^^^^^^^^^^^
+...
+36 |     execution_feedback: String,
+   |     ^^^^^^^^^^^^^^^^^^
+...
+40 |     improved_instruction: String,
+   |     ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `ReflectOnInstruction` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `task_description`, `current_instruction`, `better_rollout`, `worse_rollout`, and `rule` are never read
+  --> crates\dspy-rs\src\optimizer\simba.rs:38:5
+   |
+35 | struct IntrospectRollouts {
+   |        ------------------ fields in this struct
+...
+38 |     task_description: String,
+   |     ^^^^^^^^^^^^^^^^
+...
+42 |     current_instruction: String,
+   |     ^^^^^^^^^^^^^^^^^^^
+...
+46 |     better_rollout: String,
+   |     ^^^^^^^^^^^^^^
+...
+50 |     worse_rollout: String,
+   |     ^^^^^^^^^^^^^
+...
+54 |     rule: String,
+   |     ^^^^
+   |
+   = note: `IntrospectRollouts` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: `dspy-rs` (lib) generated 27 warnings (17 duplicates) (run `cargo fix --lib -p dspy-rs` to apply 1 suggestion)
+warning: fields `question` and `answer` are never read
+  --> crates\dspy-rs\tests\test_chat_adapter_schema.rs:16:5
+   |
+14 | struct ExampleSig {
+   |        ---------- fields in this struct
+15 |     #[input]
+16 |     question: String,
+   |     ^^^^^^^^
+...
+19 |     answer: String,
+   |     ^^^^^^
+   |
+   = note: `ExampleSig` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `question` and `answer` are never read
+  --> crates\dspy-rs\tests\test_chat_adapter_schema.rs:26:5
+   |
+24 | struct AliasSig {
+   |        -------- fields in this struct
+25 |     #[input]
+26 |     question: String,
+   |     ^^^^^^^^
+...
+30 |     answer: String,
+   |     ^^^^^^
+   |
+   = note: `AliasSig` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `question` and `city` are never read
+  --> crates\dspy-rs\tests\test_chat_adapter_schema.rs:43:5
+   |
+41 | struct NestedSig {
+   |        --------- fields in this struct
+42 |     #[input]
+43 |     question: String,
+   |     ^^^^^^^^
+44 |     #[output]
+45 |     city: City,
+   |     ^^^^
+   |
+   = note: `NestedSig` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: `dspy-rs` (test "test_chat_adapter_schema") generated 3 warnings
+    Finished `release` profile [optimized] target(s) in 4m 04s
+     Running tests\test_chat_adapter_schema.rs (C:\Users\georg\Documents\DSRs-target\release\deps\test_chat_adapter_schema-5882c1348183874d.exe)
+     Running tests\test_ir_interp.rs (C:\Users\georg\Documents\DSRs-target\release\deps\test_ir_interp-b096433466c63aae.exe)

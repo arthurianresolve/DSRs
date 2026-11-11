@@ -100,6 +100,36 @@ experiment predates this gate: its native controller exit was 0, but retrospecti
 quality evaluation fails. The raw experiment files and exact-match scores remain
 unchanged.
 
+## DSRs retrieval and validation diagnostics
+
+DSRs supports an opt-in `--retrieval-recipe` for protocol/quality checks. It ranks
+the supplied context documents, follows document-title links and selects up to
+two synthetic demonstrations by their input questions. Answer/revision stages
+use bounded application validation: yes/no format, extraction from the retrieved
+context and comma-delimited `other than X,` exclusions. These rules do not prove
+that every context-supported answer resolves the question.
+
+```powershell
+$env:DSRS_PROFILE_BASE_URL = "http://your-local-provider/v1"
+$env:DSRS_PROFILE_MODEL = "Qwen3-0.6B-Tasks"
+cargo run -p dspy-rs --release --no-default-features --example bench-hotpotqa-reflection -- 1 0 --live --json-output --check-quality --retrieval-recipe
+```
+
+`--check-quality` prints the prediction report and exits 2 if any reference answer
+does not match. An exhausted validation loop returns an error. Add
+`--fixture benchmarks/cross-framework/hotpotqa/validation-fixture.json` to run
+the four separate synthetic validation cases, which are absent from the training
+demonstrations. Custom fixtures and this recipe require diagnostic mode; they
+cannot silently change the timing workload.
+
+On the retained Qwen3-0.6B-Tasks run, the recipe improved original strict exact
+matches from 1/3 to 2/3 and passed 4/4 fresh cases. The original position question
+remains ambiguous, and its unchanged strict quality gate still fails. A separate
+exclusion question exhausted three attempts and failed explicitly. See the
+[correction report](evidence/2026-11-11-live/model-comparison/repair/RESULTS.md)
+for real-provider traces, exact native request verification and limitations.
+These diagnostic results establish no speedup.
+
 ## Offline controlled workload
 
 This offline workload runs three dependent typed predictions: answer a question,

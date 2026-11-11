@@ -1,0 +1,17 @@
+{
+  "binary_sha256": "94a807545cdf7862ddc3e1cb2091845026748f872d75f6ef8ddce14da3e4b517",
+  "command": [
+    "C:\\Users\\georg\\Documents\\dsrs-build\\fewshot-repair\\native-recipe.exe",
+    "1",
+    "0",
+    "--live",
+    "--json-output",
+    "--check-quality",
+    "--retrieval-recipe",
+    "--fixture",
+    "C:\\Users\\georg\\Documents\\dsrs-build\\fewshot-repair\\native-fixture.json"
+  ],
+  "native_exit": 2,
+  "requests": 24,
+  "quality_status": "failed"
+}

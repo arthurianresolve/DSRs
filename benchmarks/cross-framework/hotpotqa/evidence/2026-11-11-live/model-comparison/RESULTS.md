@@ -10,6 +10,9 @@ protocol completion, not a passing answer-quality gate.
 The subsequent [DSRs failure investigation](diagnosis/RESULTS.md) tests prompt,
 sampling, reasoning, grounding and model alternatives. It identifies a correct
 draft being overwritten after incorrect criticism, but finds no verified fix.
+The later [DSRs correction and validation report](repair/RESULTS.md) documents
+the compact-demonstration fix and an opt-in retrieval recipe, including its
+remaining strict-score mismatch and bounded validation failures.
 
 | Question/reference | DSRs final answer | DSPy final answer |
 | --- | --- | --- |

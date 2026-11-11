@@ -1,5 +1,7 @@
 //! Offline and live HotpotQA reflection workload. See benchmarks/cross-framework/hotpotqa.
 use std::io::{BufRead, Write};
+use std::num::NonZeroU32;
+use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing_subscriber::{
@@ -8,14 +10,18 @@ use tracing_subscriber::{
     registry::LookupSpan,
 };
 
-use anyhow::{Result, ensure};
+use anyhow::{Context as _, Result, ensure};
 use dspy_rs::ir::SignatureDef;
 use dspy_rs::{
-    ChatAdapter, JsonMap, LM, LMClient, Message, Predict, Signature, TestCompletionModel,
+    ChatAdapter, Demo, JsonMap, LM, LMClient, Message, Module, Predict, Signature,
+    TestCompletionModel,
 };
 use rig::{completion::AssistantContent, message::Text};
 use serde::Deserialize;
 use serde_json::{Value, json};
+
+#[path = "support/hotpotqa_retrieval.rs"]
+mod retrieval;
 
 #[derive(Signature, Clone, Debug)]
 /// Answer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.
@@ -58,6 +64,56 @@ struct Revise {
 
 const CRITIQUE: &str = "The answer agrees with the supporting context.";
 const FIXTURE: &str = include_str!("../../../benchmarks/cross-framework/hotpotqa/fixture.json");
+const DEMONSTRATIONS: &str =
+    include_str!("../../../benchmarks/cross-framework/hotpotqa/demonstrations.json");
+
+fn predictors(
+    lm: &LM,
+    demonstrations: &[&retrieval::Demonstration],
+) -> (Predict<Answer>, Predict<Reflect>, Predict<Revise>) {
+    let mut answer = Predict::<Answer>::builder().lm(lm.clone()).named("answer");
+    let mut reflect = Predict::<Reflect>::builder()
+        .lm(lm.clone())
+        .named("reflect");
+    let mut revise = Predict::<Revise>::builder().lm(lm.clone()).named("revise");
+    for demo in demonstrations {
+        answer = answer.demo(Demo::new(
+            AnswerInput {
+                question: demo.question.clone(),
+                context: demo.context.clone(),
+            },
+            AnswerOutput {
+                answer: demo.answer.clone(),
+            },
+        ));
+        reflect = reflect.demo(Demo::new(
+            ReflectInput {
+                question: demo.question.clone(),
+                context: demo.context.clone(),
+                answer: demo.draft.clone(),
+            },
+            ReflectOutput {
+                critique: demo.critique.clone(),
+            },
+        ));
+        revise = revise.demo(Demo::new(
+            ReviseInput {
+                question: demo.question.clone(),
+                context: demo.context.clone(),
+                draft: demo.draft.clone(),
+                critique: demo.critique.clone(),
+            },
+            ReviseOutput {
+                answer: demo.answer.clone(),
+            },
+        ));
+    }
+    let predictors = (answer.build(), reflect.build(), revise.build());
+    predictors.0.set_history_capacity(0);
+    predictors.1.set_history_capacity(0);
+    predictors.2.set_history_capacity(0);
+    predictors
+}
 
 #[derive(Clone, Default)]
 struct AdapterTimings {
@@ -174,14 +230,40 @@ fn adapter_profile<S: Signature>(input: Value, raw: String, iterations: usize) -
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<()> {
+async fn main() -> Result<ExitCode> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let iterations: usize = args.first().map(|s| s.parse()).transpose()?.unwrap_or(200);
     let wait_ms: u64 = args.get(1).map(|s| s.parse()).transpose()?.unwrap_or(0);
     let live = args.iter().any(|s| s == "--live");
     let instrumented = args.iter().any(|s| s == "--profile-runtime");
     let smoke = args.iter().any(|s| s == "--smoke");
-    let protocol_check = args.iter().any(|s| s == "--check-protocol");
+    let quality_check = args.iter().any(|s| s == "--check-quality");
+    let protocol_check = quality_check || args.iter().any(|s| s == "--check-protocol");
+    let retrieval_recipe = args.iter().any(|s| s == "--retrieval-recipe");
+    ensure!(
+        !quality_check || live,
+        "--check-quality requires a live provider"
+    );
+    ensure!(
+        !quality_check || !args.iter().any(|s| s == "--profile-adapter"),
+        "quality checks require pipeline execution, not isolated adapter replay"
+    );
+    let fixture_path = args
+        .iter()
+        .position(|s| s == "--fixture")
+        .map(|index| {
+            args.get(index + 1)
+                .context("--fixture requires a JSON file path")
+        })
+        .transpose()?;
+    ensure!(
+        !(retrieval_recipe || fixture_path.is_some()) || protocol_check,
+        "retrieval recipes and custom fixtures require --check-protocol or --check-quality; they change the workload"
+    );
+    ensure!(
+        !retrieval_recipe || !args.iter().any(|s| s == "--profile-adapter"),
+        "retrieval recipes apply to pipeline diagnostics, not isolated adapter replay"
+    );
     let json_output = args.iter().any(|s| s == "--json-output");
     ensure!(
         !json_output || live,
@@ -214,7 +296,17 @@ async fn main() -> Result<()> {
         tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer))?;
     }
     ensure!(iterations > 0, "iterations must be positive");
-    let mut fixture: Fixture = serde_json::from_str(FIXTURE)?;
+    let fixture_text = fixture_path.map(std::fs::read_to_string).transpose()?;
+    let mut fixture: Fixture = serde_json::from_str(fixture_text.as_deref().unwrap_or(FIXTURE))?;
+    ensure!(
+        !fixture.examples.is_empty(),
+        "fixture must contain at least one example"
+    );
+    let demonstrations: Vec<retrieval::Demonstration> = if retrieval_recipe {
+        serde_json::from_str(DEMONSTRATIONS)?
+    } else {
+        Vec::new()
+    };
     if smoke {
         fixture.examples.truncate(1);
     }
@@ -229,7 +321,7 @@ async fn main() -> Result<()> {
             "{}",
             json!({"framework":"dsrs","kind":"isolated_adapter_replay","iterations":iterations,"warmup":20,"profiles":profiles})
         );
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     }
 
     let replies = (0..iterations + warmup).flat_map(|_| {
@@ -271,18 +363,7 @@ async fn main() -> Result<()> {
     };
     lm.history.set_capacity(0);
     dspy_rs::set_history_capacity(0);
-    let answer = Predict::<Answer>::builder()
-        .lm(lm.clone())
-        .named("answer")
-        .build();
-    let reflect = Predict::<Reflect>::builder()
-        .lm(lm.clone())
-        .named("reflect")
-        .build();
-    let revise = Predict::<Revise>::builder().lm(lm).named("revise").build();
-    answer.set_history_capacity(0);
-    reflect.set_history_capacity(0);
-    revise.set_history_capacity(0);
+    let baseline = predictors(&lm, &[]);
 
     let mut samples = Vec::new();
     for iteration in 0..iterations + warmup {
@@ -290,6 +371,44 @@ async fn main() -> Result<()> {
             barrier("READY")?;
         }
         for e in &fixture.examples {
+            let tuned = retrieval_recipe.then(|| {
+                let (answer, reflect, revise) = predictors(
+                    &lm,
+                    &retrieval::select_demonstrations(&e.question, &demonstrations),
+                );
+                (
+                    answer
+                        .validated()
+                        .max_attempts(NonZeroU32::new(3).unwrap())
+                        .validator(|input: &AnswerInput, output: &AnswerOutput| {
+                            retrieval::validate_answer(
+                                &input.question,
+                                &input.context,
+                                &output.answer,
+                            )
+                        }),
+                    reflect,
+                    revise
+                        .validated()
+                        .max_attempts(NonZeroU32::new(3).unwrap())
+                        .validator(|input: &ReviseInput, output: &ReviseOutput| {
+                            retrieval::validate_answer(
+                                &input.question,
+                                &input.context,
+                                &output.answer,
+                            )
+                        }),
+                )
+            });
+            let reflect = tuned
+                .as_ref()
+                .map(|(_, reflect, _)| reflect)
+                .unwrap_or(&baseline.1);
+            let context = if retrieval_recipe {
+                retrieval::retrieve_context(&e.question, &e.context)
+            } else {
+                e.context.clone()
+            };
             let provider_start = waits.lock().unwrap().len();
             let adapter_start = adapter_timings.adapter.lock().unwrap().len();
             let pipeline_start = Instant::now();
@@ -300,13 +419,15 @@ async fn main() -> Result<()> {
                 tokio::time::sleep(Duration::from_millis(wait_ms)).await;
                 wait_ns += start.elapsed().as_nanos();
             }
-            let first = answer
-                .call(AnswerInput {
-                    question: e.question.clone(),
-                    context: e.context.clone(),
-                })
-                .await?
-                .into_inner();
+            let first_input = AnswerInput {
+                question: e.question.clone(),
+                context: context.clone(),
+            };
+            let first = match &tuned {
+                Some((answer, _, _)) => answer.call(first_input).await?,
+                None => baseline.0.call(first_input).await?,
+            }
+            .into_inner();
             stage_ns[0] = start.elapsed().as_nanos();
             ensure!(
                 live || first.answer == e.answer,
@@ -321,7 +442,7 @@ async fn main() -> Result<()> {
             let feedback = reflect
                 .call(ReflectInput {
                     question: e.question.clone(),
-                    context: e.context.clone(),
+                    context: context.clone(),
                     answer: first.answer.clone(),
                 })
                 .await?
@@ -337,15 +458,17 @@ async fn main() -> Result<()> {
                 tokio::time::sleep(Duration::from_millis(wait_ms)).await;
                 wait_ns += start.elapsed().as_nanos();
             }
-            let final_answer = revise
-                .call(ReviseInput {
-                    question: e.question.clone(),
-                    context: e.context.clone(),
-                    draft: first.answer.clone(),
-                    critique: feedback.critique.clone(),
-                })
-                .await?
-                .into_inner();
+            let revise_input = ReviseInput {
+                question: e.question.clone(),
+                context: context.clone(),
+                draft: first.answer.clone(),
+                critique: feedback.critique.clone(),
+            };
+            let final_answer = match &tuned {
+                Some((_, _, revise)) => revise.call(revise_input).await?,
+                None => baseline.2.call(revise_input).await?,
+            }
+            .into_inner();
             stage_ns[2] = start.elapsed().as_nanos();
             ensure!(
                 live || final_answer.answer == e.answer,
@@ -359,17 +482,27 @@ async fn main() -> Result<()> {
                 samples.push(json!({"id":e.id,"answer":final_answer.answer,"pipeline_ns":pipeline_start.elapsed().as_nanos() as u64,
                     "stage_ns":stage_ns.map(|n|n as u64),"simulated_wait_ns":wait_ns as u64,
                     "provider_ns":provider_ns,"adapter_events":adapter_events,"expected_answer":e.answer,
-                    "exact_match":normalized(&final_answer.answer)==normalized(&e.answer),"draft":first.answer,"critique":feedback.critique}));
+                    "exact_match":normalized(&final_answer.answer)==normalized(&e.answer),"draft":first.answer,"critique":feedback.critique,
+                    "context":context}));
             }
         }
     }
+    let quality_passed = samples
+        .iter()
+        .all(|sample| sample["exact_match"].as_bool() == Some(true));
     println!(
         "{}",
         json!({"framework":"dsrs","kind":if protocol_check {"protocol_check"} else {"pipeline_timing"},"output_format":if json_output {"json_schema"} else {"delimiter"},"iterations":iterations,"warmup":warmup,"live":live,"smoke":smoke,"instrumented":instrumented,
-        "simulated_wait_ms_per_stage":wait_ms,"cache":false,"history":false,"samples":samples})
+        "simulated_wait_ms_per_stage":wait_ms,"cache":false,"history":false,"samples":samples,
+        "recipe":if retrieval_recipe { "retrieved_context_and_demonstrations" } else { "baseline_reflection" },
+        "quality_status":if quality_passed { "passed" } else { "failed" }})
     );
     if live {
         barrier("DONE")?;
     }
-    Ok(())
+    Ok(if quality_check && !quality_passed {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    })
 }

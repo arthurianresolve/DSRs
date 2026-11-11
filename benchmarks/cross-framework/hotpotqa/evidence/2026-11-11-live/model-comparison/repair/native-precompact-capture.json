@@ -1,0 +1,17 @@
+{
+  "binary_sha256": "56aa8871a41e685aa39e84ad65cb8dfa10a08757628485f652b795b2105d246c",
+  "command": [
+    "C:\\Users\\georg\\Documents\\DSRs-target\\release\\examples\\bench-hotpotqa-reflection.exe",
+    "1",
+    "0",
+    "--live",
+    "--json-output",
+    "--check-quality",
+    "--retrieval-recipe",
+    "--fixture",
+    "C:\\Users\\georg\\Documents\\dsrs-build\\fewshot-repair\\native-fixture.json"
+  ],
+  "native_exit": 2,
+  "requests": 24,
+  "quality_status": "failed"
+}

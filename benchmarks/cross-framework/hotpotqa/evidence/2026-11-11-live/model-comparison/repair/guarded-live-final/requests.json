@@ -1,0 +1,314 @@
+[
+  {
+    "round": 1,
+    "request": {
+      "model": "Qwen3-0.6B-Tasks",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nAnswer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\":\"mayor\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat government position, other than ambassador, was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?\n\n[[ ## context ## ]]\nKiss and Tell (1945 film): Kiss and Tell is a 1945 American comedy film starring then 17-year-old Shirley Temple as Corliss Archer.\nShirley Temple: Shirley Temple Black (April 23, 1928 \u2013 February 10, 2014) was an American actress, singer, dancer, businesswoman, and diplomat who was Hollywood's number one box-office draw as a child actress from 1935 to 1938.\nShirley Temple:  As an adult, she was named United States ambassador to Ghana and to Czechoslovakia and also served as Chief of Protocol of the United States.\n\nReturn a JSON object with every output field."
+        }
+      ],
+      "temperature": 0.0,
+      "max_tokens": 128,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "response_schema",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "answer"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"answer\": \"ambassador\"}"
+          }
+        }
+      ],
+      "created": 1794405486,
+      "model": "Qwen3-0.6B-Tasks",
+      "system_fingerprint": "b1-8f02796",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 345,
+        "total_tokens": 353,
+        "prompt_tokens_details": {
+          "cached_tokens": 23
+        }
+      },
+      "id": "chatcmpl-HDWXvYI3phyApfqtUHvezGgBMc62uHyH",
+      "timings": {
+        "cache_n": 23,
+        "prompt_n": 322,
+        "prompt_ms": 1782.357,
+        "prompt_per_token_ms": 5.535270186335404,
+        "prompt_per_second": 180.65965460342682,
+        "predicted_n": 8,
+        "predicted_ms": 195.086,
+        "predicted_per_token_ms": 27.869428571428575,
+        "predicted_per_second": 35.88161118686118
+      }
+    }
+  },
+  {
+    "round": 2,
+    "request": {
+      "model": "Qwen3-0.6B-Tasks",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nAnswer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\":\"mayor\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat government position, other than ambassador, was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?\n\n[[ ## context ## ]]\nKiss and Tell (1945 film): Kiss and Tell is a 1945 American comedy film starring then 17-year-old Shirley Temple as Corliss Archer.\nShirley Temple: Shirley Temple Black (April 23, 1928 \u2013 February 10, 2014) was an American actress, singer, dancer, businesswoman, and diplomat who was Hollywood's number one box-office draw as a child actress from 1935 to 1938.\nShirley Temple:  As an adult, she was named United States ambassador to Ghana and to Czechoslovakia and also served as Chief of Protocol of the United States.\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\": \"ambassador\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "Your previous response failed validation:\nThe question explicitly excludes `ambassador`. Choose a different answer supported by the context that satisfies this constraint.\nReturn a corrected response using the required output fields and format."
+        }
+      ],
+      "temperature": 0.0,
+      "max_tokens": 128,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "response_schema",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "answer"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"answer\": \"mayor\"}"
+          }
+        }
+      ],
+      "created": 1794405518,
+      "model": "Qwen3-0.6B-Tasks",
+      "system_fingerprint": "b1-8f02796",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 401,
+        "total_tokens": 409,
+        "prompt_tokens_details": {
+          "cached_tokens": 341
+        }
+      },
+      "id": "chatcmpl-dzLoAHmK9WKFaPfa6KNPXV4gSscYOx3P",
+      "timings": {
+        "cache_n": 341,
+        "prompt_n": 60,
+        "prompt_ms": 471.032,
+        "prompt_per_token_ms": 7.850533333333333,
+        "prompt_per_second": 127.3798807724316,
+        "predicted_n": 8,
+        "predicted_ms": 194.847,
+        "predicted_per_token_ms": 27.835285714285714,
+        "predicted_per_second": 35.92562369448849
+      }
+    }
+  },
+  {
+    "round": 3,
+    "request": {
+      "model": "Qwen3-0.6B-Tasks",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nAnswer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\":\"mayor\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat government position, other than ambassador, was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?\n\n[[ ## context ## ]]\nKiss and Tell (1945 film): Kiss and Tell is a 1945 American comedy film starring then 17-year-old Shirley Temple as Corliss Archer.\nShirley Temple: Shirley Temple Black (April 23, 1928 \u2013 February 10, 2014) was an American actress, singer, dancer, businesswoman, and diplomat who was Hollywood's number one box-office draw as a child actress from 1935 to 1938.\nShirley Temple:  As an adult, she was named United States ambassador to Ghana and to Czechoslovakia and also served as Chief of Protocol of the United States.\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\": \"ambassador\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "Your previous response failed validation:\nThe question explicitly excludes `ambassador`. Choose a different answer supported by the context that satisfies this constraint.\nReturn a corrected response using the required output fields and format."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\": \"mayor\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "Your previous response failed validation:\nFor this extractive question, answer with a contiguous phrase copied from the context. Do not add an explanation.\nReturn a corrected response using the required output fields and format."
+        }
+      ],
+      "temperature": 0.0,
+      "max_tokens": 128,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "response_schema",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "answer"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"answer\": \"mayor\"}"
+          }
+        }
+      ],
+      "created": 1794405542,
+      "model": "Qwen3-0.6B-Tasks",
+      "system_fingerprint": "b1-8f02796",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 458,
+        "total_tokens": 466,
+        "prompt_tokens_details": {
+          "cached_tokens": 397
+        }
+      },
+      "id": "chatcmpl-5NjVqWgFqRzNCVarCcfoAkaP0XlJ2RD2",
+      "timings": {
+        "cache_n": 397,
+        "prompt_n": 61,
+        "prompt_ms": 512.518,
+        "prompt_per_token_ms": 8.40193442622951,
+        "prompt_per_second": 119.0202100218919,
+        "predicted_n": 8,
+        "predicted_ms": 199.883,
+        "predicted_per_token_ms": 28.554714285714287,
+        "predicted_per_second": 35.020486984886155
+      }
+    }
+  }
+]

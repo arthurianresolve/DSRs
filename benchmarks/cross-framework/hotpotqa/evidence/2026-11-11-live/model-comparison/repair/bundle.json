@@ -1,0 +1,273 @@
+{
+  "templates": {
+    "dsrs": [
+      {
+        "body": {
+          "model": "Qwen3-0.6B-Tasks",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nAnswer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nAre Ana and Luis of the same nationality?\n\n[[ ## context ## ]]\nAna is Canadian. Luis is Canadian.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": "{\"answer\":\"yes\"}"
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nDo Mara and Leon have the same nationality?\n\n[[ ## context ## ]]\nMara is a Canadian engineer. Leon is a French engineer.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": "{\"answer\":\"no\"}"
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": "{\"answer\":\"mayor\"}"
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhich novel series has the companion book The Moon Archive?\n\n[[ ## context ## ]]\nThe Moon Archive is a companion book to the Starbound series. Starbound is a science fiction novel series.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": "{\"answer\":\"Starbound\"}"
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWere Scott Derrickson and Ed Wood of the same nationality?\n\n[[ ## context ## ]]\nScott Derrickson: Scott Derrickson (born July 16, 1966) is an American director, screenwriter and producer.\nEd Wood: Edward Davis Wood Jr. (October 10, 1924 \u2013 December 10, 1978) was an American filmmaker, actor, writer, producer, and director.\n\nReturn a JSON object with every output field."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answer": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "answer"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "suffix": "Return a JSON object with every output field.",
+        "instruction": "Answer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields."
+      },
+      {
+        "body": {
+          "model": "Qwen3-0.6B-Tasks",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `answer` (string)\n\nYour output fields are:\n1. `critique` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nCritique the answer against the supplied context. Put one brief sentence in the critique output field. Do not copy input fields."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nAre Ana and Luis of the same nationality?\n\n[[ ## context ## ]]\nAna is Canadian. Luis is Canadian.\n\n[[ ## answer ## ]]\nno\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": "{\"critique\":\"Both people are Canadian, so the answer should be yes.\"}"
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nDo Mara and Leon have the same nationality?\n\n[[ ## context ## ]]\nMara is a Canadian engineer. Leon is a French engineer.\n\n[[ ## answer ## ]]\nno\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": "{\"critique\":\"The answer is correct: Canadian and French are different nationalities.\"}"
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\n[[ ## answer ## ]]\nEllis Vale\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": "{\"critique\":\"The question asks for a position rather than a person; the position was mayor.\"}"
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhich novel series has the companion book The Moon Archive?\n\n[[ ## context ## ]]\nThe Moon Archive is a companion book to the Starbound series. Starbound is a science fiction novel series.\n\n[[ ## answer ## ]]\nStarbound\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": "{\"critique\":\"The answer is correct. Starbound is the series; The Moon Archive is a companion book.\"}"
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWere Scott Derrickson and Ed Wood of the same nationality?\n\n[[ ## context ## ]]\nScott Derrickson: Scott Derrickson (born July 16, 1966) is an American director, screenwriter and producer.\nEd Wood: Edward Davis Wood Jr. (October 10, 1924 \u2013 December 10, 1978) was an American filmmaker, actor, writer, producer, and director.\n\n[[ ## answer ## ]]\nNo\n\nReturn a JSON object with every output field."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "critique": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "critique"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "suffix": "Return a JSON object with every output field.",
+        "instruction": "Critique the answer against the supplied context. Put one brief sentence in the critique output field. Do not copy input fields."
+      },
+      {
+        "body": {
+          "model": "Qwen3-0.6B-Tasks",
+          "messages": [
+            {
+              "role": "system",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `draft` (string)\n4. `critique` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nRevise the answer using the critique and supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields."
+                }
+              ]
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nAre Ana and Luis of the same nationality?\n\n[[ ## context ## ]]\nAna is Canadian. Luis is Canadian.\n\n[[ ## draft ## ]]\nno\n\n[[ ## critique ## ]]\nBoth people are Canadian, so the answer should be yes.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": "{\"answer\":\"yes\"}"
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nDo Mara and Leon have the same nationality?\n\n[[ ## context ## ]]\nMara is a Canadian engineer. Leon is a French engineer.\n\n[[ ## draft ## ]]\nno\n\n[[ ## critique ## ]]\nThe answer is correct: Canadian and French are different nationalities.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": "{\"answer\":\"no\"}"
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\n[[ ## draft ## ]]\nEllis Vale\n\n[[ ## critique ## ]]\nThe question asks for a position rather than a person; the position was mayor.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": "{\"answer\":\"mayor\"}"
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWhich novel series has the companion book The Moon Archive?\n\n[[ ## context ## ]]\nThe Moon Archive is a companion book to the Starbound series. Starbound is a science fiction novel series.\n\n[[ ## draft ## ]]\nStarbound\n\n[[ ## critique ## ]]\nThe answer is correct. Starbound is the series; The Moon Archive is a companion book.\n\nReturn a JSON object with every output field."
+            },
+            {
+              "role": "assistant",
+              "content": "{\"answer\":\"Starbound\"}"
+            },
+            {
+              "role": "user",
+              "content": "[[ ## question ## ]]\nWere Scott Derrickson and Ed Wood of the same nationality?\n\n[[ ## context ## ]]\nScott Derrickson: Scott Derrickson (born July 16, 1966) is an American director, screenwriter and producer.\nEd Wood: Edward Davis Wood Jr. (October 10, 1924 \u2013 December 10, 1978) was an American filmmaker, actor, writer, producer, and director.\n\n[[ ## draft ## ]]\nNo\n\n[[ ## critique ## ]]\nThe answer is correct. Scott Derrickson and Ed Wood are of different nationalities.\n\nReturn a JSON object with every output field."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 128,
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "response_schema",
+              "strict": true,
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "answer": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "answer"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "suffix": "Return a JSON object with every output field.",
+        "instruction": "Revise the answer using the critique and supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields."
+      }
+    ]
+  },
+  "instructions": [
+    "Answer the exact question using only the supplied context. Return the requested type of fact, not a related entity. For a yes/no question return only yes or no; otherwise return only the shortest supported answer. Do not explain or copy input fields.",
+    "First solve the question independently from the context. Then check whether the draft answers the exact question with the requested type of fact. Do not assume the draft is correct. In one brief sentence identify any error and its correction, or say the answer is correct if it is supported.",
+    "Check the question against the context yourself. The draft and critique can both be wrong. Return only the shortest supported answer of the requested type; for a yes/no question return only yes or no. Preserve a correct draft. Do not explain or copy input fields."
+  ],
+  "examples": [
+    {
+      "id": "5a8b57f25542995d1e6f1371",
+      "question": "Were Scott Derrickson and Ed Wood of the same nationality?",
+      "context": "Scott Derrickson: Scott Derrickson (born July 16, 1966) is an American director, screenwriter and producer.\nEd Wood: Edward Davis Wood Jr. (October 10, 1924 \u2013 December 10, 1978) was an American filmmaker, actor, writer, producer, and director."
+    },
+    {
+      "id": "5a8c7595554299585d9e36b6",
+      "question": "What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?",
+      "context": "Kiss and Tell (1945 film): Kiss and Tell is a 1945 American comedy film starring then 17-year-old Shirley Temple as Corliss Archer.\nShirley Temple: Shirley Temple Black (April 23, 1928 \u2013 February 10, 2014) was an American actress, singer, dancer, businesswoman, and diplomat who was Hollywood's number one box-office draw as a child actress from 1935 to 1938.\nShirley Temple:  As an adult, she was named United States ambassador to Ghana and to Czechoslovakia and also served as Chief of Protocol of the United States."
+    },
+    {
+      "id": "5a85ea095542994775f606a8",
+      "question": "What science fantasy young adult series, told in first person, has a set of companion books narrating the stories of enslaved worlds and alien species?",
+      "context": "The Hork-Bajir Chronicles: The Hork-Bajir Chronicles is the second companion book to the \"Animorphs\" series, written by K. A. Applegate.\nThe Hork-Bajir Chronicles:  With respect to continuity within the series, it takes place before book #23, \"The Pretender\", although the events told in the story occur between the time of \"The Ellimist Chronicles\" and \"The Andalite Chronicles\".\nThe Hork-Bajir Chronicles:  The book is introduced by Tobias, who flies to the valley of the free Hork-Bajir, where Jara Hamee tells him the story of how the Yeerks enslaved the Hork-Bajir, and how Aldrea, an Andalite, and her companion, Dak Hamee, a Hork-Bajir, tried to save their world from the invasion.\nAnimorphs: Animorphs is a science fantasy series of young adult books written by Katherine Applegate and her husband Michael Grant, writing together under the name K. A. Applegate, and published by Scholastic.\nAnimorphs:  It is told in first person, with all six main characters taking turns narrating the books through their own perspectives."
+    },
+    {
+      "id": "fresh-same",
+      "question": "Were Nira and Oswin of the same nationality?",
+      "context": "Nira was a Japanese architect. Oswin was a Japanese composer."
+    },
+    {
+      "id": "fresh-different",
+      "question": "Are Pavel and Suri of the same nationality?",
+      "context": "Pavel is a Brazilian scientist. Suri is a Swedish scientist."
+    },
+    {
+      "id": "fresh-office",
+      "question": "What public office did the performer who played Captain Vale subsequently hold?",
+      "context": "Lena Marsh played Captain Vale in The Crossing. Lena Marsh subsequently served as governor."
+    },
+    {
+      "id": "fresh-series",
+      "question": "Which series has The Glass Ledger as a companion volume?",
+      "context": "The Glass Ledger is a companion volume to the Copper Sky series. Copper Sky is a fantasy novel series."
+    }
+  ]
+}
