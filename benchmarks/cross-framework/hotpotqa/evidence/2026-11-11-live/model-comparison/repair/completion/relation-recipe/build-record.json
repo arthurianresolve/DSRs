@@ -1,0 +1,21 @@
+{
+  "base_commit": "ea36cf0a006ccb01ac0c63d778f6bdcde6793344",
+  "dirty_paths": [
+    " M crates/dspy-rs/examples/bench-hotpotqa-reflection.rs",
+    " M crates/dspy-rs/examples/support/hotpotqa_retrieval.rs",
+    "?? benchmarks/cross-framework/hotpotqa/data/"
+  ],
+  "host": "Windows-11-10.0.26100-SP0",
+  "toolchain": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-pc-windows-msvc\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+  "command": "cargo build -p dspy-rs --release --no-default-features --locked --example bench-hotpotqa-reflection",
+  "exit": 0,
+  "binary_sha256": "4df67e41e51592a5a195e0bfabd6b6575a39751ebf55d25b8629d1c8615fd5f3",
+  "working_source_sha256": {
+    "crates/dspy-rs/examples/bench-hotpotqa-reflection.rs": "8d9e24c047d5292e62247a0ff1474d06982cd68167d4de3f95006dff60371aa2",
+    "crates/dspy-rs/examples/support/hotpotqa_retrieval.rs": "e42cc7faa84947c31ea5eaeae04644c10ac66e3fb28c59767d89875ab749de0c",
+    "benchmarks/cross-framework/hotpotqa/data/territories.json": "1326fb3bcdf8b8cf63df73ea02ea7f8bf7a8362cbb60bd12bcdb53f3ad22bf04",
+    "benchmarks/cross-framework/hotpotqa/demonstrations.json": "3d996ad9f9c6ba69ba2a8350164050338889ab06c3763cd0d42b4bdcae029597",
+    "Cargo.lock": "f9cea9f8ed91c895f9050e026b6908e2d9ce59f0f7db5185d50a2401b02382d1"
+  },
+  "not_performance_evidence": true
+}

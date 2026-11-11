@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/unicode-org/cldr-json",
+  "commit": "7d2b9cb11cec08f4d333ad73209deb3df0711c3b",
+  "path": "cldr-json/cldr-localenames-full/main/en/territories.json",
+  "sha256": "1326fb3bcdf8b8cf63df73ea02ea7f8bf7a8362cbb60bd12bcdb53f3ad22bf04",
+  "license_path": "LICENSE",
+  "license_sha256": "220ba0e1c43b99530d2d5bdb892a99dca0989414f51ab695ecd90163eaa1ec3b",
+  "use": "English two-letter territory names, including short/variant aliases longer than three characters; only trailing office-title jurisdiction qualifiers are removed."
+}

@@ -1,0 +1,15 @@
+
+running 10 tests
+test retrieval::tests::answers_must_fit_the_query_and_retrieved_context ... ok
+test retrieval::tests::keeps_tied_subjects_and_falls_back_without_evidence ... ok
+test retrieval::tests::keeps_incoming_series_evidence_without_unrelated_book_paragraphs ... ok
+test retrieval::tests::leaves_acting_roles_and_unknown_office_relations_unchanged ... ok
+test retrieval::tests::does_not_prefer_negated_office_holding_over_an_appointment ... ok
+test retrieval::tests::follows_document_links_for_two_hop_questions ... ok
+test retrieval::tests::keeps_appointments_and_respects_office_exclusions ... ok
+test retrieval::tests::focuses_office_holding_without_losing_the_actor_link ... ok
+test retrieval::tests::rejects_explicit_exclusions_without_using_reference_answers ... ok
+test retrieval::tests::canonicalizes_known_jurisdictions_without_removing_title_words ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

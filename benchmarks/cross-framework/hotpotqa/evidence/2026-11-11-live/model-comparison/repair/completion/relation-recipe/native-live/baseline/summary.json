@@ -1,0 +1,14 @@
+{
+  "name": "baseline",
+  "native_exit": 2,
+  "provider_requests": 9,
+  "samples": 3,
+  "recipe": false,
+  "exact_matches": 1,
+  "quality_status": "failed",
+  "answers": [
+    "Yes",
+    "United States ambassador to Ghana and to Czechoslovakia",
+    "The Hork-Bajir Chronicles"
+  ]
+}

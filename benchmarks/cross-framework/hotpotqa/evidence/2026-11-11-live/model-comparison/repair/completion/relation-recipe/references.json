@@ -1,0 +1,98 @@
+[
+  {
+    "id": "5a8b57f25542995d1e6f1371",
+    "question": "Were Scott Derrickson and Ed Wood of the same nationality?",
+    "answer": "yes",
+    "context": "Scott Derrickson: Scott Derrickson (born July 16, 1966) is an American director, screenwriter and producer.\nEd Wood: Edward Davis Wood Jr. (October 10, 1924 \u2013 December 10, 1978) was an American filmmaker, actor, writer, producer, and director."
+  },
+  {
+    "id": "5a8c7595554299585d9e36b6",
+    "question": "What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?",
+    "answer": "Chief of Protocol",
+    "context": "Kiss and Tell (1945 film): Kiss and Tell is a 1945 American comedy film starring then 17-year-old Shirley Temple as Corliss Archer.\nShirley Temple: Shirley Temple Black (April 23, 1928 \u2013 February 10, 2014) was an American actress, singer, dancer, businesswoman, and diplomat who was Hollywood's number one box-office draw as a child actress from 1935 to 1938.\nShirley Temple:  As an adult, she was named United States ambassador to Ghana and to Czechoslovakia and also served as Chief of Protocol of the United States."
+  },
+  {
+    "id": "5a85ea095542994775f606a8",
+    "question": "What science fantasy young adult series, told in first person, has a set of companion books narrating the stories of enslaved worlds and alien species?",
+    "answer": "Animorphs",
+    "context": "The Hork-Bajir Chronicles: The Hork-Bajir Chronicles is the second companion book to the \"Animorphs\" series, written by K. A. Applegate.\nThe Hork-Bajir Chronicles:  With respect to continuity within the series, it takes place before book #23, \"The Pretender\", although the events told in the story occur between the time of \"The Ellimist Chronicles\" and \"The Andalite Chronicles\".\nThe Hork-Bajir Chronicles:  The book is introduced by Tobias, who flies to the valley of the free Hork-Bajir, where Jara Hamee tells him the story of how the Yeerks enslaved the Hork-Bajir, and how Aldrea, an Andalite, and her companion, Dak Hamee, a Hork-Bajir, tried to save their world from the invasion.\nAnimorphs: Animorphs is a science fantasy series of young adult books written by Katherine Applegate and her husband Michael Grant, writing together under the name K. A. Applegate, and published by Scholastic.\nAnimorphs:  It is told in first person, with all six main characters taking turns narrating the books through their own perspectives."
+  },
+  {
+    "id": "fresh-same",
+    "question": "Were Nira and Oswin of the same nationality?",
+    "context": "Nira was a Japanese architect. Oswin was a Japanese composer.",
+    "answer": "yes"
+  },
+  {
+    "id": "fresh-different",
+    "question": "Are Pavel and Suri of the same nationality?",
+    "context": "Pavel is a Brazilian scientist. Suri is a Swedish scientist.",
+    "answer": "no"
+  },
+  {
+    "id": "fresh-office",
+    "question": "What public office did the performer who played Captain Vale subsequently hold?",
+    "context": "Lena Marsh played Captain Vale in The Crossing. Lena Marsh subsequently served as governor.",
+    "answer": "governor"
+  },
+  {
+    "id": "fresh-series",
+    "question": "Which series has The Glass Ledger as a companion volume?",
+    "context": "The Glass Ledger is a companion volume to the Copper Sky series. Copper Sky is a fantasy novel series.",
+    "answer": "Copper Sky"
+  },
+  {
+    "id": "clarified-office",
+    "question": "What government position, other than ambassador, was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?",
+    "answer": "Chief of Protocol",
+    "context": "Kiss and Tell (1945 film): Kiss and Tell is a 1945 American comedy film starring then 17-year-old Shirley Temple as Corliss Archer.\nShirley Temple: Shirley Temple Black (April 23, 1928 \u2013 February 10, 2014) was an American actress, singer, dancer, businesswoman, and diplomat who was Hollywood's number one box-office draw as a child actress from 1935 to 1938.\nShirley Temple:  As an adult, she was named United States ambassador to Ghana and to Czechoslovakia and also served as Chief of Protocol of the United States."
+  },
+  {
+    "id": "position-title-counterfactual",
+    "question": "What government position was held by the woman who portrayed Iona in the film Harbour Lights?",
+    "context": "Harbour Lights: The film starred Elena Brook as Iona.\nElena Brook: Elena was an actress, singer and diplomat.\nElena Brook: She was named ambassador to Velora and also served as Consul General.",
+    "answer": "Consul General"
+  },
+  {
+    "id": "position-exclusion-counterfactual",
+    "question": "What government position, other than envoy, did the woman who played Sera hold?",
+    "context": "The Orchard: Amara Field played Sera.\nAmara Field: She was named envoy to Torvia and also served as Treasurer.",
+    "answer": "Treasurer"
+  },
+  {
+    "id": "position-named-only",
+    "question": "What government position did the actor who portrayed Halden hold?",
+    "context": "Winter Road: Jonas Vale portrayed Halden.\nJonas Vale: He was an actor and was appointed governor.",
+    "answer": "governor"
+  },
+  {
+    "id": "position-excluded-served-role",
+    "question": "What office, other than governor, did the performer who played Tamsin hold?",
+    "context": "The Ridge: Mira Lorne played Tamsin.\nMira Lorne: She served as governor and was later appointed Education Secretary.",
+    "answer": "Education Secretary"
+  },
+  {
+    "id": "acting-role-is-not-office",
+    "question": "What role did the actress Dana Keene play in Night Ferry?",
+    "context": "Night Ferry: Dana Keene played Captain Orla.\nDana Keene: She later served as mayor.",
+    "answer": "Captain Orla"
+  },
+  {
+    "id": "nationality-same-counterfactual",
+    "question": "Were Petra and Milan of the same nationality?",
+    "context": "Petra: Petra was a Polish architect.\nMilan: Milan was a Polish musician.",
+    "answer": "yes"
+  },
+  {
+    "id": "nationality-different-counterfactual",
+    "question": "Are Ravi and Elna of the same nationality?",
+    "context": "Ravi: Ravi is an Indian painter.\nElna: Elna is a Norwegian painter.",
+    "answer": "no"
+  },
+  {
+    "id": "series-counterfactual",
+    "question": "What fantasy young adult series, told in first person, has The Ember Codex as a companion book?",
+    "context": "The Ember Codex: The Ember Codex is a companion book to the Silverwind series.\nThe Ember Codex: It narrates the lives of distant creatures.\nSilverwind: Silverwind is a fantasy young adult series told in first person.",
+    "answer": "Silverwind"
+  }
+]

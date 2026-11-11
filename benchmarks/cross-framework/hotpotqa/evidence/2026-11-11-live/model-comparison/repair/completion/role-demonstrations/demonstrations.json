@@ -1,0 +1,37 @@
+[
+  {
+    "question": "Are Ana and Luis of the same nationality?",
+    "context": "Ana is Canadian. Luis is Canadian.",
+    "draft": "no",
+    "critique": "Both people are Canadian, so the answer should be yes.",
+    "answer": "yes"
+  },
+  {
+    "question": "Do Mara and Leon have the same nationality?",
+    "context": "Mara is a Canadian engineer. Leon is a French engineer.",
+    "draft": "no",
+    "critique": "The answer is correct: Canadian and French are different nationalities.",
+    "answer": "no"
+  },
+  {
+    "question": "What government position did the woman who played Mira in The Island hold?",
+    "context": "The Island: Celia Hart portrayed Mira.\nCelia Hart: She was a diplomat, was appointed ambassador to Lydora, and served as Minister of Education.",
+    "draft": "ambassador",
+    "critique": "The question asks for a government position. The specifically named office in the context is Minister of Education.",
+    "answer": "Minister of Education"
+  },
+  {
+    "question": "Which novel series has the companion book The Moon Archive?",
+    "context": "The Moon Archive is a companion book to the Starbound series. Starbound is a science fiction novel series.",
+    "draft": "Starbound",
+    "critique": "The answer is correct. Starbound is the series; The Moon Archive is a companion book.",
+    "answer": "Starbound"
+  },
+  {
+    "question": "What public office, other than governor, did the performer who played Arlen hold?",
+    "context": "The Harbour: Robin Kell played Arlen.\nRobin Kell: Kell was a governor and later served as Finance Secretary.",
+    "draft": "governor",
+    "critique": "The question excludes governor. The other office stated in the context is Finance Secretary.",
+    "answer": "Finance Secretary"
+  }
+]

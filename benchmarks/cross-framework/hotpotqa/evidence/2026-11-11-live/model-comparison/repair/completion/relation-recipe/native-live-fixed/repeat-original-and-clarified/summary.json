@@ -1,0 +1,15 @@
+{
+  "name": "repeat-original-and-clarified",
+  "native_exit": 0,
+  "provider_requests": 12,
+  "samples": 4,
+  "recipe": true,
+  "exact_matches": 4,
+  "quality_status": "passed",
+  "answers": [
+    "yes",
+    "chief of protocol",
+    "Animorphs",
+    "Chief of Protocol"
+  ]
+}

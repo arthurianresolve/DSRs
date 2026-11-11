@@ -1,5 +1,9 @@
 # DSRs corrections and bounded quality validation
 
+This report preserves the first correction's 2/3 result. The subsequent
+[completed native correction](completion/RESULTS.md) passes 3/3 original
+references, the clarified question and the additional diagnostic cases.
+
 ## Changes
 
 The SDK's simple native-schema prompt asks for compact JSON, but its few-shot

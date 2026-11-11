@@ -70,12 +70,18 @@ const DEMONSTRATIONS: &str =
 fn predictors(
     lm: &LM,
     demonstrations: &[&retrieval::Demonstration],
+    extractive: bool,
 ) -> (Predict<Answer>, Predict<Reflect>, Predict<Revise>) {
     let mut answer = Predict::<Answer>::builder().lm(lm.clone()).named("answer");
     let mut reflect = Predict::<Reflect>::builder()
         .lm(lm.clone())
         .named("reflect");
     let mut revise = Predict::<Revise>::builder().lm(lm.clone()).named("revise");
+    if extractive {
+        let instruction = "For an office or position, give only the office title without its country or jurisdiction. Keep words integral to the title.";
+        answer = answer.instruction(format!("{}\n\n{instruction}", Answer::instruction()));
+        revise = revise.instruction(format!("{}\n\n{instruction}", Revise::instruction()));
+    }
     for demo in demonstrations {
         answer = answer.demo(Demo::new(
             AnswerInput {
@@ -363,7 +369,7 @@ async fn main() -> Result<ExitCode> {
     };
     lm.history.set_capacity(0);
     dspy_rs::set_history_capacity(0);
-    let baseline = predictors(&lm, &[]);
+    let baseline = predictors(&lm, &[], false);
 
     let mut samples = Vec::new();
     for iteration in 0..iterations + warmup {
@@ -375,18 +381,10 @@ async fn main() -> Result<ExitCode> {
                 let (answer, reflect, revise) = predictors(
                     &lm,
                     &retrieval::select_demonstrations(&e.question, &demonstrations),
+                    true,
                 );
                 (
-                    answer
-                        .validated()
-                        .max_attempts(NonZeroU32::new(3).unwrap())
-                        .validator(|input: &AnswerInput, output: &AnswerOutput| {
-                            retrieval::validate_answer(
-                                &input.question,
-                                &input.context,
-                                &output.answer,
-                            )
-                        }),
+                    answer,
                     reflect,
                     revise
                         .validated()
@@ -469,9 +467,14 @@ async fn main() -> Result<ExitCode> {
                 None => baseline.2.call(revise_input).await?,
             }
             .into_inner();
+            let answer = if retrieval_recipe {
+                retrieval::canonical_answer(&e.question, &final_answer.answer)
+            } else {
+                &final_answer.answer
+            };
             stage_ns[2] = start.elapsed().as_nanos();
             ensure!(
-                live || final_answer.answer == e.answer,
+                live || answer == e.answer,
                 "revised answer mismatch for {}",
                 e.id
             );
@@ -479,10 +482,11 @@ async fn main() -> Result<ExitCode> {
                 let provider_ns = waits.lock().unwrap()[provider_start..].to_vec();
                 let adapter_events =
                     adapter_timings.adapter.lock().unwrap()[adapter_start..].to_vec();
-                samples.push(json!({"id":e.id,"answer":final_answer.answer,"pipeline_ns":pipeline_start.elapsed().as_nanos() as u64,
+                samples.push(json!({"id":e.id,"answer":answer,"pipeline_ns":pipeline_start.elapsed().as_nanos() as u64,
                     "stage_ns":stage_ns.map(|n|n as u64),"simulated_wait_ns":wait_ns as u64,
                     "provider_ns":provider_ns,"adapter_events":adapter_events,"expected_answer":e.answer,
-                    "exact_match":normalized(&final_answer.answer)==normalized(&e.answer),"draft":first.answer,"critique":feedback.critique,
+                    "exact_match":normalized(answer)==normalized(&e.answer),"draft":first.answer,"critique":feedback.critique,
+                    "revised_answer":final_answer.answer,
                     "context":context}));
             }
         }

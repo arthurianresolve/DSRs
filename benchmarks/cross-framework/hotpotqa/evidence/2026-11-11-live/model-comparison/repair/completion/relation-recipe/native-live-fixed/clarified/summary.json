@@ -1,0 +1,12 @@
+{
+  "name": "clarified",
+  "native_exit": 0,
+  "provider_requests": 3,
+  "samples": 1,
+  "recipe": true,
+  "exact_matches": 1,
+  "quality_status": "passed",
+  "answers": [
+    "Chief of Protocol"
+  ]
+}

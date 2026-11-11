@@ -82,9 +82,10 @@ The completed local-model run and its limitations are documented in
 Its [answer-quality review](evidence/2026-11-11-live/QUALITY_REVIEW.md) distinguishes
 formatting mismatches, an ambiguous reference question and factual model errors.
 The [Qwen3-0.6B-Tasks rerun](evidence/2026-11-11-live/model-comparison/RESULTS.md)
-completed fresh native pipelines with 1/3 exact matches each. It verifies field
-propagation against real replies but still fails answer quality; its browser
-transport makes it unsuitable for latency comparisons.
+completed fresh native baseline pipelines with 1/3 exact matches each. Those
+baseline quality failures are retained. The corrected DSRs diagnostic recipe
+below passes the original strict references; browser transport excludes these
+quality checks from latency comparisons.
 The [DSRs failure investigation](evidence/2026-11-11-live/model-comparison/diagnosis/RESULTS.md)
 also checks the previous full prompt, alternative layouts, grounding, sampling
 and a larger model. Its unsuccessful candidates are retained; they have not been
@@ -103,11 +104,20 @@ unchanged.
 ## DSRs retrieval and validation diagnostics
 
 DSRs supports an opt-in `--retrieval-recipe` for protocol/quality checks. It ranks
-the supplied context documents, follows document-title links and selects up to
-two synthetic demonstrations by their input questions. Answer/revision stages
-use bounded application validation: yes/no format, extraction from the retrieved
-context and comma-delimited `other than X,` exclusions. These rules do not prove
-that every context-supported answer resolves the question.
+the supplied context documents, retains question-named documents and incoming
+evidence links, and selects up to two synthetic demonstrations by their input
+questions. For broad position questions it prefers explicit office-holding
+statements; appointment questions retain appointment evidence. Excluded roles
+are removed before that choice. Other question types keep their document context.
+
+The typed draft reaches reflection even when it is factually wrong. Only the
+final revision receives bounded application validation: yes/no format, extraction
+from the retrieved context and comma-delimited `other than X,` exclusions.
+Validating a draft prematurely prevented the critic from correcting it.
+Office answers also lose recognized trailing territory qualifiers, using pinned
+[Unicode CLDR data](data/README.md). `revised_answer` retains the raw model text;
+`answer` contains the application's canonical title. The exact-match scorer and
+evaluation references are unchanged. These mechanical rules do not prove entailment.
 
 ```powershell
 $env:DSRS_PROFILE_BASE_URL = "http://your-local-provider/v1"
@@ -122,13 +132,17 @@ the four separate synthetic validation cases, which are absent from the training
 demonstrations. Custom fixtures and this recipe require diagnostic mode; they
 cannot silently change the timing workload.
 
-On the retained Qwen3-0.6B-Tasks run, the recipe improved original strict exact
-matches from 1/3 to 2/3 and passed 4/4 fresh cases. The original position question
-remains ambiguous, and its unchanged strict quality gate still fails. A separate
-exclusion question exhausted three attempts and failed explicitly. See the
-[correction report](evidence/2026-11-11-live/model-comparison/repair/RESULTS.md)
-for real-provider traces, exact native request verification and limitations.
-These diagnostic results establish no speedup.
+The completed native Qwen3-0.6B-Tasks verification passes **3/3 original strict
+references**, **4/4 earlier synthetic cases**, the **clarified position question**,
+and **8/8 additional synthetic boundary cases** in `prospective-fixture.json`.
+A repeat of the original and clarified questions passes 4/4. A question whose
+only stated office is explicitly excluded fails after three final-answer
+attempts, with five total pipeline requests. The unmodified baseline still scores
+1/3. The original position question remains ambiguous; the recipe's declared
+office-holding preference selects a supported answer that matches its reference.
+See the [completed correction report](evidence/2026-11-11-live/model-comparison/repair/completion/RESULTS.md)
+for all 74 real native requests, source/binary hashes, rejected trials and limits.
+These small diagnostic checks establish no general accuracy or speedup guarantee.
 
 ## Offline controlled workload
 

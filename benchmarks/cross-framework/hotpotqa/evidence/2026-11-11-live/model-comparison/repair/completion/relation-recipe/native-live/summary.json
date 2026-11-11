@@ -1,0 +1,27 @@
+{
+  "binary_sha256": "4df67e41e51592a5a195e0bfabd6b6575a39751ebf55d25b8629d1c8615fd5f3",
+  "not_performance_evidence": true,
+  "runs": [
+    {
+      "name": "baseline",
+      "native_exit": 2,
+      "provider_requests": 9,
+      "samples": 3,
+      "recipe": false,
+      "exact_matches": 1,
+      "quality_status": "failed",
+      "answers": [
+        "Yes",
+        "United States ambassador to Ghana and to Czechoslovakia",
+        "The Hork-Bajir Chronicles"
+      ]
+    },
+    {
+      "name": "original",
+      "native_exit": 1,
+      "provider_requests": 6,
+      "samples": 3,
+      "recipe": true
+    }
+  ]
+}

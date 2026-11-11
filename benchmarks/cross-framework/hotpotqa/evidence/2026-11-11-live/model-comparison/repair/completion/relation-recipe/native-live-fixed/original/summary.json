@@ -1,0 +1,14 @@
+{
+  "name": "original",
+  "native_exit": 0,
+  "provider_requests": 9,
+  "samples": 3,
+  "recipe": true,
+  "exact_matches": 3,
+  "quality_status": "passed",
+  "answers": [
+    "yes",
+    "chief of protocol",
+    "Animorphs"
+  ]
+}

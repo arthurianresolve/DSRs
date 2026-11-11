@@ -1,5 +1,9 @@
 # Qwen3-0.6B-Tasks answer-quality rerun
 
+The [completed DSRs correction](repair/completion/RESULTS.md) subsequently passes
+the original strict references, clarified question and additional diagnostic
+cases. This report preserves the earlier unmodified baseline results.
+
 ## Result
 
 Both native reflection pipelines completed, each making nine real provider

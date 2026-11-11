@@ -1,0 +1,19 @@
+{
+  "name": "prospective",
+  "native_exit": 0,
+  "provider_requests": 24,
+  "samples": 8,
+  "recipe": true,
+  "exact_matches": 8,
+  "quality_status": "passed",
+  "answers": [
+    "consul general",
+    "treasurer",
+    "governor",
+    "education secretary",
+    "Captain Orla",
+    "yes",
+    "no",
+    "Silverwind"
+  ]
+}

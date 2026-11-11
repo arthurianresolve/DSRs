@@ -1,0 +1,26 @@
+
+running 7 tests
+test retrieval::tests::answers_must_fit_the_query_and_retrieved_context ... ok
+test retrieval::tests::rejects_explicit_exclusions_without_using_reference_answers ... ok
+test retrieval::tests::keeps_tied_subjects_and_falls_back_without_evidence ... ok
+test retrieval::tests::follows_document_links_for_two_hop_questions ... ok
+test retrieval::tests::leaves_acting_roles_and_unknown_office_relations_unchanged ... ok
+test retrieval::tests::keeps_appointments_and_respects_office_exclusions ... ok
+test retrieval::tests::focuses_office_holding_without_losing_the_actor_link ... FAILED
+
+failures:
+
+---- retrieval::tests::focuses_office_holding_without_losing_the_actor_link stdout ----
+
+thread 'retrieval::tests::focuses_office_holding_without_losing_the_actor_link' (17148) panicked at crates\dspy-rs\examples\support\hotpotqa_retrieval.rs:323:9:
+assertion `left == right` failed
+  left: "The Crossing: Lena Marsh played Captain Vale.\nLena Marsh: also served as Treasurer."
+ right: "The Crossing: Lena Marsh played Captain Vale.\nLena Marsh: served as Treasurer."
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    retrieval::tests::focuses_office_holding_without_losing_the_actor_link
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

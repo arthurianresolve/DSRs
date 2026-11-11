@@ -1,0 +1,10 @@
+{
+  "examples": [
+    {
+      "id": "excluded-only-office",
+      "question": "What office, other than governor, did Nora hold?",
+      "context": "Nora: Nora served as governor.",
+      "answer": "No eligible answer is provided."
+    }
+  ]
+}

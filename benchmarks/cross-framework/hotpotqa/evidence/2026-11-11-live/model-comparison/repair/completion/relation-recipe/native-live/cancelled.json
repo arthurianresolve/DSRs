@@ -1,0 +1,6 @@
+{
+  "status": "cancelled_after_failed_original_gate",
+  "completed_provider_requests": 18,
+  "pending_request_not_executed": 19,
+  "reason": "Identical native office request returned mayor three times instead of prior Chief of Protocol. Candidate rejected; remaining runs cancelled before further provider calls."
+}
