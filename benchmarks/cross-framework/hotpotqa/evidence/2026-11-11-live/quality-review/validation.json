@@ -1,15 +1,41 @@
 {
-  "assessment": "Post-run answer and pipeline verification; no new real-model measurements",
-  "harness_regressions": {"passed": 11, "exit_code": 0},
-  "retrospective_quality_gate": {"exit_code": 2, "expected_exit_code": 2, "quality_status": "failed"},
+  "assessment": "Answer/pipeline verification plus a fresh Qwen3-0.6B-Tasks real-provider quality check",
+  "harness_regressions": {
+    "passed": 11,
+    "exit_code": 0
+  },
+  "retrospective_quality_gate": {
+    "exit_code": 2,
+    "expected_exit_code": 2,
+    "quality_status": "failed"
+  },
   "recorded_measured_replies_verified_against_parsed_values": 54,
   "recorded_protocol_replies_verified_against_parsed_values": 18,
   "final_answers_reviewed_including_warmups_and_protocol": 42,
   "controlled_provider_check": {
-    "dsrs": {"requests": 9, "final_exact_matches": 3, "examples": 3, "exit_code": 0},
-    "dspy": {"requests": 9, "final_exact_matches": 3, "examples": 3, "exit_code": 0},
+    "dsrs": {
+      "requests": 9,
+      "final_exact_matches": 3,
+      "examples": 3,
+      "exit_code": 0
+    },
+    "dspy": {
+      "requests": 9,
+      "final_exact_matches": 3,
+      "examples": 3,
+      "exit_code": 0
+    },
     "model_quality_evidence": false
   },
   "original_measurement_artifacts_changed": false,
-  "alternative_model_comparison": "pending authenticated access"
+  "alternative_model_comparison": {
+    "status": "completed",
+    "model": "Qwen3-0.6B-Tasks",
+    "dsrs_final_exact_matches": "1/3",
+    "dspy_final_exact_matches": "1/3",
+    "quality_status": "failed",
+    "raw_stage_replies_verified": 18,
+    "performance_evidence": false,
+    "report": "../model-comparison/RESULTS.md"
+  }
 }

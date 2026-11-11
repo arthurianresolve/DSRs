@@ -1,0 +1,151 @@
+Traceback (most recent call last):
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\llms\openai\openai.py", line 978, in completion
+    raise e
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\llms\openai\openai.py", line 910, in completion
+    ) = self.make_sync_openai_chat_completion_request(
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        openai_client=openai_client,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        logging_obj=logging_obj,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\litellm_core_utils\logging_utils.py", line 419, in sync_wrapper
+    result: Final = func(*args, **kwargs)
+                    ~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\llms\openai\openai.py", line 646, in make_sync_openai_chat_completion_request
+    raise e
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\llms\openai\openai.py", line 608, in make_sync_openai_chat_completion_request
+    openai_client.post(
+    ~~~~~~~~~~~~~~~~~~^
+        "/chat/completions",
+        ^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+        stream_cls=Stream[ChatCompletionChunk],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\openai\_base_client.py", line 1474, in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+                           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\openai\_base_client.py", line 1248, in request
+    raise self._make_status_error_from_response(err.response) from None
+openai.InternalServerError: Error code: 504
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\main.py", line 6548, in completion
+    response = _complete_custom_openai(_dispatch_ctx)
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\main.py", line 2982, in _complete_custom_openai
+    raise e
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\main.py", line 2954, in _complete_custom_openai
+    response = openai_chat_completions.completion(
+        model=model,
+    ...<16 lines>...
+        shared_session=shared_session,
+    )
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\llms\openai\openai.py", line 989, in completion
+    raise OpenAIError(
+    ...<5 lines>...
+    )
+litellm.llms.openai.common_utils.OpenAIError: Error code: 504
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\georg\Documents\DSRs-worktrees\fix-hotpotqa-profiling\benchmarks\cross-framework\hotpotqa\bench_dspy.py", line 205, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\georg\Documents\DSRs-worktrees\fix-hotpotqa-profiling\benchmarks\cross-framework\hotpotqa\bench_dspy.py", line 188, in main
+    final = call(revise, **inputs, draft=first.answer, critique=feedback.critique)
+  File "C:\Users\georg\Documents\DSRs-worktrees\fix-hotpotqa-profiling\benchmarks\cross-framework\hotpotqa\bench_dspy.py", line 179, in call
+    result = predict(**inputs)
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\predict\predict.py", line 130, in __call__
+    return super().__call__(**kwargs)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\utils\callback.py", line 326, in sync_wrapper
+    return fn(instance, *args, **kwargs)
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\primitives\module.py", line 110, in __call__
+    return self.forward(*args, **kwargs)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\predict\predict.py", line 253, in forward
+    completions = adapter(lm, lm_kwargs=config, signature=signature, demos=demos, inputs=kwargs)
+  File "C:\Users\georg\Documents\DSRs-worktrees\fix-hotpotqa-profiling\benchmarks\cross-framework\hotpotqa\bench_dspy.py", line 72, in __call__
+    return dspy.ChatAdapter.__call__(self, lm, lm_kwargs, signature, demos, inputs)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\adapters\chat_adapter.py", line 84, in __call__
+    raise e
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\adapters\chat_adapter.py", line 72, in __call__
+    return super().__call__(lm, lm_kwargs, signature, demos, inputs)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\adapters\base.py", line 205, in __call__
+    outputs = lm(messages=inputs, **lm_kwargs)
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\utils\callback.py", line 326, in sync_wrapper
+    return fn(instance, *args, **kwargs)
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\clients\base_lm.py", line 129, in __call__
+    response = self.forward(prompt=prompt, messages=messages, **kwargs)
+  File "C:\Users\georg\Documents\DSRs-worktrees\fix-hotpotqa-profiling\benchmarks\cross-framework\hotpotqa\bench_dspy.py", line 47, in forward
+    return super().forward(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\clients\lm.py", line 186, in forward
+    results = completion(
+        request=dict(model=self.model, messages=messages, **kwargs),
+        num_retries=self.num_retries,
+        cache=litellm_cache_args,
+    )
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\clients\lm.py", line 392, in litellm_completion
+    return litellm.completion(
+           ~~~~~~~~~~~~~~~~~~^
+        cache=cache,
+        ^^^^^^^^^^^^
+    ...<3 lines>...
+        **request,
+        ^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\chat_completions\dispatch.py", line 118, in completion
+    return _DISPATCH.run(
+           ~~~~~~~~~~~~~^
+        args,
+        ^^^^^
+    ...<3 lines>...
+        native=native_call_hook,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\rust_bridge\dispatch.py", line 72, in run
+    return python(*args, **kwargs)
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\utils.py", line 2296, in wrapper
+    raise e
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\utils.py", line 2147, in wrapper
+    result = original_function(*args, **kwargs)
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\main.py", line 6676, in completion
+    raise exception_type(
+          ~~~~~~~~~~~~~~^
+        model=model,
+        ^^^^^^^^^^^^
+    ...<3 lines>...
+        extra_kwargs=kwargs,
+        ^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\litellm_core_utils\exception_mapping_utils.py", line 2915, in exception_type
+    raise e  # it's already mapped
+    ^^^^^^^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\litellm_core_utils\exception_mapping_utils.py", line 2660, in exception_type
+    _map_openai_exception(
+    ~~~~~~~~~~~~~~~~~~~~~^
+        model=model,
+        ^^^^^^^^^^^^
+    ...<5 lines>...
+        extra_information=extra_information,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\litellm\litellm_core_utils\exception_mapping_utils.py", line 577, in _map_openai_exception
+    raise Timeout(
+    ...<6 lines>...
+    )
+litellm.exceptions.Timeout: litellm.Timeout: Timeout Error: OpenAIException - Error code: 504

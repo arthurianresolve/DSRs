@@ -55,7 +55,7 @@ frameworks render different prompts, and the model responds to those prompts.
 The critique stage also asks for unnecessary elaboration on initially correct
 `Yes` answers; the final answers preserve the meaning but lose exact match.
 
-## Corrected acceptance and remaining model comparison
+## Corrected acceptance and alternative-model verification
 
 The original controller returned 0 after successful protocol/timing collection.
 It lacked an answer-quality acceptance gate. The updated controller records
@@ -65,8 +65,19 @@ Applying that gate retrospectively to the retained summaries gives **quality
 failed**, with `equal_quality_comparison_eligible: false`.
 
 The observed latency ratio remains descriptive profiling data. It is not evidence
-of a successful, equally correct optimized program. An alternative-model test
-with fixed questions, context, instructions and generation settings is still
-needed to isolate the effect of model choice. The requested alternative-model
-test has not run: browser control failed before attachment, and the supplied
-model API requires authenticated access. No remote VM was created or changed.
+of a successful, equally correct optimized program.
+
+After browser control was repaired, both native pipelines were rerun against
+the user's existing `Qwen3-0.6B-Tasks` service. Each completed nine real requests
+and scored **1/3 exact matches** over the unchanged fixture. All 18 raw replies
+match parsed stage values; fresh draft/critique propagation and exact fixture
+inputs were verified. Answer quality still fails: the companion-book error
+persists in both frameworks. The government-position question also exposes an
+ambiguous reference and a DSPy answer-type error. See the
+[alternative-model report](model-comparison/RESULTS.md) for exact answers,
+method, diagnostics and limits.
+
+This was a quality check through a browser/guest-agent transport, not a new
+performance measurement. It supports a generation/prompt-behavior explanation,
+without proving that model choice alone caused the errors. Existing model
+services were unchanged; temporary VM test files were removed after retention.

@@ -1,0 +1,367 @@
+{
+  "kind": "fixed_prompt_model_comparison",
+  "not_performance_evidence": true,
+  "method": "Replay fixed requests captured from the measured clients, including original llama3.2 draft and critique inputs; not a fresh end-to-end Qwen pipeline.",
+  "source_revision": "bda64b29974cdd22e4e8004976a7e5c8f4d2263c",
+  "captured_binary_sha256": "f92fad4d85f0e59e727677ed3e981bd2fdd730f37a7113aaf2861d49d0e85783",
+  "model": "Qwen3-32B-obliterated-Q4_K_M",
+  "models_response": {
+    "models": [
+      {
+        "name": "Qwen3-32B-obliterated-Q4_K_M",
+        "model": "Qwen3-32B-obliterated-Q4_K_M",
+        "modified_at": "",
+        "size": "",
+        "digest": "",
+        "type": "model",
+        "description": "",
+        "tags": [
+          ""
+        ],
+        "capabilities": [
+          "completion"
+        ],
+        "parameters": "",
+        "details": {
+          "parent_model": "",
+          "format": "gguf",
+          "family": "",
+          "families": [
+            ""
+          ],
+          "parameter_size": "",
+          "quantization_level": ""
+        }
+      }
+    ],
+    "object": "list",
+    "data": [
+      {
+        "id": "Qwen3-32B-obliterated-Q4_K_M",
+        "aliases": [
+          "Qwen3-32B-obliterated-Q4_K_M"
+        ],
+        "tags": [],
+        "object": "model",
+        "created": 1794397015,
+        "owned_by": "llamacpp",
+        "meta": {
+          "vocab_type": true,
+          "n_vocab": 151936,
+          "n_ctx": 8192,
+          "n_ctx_train": 40960,
+          "n_embd": 5120,
+          "n_params": 32762123264,
+          "size": 19756174336,
+          "ftype": "Q4_K - Medium"
+        }
+      }
+    ]
+  },
+  "container_image_id": "sha256:6381d2613c47bed26ed8e5e650ce51e2152ed8f9ea3def6eac368404fa0cd377",
+  "kernel": "Linux-6.12.116+deb13-cloud-amd64-x86_64-with-glibc2.41",
+  "temperature": 0,
+  "max_tokens": 128,
+  "seed": 0,
+  "provider_options": {
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    }
+  },
+  "model_weight_sha256": null,
+  "model_weight_hash_note": "Not provided by the backend API; weights were not modified.",
+  "started_utc": "2026-11-11T11:36:55Z",
+  "records": [
+    {
+      "framework": "dsrs",
+      "example_id": "5a8b57f25542995d1e6f1371",
+      "stage": "answer",
+      "request": {
+        "model": "Qwen3-32B-obliterated-Q4_K_M",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nAnswer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": "[[ ## question ## ]]\nWere Scott Derrickson and Ed Wood of the same nationality?\n\n[[ ## context ## ]]\nScott Derrickson: Scott Derrickson (born July 16, 1966) is an American director, screenwriter and producer.\nEd Wood: Edward Davis Wood Jr. (October 10, 1924 \u2013 December 10, 1978) was an American filmmaker, actor, writer, producer, and director.\n\nReturn a JSON object with every output field."
+          }
+        ],
+        "temperature": 0.0,
+        "max_tokens": 128,
+        "response_format": {
+          "type": "json_schema",
+          "json_schema": {
+            "name": "response_schema",
+            "strict": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "answer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "answer"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "seed": 0,
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      },
+      "original_model_response": {
+        "answer": "Yes"
+      },
+      "messages_sha256": "8829cfc974495ad177ed68cb03dfa1b329c36c85f06bbb80660a070fe6a88851",
+      "messages_unchanged": true,
+      "expected_final_answer": null,
+      "response": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"answer\": \"Yes\"}"
+            }
+          }
+        ],
+        "created": 1794397021,
+        "model": "Qwen3-32B-obliterated-Q4_K_M",
+        "system_fingerprint": "b1-8f02796",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 11,
+          "prompt_tokens": 195,
+          "total_tokens": 206,
+          "prompt_tokens_details": {
+            "cached_tokens": 192
+          }
+        },
+        "id": "chatcmpl-iwzsGHjhEwyjQO87iEcvvnat2lVojnDm",
+        "timings": {
+          "cache_n": 192,
+          "prompt_n": 3,
+          "prompt_ms": 864.185,
+          "prompt_per_token_ms": 288.06166666666667,
+          "prompt_per_second": 3.471478907872736,
+          "predicted_n": 11,
+          "predicted_ms": 5164.226,
+          "predicted_per_token_ms": 516.4226,
+          "predicted_per_second": 1.9363986006809153
+        }
+      },
+      "response_content": "{\"answer\": \"Yes\"}",
+      "finish_reason": "stop",
+      "parsed": {
+        "answer": "Yes"
+      },
+      "protocol_passed": true
+    },
+    {
+      "framework": "dsrs",
+      "example_id": "5a8b57f25542995d1e6f1371",
+      "stage": "reflect",
+      "request": {
+        "model": "Qwen3-32B-obliterated-Q4_K_M",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `answer` (string)\n\nYour output fields are:\n1. `critique` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nCritique the answer against the supplied context. Put one brief sentence in the critique output field. Do not copy input fields."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": "[[ ## question ## ]]\nWere Scott Derrickson and Ed Wood of the same nationality?\n\n[[ ## context ## ]]\nScott Derrickson: Scott Derrickson (born July 16, 1966) is an American director, screenwriter and producer.\nEd Wood: Edward Davis Wood Jr. (October 10, 1924 \u2013 December 10, 1978) was an American filmmaker, actor, writer, producer, and director.\n\n[[ ## answer ## ]]\nYes\n\nReturn a JSON object with every output field."
+          }
+        ],
+        "temperature": 0.0,
+        "max_tokens": 128,
+        "response_format": {
+          "type": "json_schema",
+          "json_schema": {
+            "name": "response_schema",
+            "strict": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "critique": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "critique"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "seed": 0,
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      },
+      "original_model_response": {
+        "critique": "Answer is too simplistic and doesn't consider the nationality of the individuals, only their association with the US film industry."
+      },
+      "messages_sha256": "a0ae5a62cac1716886adc7ea1114101d76f204717801334fbde02ecd4a96395b",
+      "messages_unchanged": true,
+      "expected_final_answer": null,
+      "response": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\n  \"critique\": \"The answer is correct as both Scott Derrickson and Ed Wood share the same nationality, being American.\"\n}"
+            }
+          }
+        ],
+        "created": 1794397064,
+        "model": "Qwen3-32B-obliterated-Q4_K_M",
+        "system_fingerprint": "b1-8f02796",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 33,
+          "prompt_tokens": 210,
+          "total_tokens": 243,
+          "prompt_tokens_details": {
+            "cached_tokens": 23
+          }
+        },
+        "id": "chatcmpl-ieL7bcoc86bMhvQUXXVM4MNqVPLQyzy6",
+        "timings": {
+          "cache_n": 23,
+          "prompt_n": 187,
+          "prompt_ms": 26498.963,
+          "prompt_per_token_ms": 141.70568449197862,
+          "prompt_per_second": 7.0568799239426845,
+          "predicted_n": 33,
+          "predicted_ms": 16529.167,
+          "predicted_per_token_ms": 516.53646875,
+          "predicted_per_second": 1.9359717280368696
+        }
+      },
+      "response_content": "{\n  \"critique\": \"The answer is correct as both Scott Derrickson and Ed Wood share the same nationality, being American.\"\n}",
+      "finish_reason": "stop",
+      "parsed": {
+        "critique": "The answer is correct as both Scott Derrickson and Ed Wood share the same nationality, being American."
+      },
+      "protocol_passed": true
+    },
+    {
+      "framework": "dsrs",
+      "example_id": "5a8b57f25542995d1e6f1371",
+      "stage": "revise",
+      "request": {
+        "model": "Qwen3-32B-obliterated-Q4_K_M",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `draft` (string)\n4. `critique` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nRevise the answer using the critique and supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": "[[ ## question ## ]]\nWere Scott Derrickson and Ed Wood of the same nationality?\n\n[[ ## context ## ]]\nScott Derrickson: Scott Derrickson (born July 16, 1966) is an American director, screenwriter and producer.\nEd Wood: Edward Davis Wood Jr. (October 10, 1924 \u2013 December 10, 1978) was an American filmmaker, actor, writer, producer, and director.\n\n[[ ## draft ## ]]\nYes\n\n[[ ## critique ## ]]\nAnswer is too simplistic and doesn't consider the nationality of the individuals, only their association with the US film industry.\n\nReturn a JSON object with every output field."
+          }
+        ],
+        "temperature": 0.0,
+        "max_tokens": 128,
+        "response_format": {
+          "type": "json_schema",
+          "json_schema": {
+            "name": "response_schema",
+            "strict": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "answer": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "answer"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "seed": 0,
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      },
+      "original_model_response": {
+        "answer": "Yes, both were American filmmakers."
+      },
+      "messages_sha256": "a38c60574b817ffb940f8e074a40eede43d2ec6723b13b120f475566ff73fad3",
+      "messages_unchanged": true,
+      "expected_final_answer": "yes",
+      "response": {
+        "choices": [
+          {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "{\"answer\": \"Yes\"}"
+            }
+          }
+        ],
+        "created": 1794397100,
+        "model": "Qwen3-32B-obliterated-Q4_K_M",
+        "system_fingerprint": "b1-8f02796",
+        "object": "chat.completion",
+        "usage": {
+          "completion_tokens": 7,
+          "prompt_tokens": 250,
+          "total_tokens": 257,
+          "prompt_tokens_details": {
+            "cached_tokens": 27
+          }
+        },
+        "id": "chatcmpl-cmChLVErBDx9yd3RsyZdzUh7zp1uLxPV",
+        "timings": {
+          "cache_n": 27,
+          "prompt_n": 223,
+          "prompt_ms": 32185.237,
+          "prompt_per_token_ms": 144.32841704035874,
+          "prompt_per_second": 6.928642470459359,
+          "predicted_n": 7,
+          "predicted_ms": 3087.433,
+          "predicted_per_token_ms": 514.5721666666667,
+          "predicted_per_second": 1.943362009799079
+        }
+      },
+      "response_content": "{\"answer\": \"Yes\"}",
+      "finish_reason": "stop",
+      "parsed": {
+        "answer": "Yes"
+      },
+      "protocol_passed": true,
+      "exact_match": true
+    }
+  ],
+  "status": "interrupted_by_user_model_switch",
+  "interruption": "User requested Qwen3-0.6B-Tasks"
+}

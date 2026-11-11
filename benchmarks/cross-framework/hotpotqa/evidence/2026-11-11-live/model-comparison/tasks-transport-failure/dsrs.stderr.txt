@@ -1,0 +1,79 @@
+Error: LLM call failed
+
+Caused by:
+    0: provider error from Qwen3-0.6B-Tasks: completion failed (Server, HTTP status Some(504)): HttpError: Invalid status code 504 Gateway Timeout with message: <!DOCTYPE HTML>
+       <html lang="en">
+           <head>
+               <meta charset="utf-8">
+               <style type="text/css">
+                   :root {
+                       color-scheme: light dark;
+                   }
+               </style>
+               <title>Error response</title>
+           </head>
+           <body>
+               <h1>Error response</h1>
+               <p>Error code: 504</p>
+               <p>Message: Browser transport timed out.</p>
+               <p>Error code explanation: 504 - The gateway server did not receive a timely response.</p>
+           </body>
+       </html>
+       
+    1: completion failed (Server, HTTP status Some(504)): HttpError: Invalid status code 504 Gateway Timeout with message: <!DOCTYPE HTML>
+       <html lang="en">
+           <head>
+               <meta charset="utf-8">
+               <style type="text/css">
+                   :root {
+                       color-scheme: light dark;
+                   }
+               </style>
+               <title>Error response</title>
+           </head>
+           <body>
+               <h1>Error response</h1>
+               <p>Error code: 504</p>
+               <p>Message: Browser transport timed out.</p>
+               <p>Error code explanation: 504 - The gateway server did not receive a timely response.</p>
+           </body>
+       </html>
+       
+    2: HttpError: Invalid status code 504 Gateway Timeout with message: <!DOCTYPE HTML>
+       <html lang="en">
+           <head>
+               <meta charset="utf-8">
+               <style type="text/css">
+                   :root {
+                       color-scheme: light dark;
+                   }
+               </style>
+               <title>Error response</title>
+           </head>
+           <body>
+               <h1>Error response</h1>
+               <p>Error code: 504</p>
+               <p>Message: Browser transport timed out.</p>
+               <p>Error code explanation: 504 - The gateway server did not receive a timely response.</p>
+           </body>
+       </html>
+       
+    3: Invalid status code 504 Gateway Timeout with message: <!DOCTYPE HTML>
+       <html lang="en">
+           <head>
+               <meta charset="utf-8">
+               <style type="text/css">
+                   :root {
+                       color-scheme: light dark;
+                   }
+               </style>
+               <title>Error response</title>
+           </head>
+           <body>
+               <h1>Error response</h1>
+               <p>Error code: 504</p>
+               <p>Message: Browser transport timed out.</p>
+               <p>Error code explanation: 504 - The gateway server did not receive a timely response.</p>
+           </body>
+       </html>
+       

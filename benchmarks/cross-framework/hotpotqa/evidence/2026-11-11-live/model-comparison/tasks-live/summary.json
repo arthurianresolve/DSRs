@@ -1,0 +1,76 @@
+{
+  "kind": "actual_framework_pipeline_quality",
+  "model": "Qwen3-0.6B-Tasks",
+  "not_performance_evidence": true,
+  "transport": "Proxmox guest-agent via browser; latency includes UI handoff",
+  "exit_codes": {
+    "dsrs": 0,
+    "dspy": 0
+  },
+  "request_counts": {
+    "dsrs": 9,
+    "dspy": 9
+  },
+  "frameworks": {
+    "dsrs": {
+      "exact_matches": 1,
+      "samples": 3,
+      "answers": [
+        {
+          "id": "5a8b57f25542995d1e6f1371",
+          "draft": "No",
+          "critique": "The answer is correct. Scott Derrickson and Ed Wood are of different nationalities.",
+          "answer": "Yes",
+          "expected_answer": "yes",
+          "exact_match": true
+        },
+        {
+          "id": "5a8c7595554299585d9e36b6",
+          "draft": "United States ambassador to Ghana and to Czechoslovakia",
+          "critique": "The answer correctly identifies the United States ambassador to Ghana and Czechoslovakia.",
+          "answer": "United States ambassador to Ghana and to Czechoslovakia",
+          "expected_answer": "Chief of Protocol",
+          "exact_match": false
+        },
+        {
+          "id": "5a85ea095542994775f606a8",
+          "draft": "The Hork-Bajir Chronicles",
+          "critique": "The answer correctly identifies the series as The Hork-Bajir Chronicles, which fits the criteria of a science fantasy young adult series told in first person, with companion books narrating the stories of enslaved worlds and alien species.",
+          "answer": "The Hork-Bajir Chronicles",
+          "expected_answer": "Animorphs",
+          "exact_match": false
+        }
+      ]
+    },
+    "dspy": {
+      "exact_matches": 1,
+      "samples": 3,
+      "answers": [
+        {
+          "id": "5a8b57f25542995d1e6f1371",
+          "draft": "No",
+          "critique": "The answer is correct. Scott Derrickson and Ed Wood are both American, so they share the same nationality.",
+          "answer": "Yes",
+          "expected_answer": "yes",
+          "exact_match": true
+        },
+        {
+          "id": "5a8c7595554299585d9e36b6",
+          "draft": "Shirley Temple",
+          "critique": "The answer correctly identifies Shirley Temple as the woman who portrayed Corliss Archer in the film Kiss and Tell.",
+          "answer": "Shirley Temple",
+          "expected_answer": "Chief of Protocol",
+          "exact_match": false
+        },
+        {
+          "id": "5a85ea095542994775f606a8",
+          "draft": "The Hork-Bajir Chronicles is a science fantasy young adult series told in first person, with a set of companion books narrating the stories of enslaved worlds and alien species.",
+          "critique": "The answer correctly identifies the Hork-Bajir Chronicles as a science fantasy young adult series told in first person, with companion books narrating the stories of enslaved worlds and alien species. However, it's important to note that the series is not explicitly described as having a set of companion books narrating these stories, which might be a slight oversight.",
+          "answer": "The Hork-Bajir Chronicles is a science fantasy young adult series told in first person, with a set of companion books narrating the stories of enslaved worlds and alien species.",
+          "expected_answer": "Animorphs",
+          "exact_match": false
+        }
+      ]
+    }
+  }
+}

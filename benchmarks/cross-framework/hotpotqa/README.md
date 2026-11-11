@@ -81,6 +81,10 @@ The completed local-model run and its limitations are documented in
 [the retained live results](evidence/2026-11-11-live/RESULTS.md).
 Its [answer-quality review](evidence/2026-11-11-live/QUALITY_REVIEW.md) distinguishes
 formatting mismatches, an ambiguous reference question and factual model errors.
+The [Qwen3-0.6B-Tasks rerun](evidence/2026-11-11-live/model-comparison/RESULTS.md)
+completed fresh native pipelines with 1/3 exact matches each. It verifies field
+propagation against real replies but still fails answer quality; its browser
+transport makes it unsuitable for latency comparisons.
 
 Measurement completion and answer quality are separate outcomes. After all
 planned runs, the controller writes `outcome.json`. Its quality gate requires

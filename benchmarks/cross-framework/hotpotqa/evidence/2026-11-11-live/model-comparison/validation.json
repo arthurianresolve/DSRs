@@ -1,0 +1,14 @@
+{
+  "raw_replies_match_parsed_stage_values": 18,
+  "question_and_context_verified": 18,
+  "fresh_draft_and_critique_propagation_verified": true,
+  "native_exit_codes": {
+    "dsrs": 0,
+    "dspy": 0
+  },
+  "quality_status": "failed",
+  "equal_quality_comparison_eligible": false,
+  "not_performance_evidence": true,
+  "temporary_vm_test_directories_removed": 5,
+  "existing_model_services_changed": false
+}

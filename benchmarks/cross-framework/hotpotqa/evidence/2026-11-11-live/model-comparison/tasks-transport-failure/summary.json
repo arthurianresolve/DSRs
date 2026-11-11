@@ -1,0 +1,15 @@
+{
+  "kind": "actual_framework_pipeline_quality",
+  "model": "Qwen3-0.6B-Tasks",
+  "not_performance_evidence": true,
+  "transport": "Proxmox guest-agent via browser; latency includes UI handoff",
+  "exit_codes": {
+    "dsrs": 1,
+    "dspy": 1
+  },
+  "request_counts": {
+    "dsrs": 6,
+    "dspy": 6
+  },
+  "frameworks": {}
+}
