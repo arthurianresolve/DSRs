@@ -1,0 +1,56 @@
+[
+  {
+    "round": 1,
+    "run": "original",
+    "sha256": "2c84bd18c02daa08ccb76c720dfaf9a0a361fb245611fa476ca7ad13ab7c860b",
+    "bytes": 2844
+  },
+  {
+    "round": 2,
+    "run": "original",
+    "sha256": "77b6231fd08dc1e08467e29b71dcf11e9dc5de20dde63a0acf3de94300e32806",
+    "bytes": 3045
+  },
+  {
+    "round": 3,
+    "run": "original",
+    "sha256": "623571b10db8b4c77ea525d09d2f84ba6560e91015eab58b956476fa27f5da3a",
+    "bytes": 3261
+  },
+  {
+    "round": 4,
+    "run": "original",
+    "sha256": "2c68318e944a8c1d01280b582e3218a81226fbc8f00dfae09d08ba75f3d7a792",
+    "bytes": 2928
+  },
+  {
+    "round": 5,
+    "run": "original",
+    "sha256": "4a9c542e3866ede796ed01388ea9351a097635dc80e0d4b30b47c256781e33fd",
+    "bytes": 3080
+  },
+  {
+    "round": 6,
+    "run": "original",
+    "sha256": "9933ed7e0376bc6daa366fc4c2e749f7a3eebe54456fd6c20ed09350fea1885b",
+    "bytes": 3281
+  },
+  {
+    "round": 7,
+    "run": "original",
+    "sha256": "f6d5edca94caa3ed4c3e3f60f0f03f104096d07d97a2af55c092f3133ba13434",
+    "bytes": 3272
+  },
+  {
+    "round": 8,
+    "run": "original",
+    "sha256": "83eacec65899ce04cb5c3802ec86dd397b355460a58fefe4585a1b674e787f33",
+    "bytes": 3434
+  },
+  {
+    "round": 9,
+    "run": "original",
+    "sha256": "2a671497f008cc635dddf7b36aa7e5073bfe796a6caa7d07c5539835023e4f7e",
+    "bytes": 3634
+  }
+]

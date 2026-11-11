@@ -68,7 +68,9 @@ unsupported `mayor` answers, returning exit 1 after five total requests.
 - `native-live/` retains 74 payload files, request records, checksum receipts,
   fixtures, stdout/stderr and summaries. `diagnostics/` retains the initial
   smoke result, a partial run stopped after the same ambiguity appeared, and
-  the first complete run before the final executable was frozen. The accepted
+  first complete run before the final executable was frozen. It also retains
+  a rejected prompt experiment: explicitly preferring `served as` across all
+  predictor stages lowered the original strict score to 1/3. The accepted
   result above uses only the final executable named in `build-record.json`.
 - The model file was identified and hashed in the earlier report; this run did
   not rehash it. Recorded payloads and checksums are internally auditable, not

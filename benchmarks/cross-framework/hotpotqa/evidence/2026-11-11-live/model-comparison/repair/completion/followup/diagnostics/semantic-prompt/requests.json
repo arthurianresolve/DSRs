@@ -1,0 +1,869 @@
+[
+  {
+    "round": 1,
+    "run": "original",
+    "request": {
+      "model": "Qwen3-0.6B-Tasks",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nAnswer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor a question asking what office or position someone held, prefer a role explicitly described as served over one only described as named or appointed. For a question asking what they were named or appointed to, use the appointment evidence.\n\nGive only the office title without its country or jurisdiction. Keep words integral to the title."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nAre Ana and Luis of the same nationality?\n\n[[ ## context ## ]]\nAna is Canadian. Luis is Canadian.\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\":\"yes\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nDo Mara and Leon have the same nationality?\n\n[[ ## context ## ]]\nMara is a Canadian engineer. Leon is a French engineer.\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\":\"no\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWere Scott Derrickson and Ed Wood of the same nationality?\n\n[[ ## context ## ]]\nScott Derrickson: Scott Derrickson (born July 16, 1966) is an American director, screenwriter and producer.\nEd Wood: Edward Davis Wood Jr. (October 10, 1924 \u2013 December 10, 1978) was an American filmmaker, actor, writer, producer, and director.\n\nReturn a JSON object with every output field."
+        }
+      ],
+      "temperature": 0.0,
+      "max_tokens": 128,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "response_schema",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "answer"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"answer\":\"no\"}"
+          }
+        }
+      ],
+      "created": 1794429761,
+      "model": "Qwen3-0.6B-Tasks",
+      "system_fingerprint": "b1-8f02796",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 6,
+        "prompt_tokens": 364,
+        "total_tokens": 370,
+        "prompt_tokens_details": {
+          "cached_tokens": 76
+        }
+      },
+      "id": "chatcmpl-SIg3igICHCBvxuquNOsmc9TeGbWTjEan",
+      "timings": {
+        "cache_n": 76,
+        "prompt_n": 288,
+        "prompt_ms": 1608.479,
+        "prompt_per_token_ms": 5.584996527777778,
+        "prompt_per_second": 179.05114086040288,
+        "predicted_n": 6,
+        "predicted_ms": 134.644,
+        "predicted_per_token_ms": 26.928800000000003,
+        "predicted_per_second": 37.13496331065625
+      }
+    }
+  },
+  {
+    "round": 2,
+    "run": "original",
+    "request": {
+      "model": "Qwen3-0.6B-Tasks",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `answer` (string)\n\nYour output fields are:\n1. `critique` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nCritique the answer against the supplied context. Put one brief sentence in the critique output field. Do not copy input fields.\n\nFor a question asking what office or position someone held, prefer a role explicitly described as served over one only described as named or appointed. For a question asking what they were named or appointed to, use the appointment evidence."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nAre Ana and Luis of the same nationality?\n\n[[ ## context ## ]]\nAna is Canadian. Luis is Canadian.\n\n[[ ## answer ## ]]\nno\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"critique\":\"Both people are Canadian, so the answer should be yes.\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nDo Mara and Leon have the same nationality?\n\n[[ ## context ## ]]\nMara is a Canadian engineer. Leon is a French engineer.\n\n[[ ## answer ## ]]\nno\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"critique\":\"The answer is correct: Canadian and French are different nationalities.\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWere Scott Derrickson and Ed Wood of the same nationality?\n\n[[ ## context ## ]]\nScott Derrickson: Scott Derrickson (born July 16, 1966) is an American director, screenwriter and producer.\nEd Wood: Edward Davis Wood Jr. (October 10, 1924 \u2013 December 10, 1978) was an American filmmaker, actor, writer, producer, and director.\n\n[[ ## answer ## ]]\nno\n\nReturn a JSON object with every output field."
+        }
+      ],
+      "temperature": 0.0,
+      "max_tokens": 128,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "response_schema",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "critique": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "critique"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"critique\":\"The answer is correct: Scott Derrickson and Ed Wood are of different nationalities.\"}"
+          }
+        }
+      ],
+      "created": 1794429765,
+      "model": "Qwen3-0.6B-Tasks",
+      "system_fingerprint": "b1-8f02796",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 23,
+        "prompt_tokens": 400,
+        "total_tokens": 423,
+        "prompt_tokens_details": {
+          "cached_tokens": 82
+        }
+      },
+      "id": "chatcmpl-zr5HlBCMhHLNSppEiSJTD3QvMDUmJh2M",
+      "timings": {
+        "cache_n": 82,
+        "prompt_n": 318,
+        "prompt_ms": 1838.227,
+        "prompt_per_token_ms": 5.780588050314465,
+        "prompt_per_second": 172.9927805434258,
+        "predicted_n": 23,
+        "predicted_ms": 623.766,
+        "predicted_per_token_ms": 28.352999999999998,
+        "predicted_per_second": 35.26963637004903
+      }
+    }
+  },
+  {
+    "round": 3,
+    "run": "original",
+    "request": {
+      "model": "Qwen3-0.6B-Tasks",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `draft` (string)\n4. `critique` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nRevise the answer using the critique and supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor a question asking what office or position someone held, prefer a role explicitly described as served over one only described as named or appointed. For a question asking what they were named or appointed to, use the appointment evidence.\n\nGive only the office title without its country or jurisdiction. Keep words integral to the title."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nAre Ana and Luis of the same nationality?\n\n[[ ## context ## ]]\nAna is Canadian. Luis is Canadian.\n\n[[ ## draft ## ]]\nno\n\n[[ ## critique ## ]]\nBoth people are Canadian, so the answer should be yes.\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\":\"yes\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nDo Mara and Leon have the same nationality?\n\n[[ ## context ## ]]\nMara is a Canadian engineer. Leon is a French engineer.\n\n[[ ## draft ## ]]\nno\n\n[[ ## critique ## ]]\nThe answer is correct: Canadian and French are different nationalities.\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\":\"no\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWere Scott Derrickson and Ed Wood of the same nationality?\n\n[[ ## context ## ]]\nScott Derrickson: Scott Derrickson (born July 16, 1966) is an American director, screenwriter and producer.\nEd Wood: Edward Davis Wood Jr. (October 10, 1924 \u2013 December 10, 1978) was an American filmmaker, actor, writer, producer, and director.\n\n[[ ## draft ## ]]\nno\n\n[[ ## critique ## ]]\nThe answer is correct: Scott Derrickson and Ed Wood are of different nationalities.\n\nReturn a JSON object with every output field."
+        }
+      ],
+      "temperature": 0.0,
+      "max_tokens": 128,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "response_schema",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "answer"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"answer\":\"no\"}"
+          }
+        }
+      ],
+      "created": 1794429769,
+      "model": "Qwen3-0.6B-Tasks",
+      "system_fingerprint": "b1-8f02796",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 6,
+        "prompt_tokens": 462,
+        "total_tokens": 468,
+        "prompt_tokens_details": {
+          "cached_tokens": 27
+        }
+      },
+      "id": "chatcmpl-VLz0SFgqSgh6nYBSNQG5yHnypfUC7XTs",
+      "timings": {
+        "cache_n": 27,
+        "prompt_n": 435,
+        "prompt_ms": 2629.423,
+        "prompt_per_token_ms": 6.0446505747126436,
+        "prompt_per_second": 165.4355347161716,
+        "predicted_n": 6,
+        "predicted_ms": 141.014,
+        "predicted_per_token_ms": 28.202800000000003,
+        "predicted_per_second": 35.45747230771413
+      }
+    }
+  },
+  {
+    "round": 4,
+    "run": "original",
+    "request": {
+      "model": "Qwen3-0.6B-Tasks",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nAnswer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor a question asking what office or position someone held, prefer a role explicitly described as served over one only described as named or appointed. For a question asking what they were named or appointed to, use the appointment evidence.\n\nGive only the office title without its country or jurisdiction. Keep words integral to the title."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\":\"mayor\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?\n\n[[ ## context ## ]]\nKiss and Tell (1945 film): Kiss and Tell is a 1945 American comedy film starring then 17-year-old Shirley Temple as Corliss Archer.\nShirley Temple: Shirley Temple Black (April 23, 1928 \u2013 February 10, 2014) was an American actress, singer, dancer, businesswoman, and diplomat who was Hollywood's number one box-office draw as a child actress from 1935 to 1938.\nShirley Temple: As an adult, she was named United States ambassador to Ghana and to Czechoslovakia\nShirley Temple: also served as Chief of Protocol of the United States.\n\nReturn a JSON object with every output field."
+        }
+      ],
+      "temperature": 0.0,
+      "max_tokens": 128,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "response_schema",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "answer"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"answer\":\"mayor\"}"
+          }
+        }
+      ],
+      "created": 1794429773,
+      "model": "Qwen3-0.6B-Tasks",
+      "system_fingerprint": "b1-8f02796",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 406,
+        "total_tokens": 413,
+        "prompt_tokens_details": {
+          "cached_tokens": 23
+        }
+      },
+      "id": "chatcmpl-cjBra893DBFg3NkqdSG3syAo2lBRj6qD",
+      "timings": {
+        "cache_n": 23,
+        "prompt_n": 383,
+        "prompt_ms": 2305.961,
+        "prompt_per_token_ms": 6.020785900783289,
+        "prompt_per_second": 166.0912738767048,
+        "predicted_n": 7,
+        "predicted_ms": 172.967,
+        "predicted_per_token_ms": 28.827833333333334,
+        "predicted_per_second": 34.688697844097426
+      }
+    }
+  },
+  {
+    "round": 5,
+    "run": "original",
+    "request": {
+      "model": "Qwen3-0.6B-Tasks",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `answer` (string)\n\nYour output fields are:\n1. `critique` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nCritique the answer against the supplied context. Put one brief sentence in the critique output field. Do not copy input fields.\n\nFor a question asking what office or position someone held, prefer a role explicitly described as served over one only described as named or appointed. For a question asking what they were named or appointed to, use the appointment evidence."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\n[[ ## answer ## ]]\nEllis Vale\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"critique\":\"The question asks for a position rather than a person; the position was mayor.\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?\n\n[[ ## context ## ]]\nKiss and Tell (1945 film): Kiss and Tell is a 1945 American comedy film starring then 17-year-old Shirley Temple as Corliss Archer.\nShirley Temple: Shirley Temple Black (April 23, 1928 \u2013 February 10, 2014) was an American actress, singer, dancer, businesswoman, and diplomat who was Hollywood's number one box-office draw as a child actress from 1935 to 1938.\nShirley Temple: As an adult, she was named United States ambassador to Ghana and to Czechoslovakia\nShirley Temple: also served as Chief of Protocol of the United States.\n\n[[ ## answer ## ]]\nmayor\n\nReturn a JSON object with every output field."
+        }
+      ],
+      "temperature": 0.0,
+      "max_tokens": 128,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "response_schema",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "critique": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "critique"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"critique\":\"The answer refers to a person rather than a government position; the position was a U.S. ambassador.\"}"
+          }
+        }
+      ],
+      "created": 1794429778,
+      "model": "Qwen3-0.6B-Tasks",
+      "system_fingerprint": "b1-8f02796",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 27,
+        "prompt_tokens": 428,
+        "total_tokens": 455,
+        "prompt_tokens_details": {
+          "cached_tokens": 23
+        }
+      },
+      "id": "chatcmpl-tGoBJ7sz4fGyvFSFpUqZG6GUaIIoCxHW",
+      "timings": {
+        "cache_n": 23,
+        "prompt_n": 405,
+        "prompt_ms": 2488.963,
+        "prompt_per_token_ms": 6.145587654320988,
+        "prompt_per_second": 162.71836905570711,
+        "predicted_n": 27,
+        "predicted_ms": 732.691,
+        "predicted_per_token_ms": 28.180423076923077,
+        "predicted_per_second": 35.48562763839053
+      }
+    }
+  },
+  {
+    "round": 6,
+    "run": "original",
+    "request": {
+      "model": "Qwen3-0.6B-Tasks",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `draft` (string)\n4. `critique` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nRevise the answer using the critique and supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor a question asking what office or position someone held, prefer a role explicitly described as served over one only described as named or appointed. For a question asking what they were named or appointed to, use the appointment evidence.\n\nGive only the office title without its country or jurisdiction. Keep words integral to the title."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat position did the actor who played Rowan later hold?\n\n[[ ## context ## ]]\nIn The River, actor Ellis Vale played Rowan. Ellis Vale later served as mayor.\n\n[[ ## draft ## ]]\nEllis Vale\n\n[[ ## critique ## ]]\nThe question asks for a position rather than a person; the position was mayor.\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\":\"mayor\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?\n\n[[ ## context ## ]]\nKiss and Tell (1945 film): Kiss and Tell is a 1945 American comedy film starring then 17-year-old Shirley Temple as Corliss Archer.\nShirley Temple: Shirley Temple Black (April 23, 1928 \u2013 February 10, 2014) was an American actress, singer, dancer, businesswoman, and diplomat who was Hollywood's number one box-office draw as a child actress from 1935 to 1938.\nShirley Temple: As an adult, she was named United States ambassador to Ghana and to Czechoslovakia\nShirley Temple: also served as Chief of Protocol of the United States.\n\n[[ ## draft ## ]]\nmayor\n\n[[ ## critique ## ]]\nThe answer refers to a person rather than a government position; the position was a U.S. ambassador.\n\nReturn a JSON object with every output field."
+        }
+      ],
+      "temperature": 0.0,
+      "max_tokens": 128,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "response_schema",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "answer"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"answer\": \"ambassador\"}"
+          }
+        }
+      ],
+      "created": 1794429783,
+      "model": "Qwen3-0.6B-Tasks",
+      "system_fingerprint": "b1-8f02796",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 490,
+        "total_tokens": 498,
+        "prompt_tokens_details": {
+          "cached_tokens": 27
+        }
+      },
+      "id": "chatcmpl-PXVfymrTTXEcuZIjXgs9I1KoWkLqe6Gm",
+      "timings": {
+        "cache_n": 27,
+        "prompt_n": 463,
+        "prompt_ms": 2979.104,
+        "prompt_per_token_ms": 6.434349892008639,
+        "prompt_per_second": 155.41585657969645,
+        "predicted_n": 8,
+        "predicted_ms": 203.438,
+        "predicted_per_token_ms": 29.062571428571427,
+        "predicted_per_second": 34.40851758275249
+      }
+    }
+  },
+  {
+    "round": 7,
+    "run": "original",
+    "request": {
+      "model": "Qwen3-0.6B-Tasks",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nAnswer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor a question asking what office or position someone held, prefer a role explicitly described as served over one only described as named or appointed. For a question asking what they were named or appointed to, use the appointment evidence.\n\nGive only the office title without its country or jurisdiction. Keep words integral to the title."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhich novel series has the companion book The Moon Archive?\n\n[[ ## context ## ]]\nThe Moon Archive is a companion book to the Starbound series. Starbound is a science fiction novel series.\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\":\"Starbound\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat science fantasy young adult series, told in first person, has a set of companion books narrating the stories of enslaved worlds and alien species?\n\n[[ ## context ## ]]\nThe Hork-Bajir Chronicles: The Hork-Bajir Chronicles is the second companion book to the \"Animorphs\" series, written by K. A. Applegate.\nThe Hork-Bajir Chronicles:  The book is introduced by Tobias, who flies to the valley of the free Hork-Bajir, where Jara Hamee tells him the story of how the Yeerks enslaved the Hork-Bajir, and how Aldrea, an Andalite, and her companion, Dak Hamee, a Hork-Bajir, tried to save their world from the invasion.\nAnimorphs: Animorphs is a science fantasy series of young adult books written by Katherine Applegate and her husband Michael Grant, writing together under the name K. A. Applegate, and published by Scholastic.\nAnimorphs:  It is told in first person, with all six main characters taking turns narrating the books through their own perspectives.\n\nReturn a JSON object with every output field."
+        }
+      ],
+      "temperature": 0.0,
+      "max_tokens": 128,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "response_schema",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "answer"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"answer\":\"Animorphs\"}"
+          }
+        }
+      ],
+      "created": 1794429787,
+      "model": "Qwen3-0.6B-Tasks",
+      "system_fingerprint": "b1-8f02796",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 468,
+        "total_tokens": 476,
+        "prompt_tokens_details": {
+          "cached_tokens": 23
+        }
+      },
+      "id": "chatcmpl-lsodE2H0eM4C1kz0Mrf17uCJo5RACvmH",
+      "timings": {
+        "cache_n": 23,
+        "prompt_n": 445,
+        "prompt_ms": 2771.195,
+        "prompt_per_token_ms": 6.227404494382023,
+        "prompt_per_second": 160.58054377263238,
+        "predicted_n": 8,
+        "predicted_ms": 198.21,
+        "predicted_per_token_ms": 28.315714285714286,
+        "predicted_per_second": 35.316078906210585
+      }
+    }
+  },
+  {
+    "round": 8,
+    "run": "original",
+    "request": {
+      "model": "Qwen3-0.6B-Tasks",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `answer` (string)\n\nYour output fields are:\n1. `critique` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nCritique the answer against the supplied context. Put one brief sentence in the critique output field. Do not copy input fields.\n\nFor a question asking what office or position someone held, prefer a role explicitly described as served over one only described as named or appointed. For a question asking what they were named or appointed to, use the appointment evidence."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhich novel series has the companion book The Moon Archive?\n\n[[ ## context ## ]]\nThe Moon Archive is a companion book to the Starbound series. Starbound is a science fiction novel series.\n\n[[ ## answer ## ]]\nStarbound\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"critique\":\"The answer is correct. Starbound is the series; The Moon Archive is a companion book.\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat science fantasy young adult series, told in first person, has a set of companion books narrating the stories of enslaved worlds and alien species?\n\n[[ ## context ## ]]\nThe Hork-Bajir Chronicles: The Hork-Bajir Chronicles is the second companion book to the \"Animorphs\" series, written by K. A. Applegate.\nThe Hork-Bajir Chronicles:  The book is introduced by Tobias, who flies to the valley of the free Hork-Bajir, where Jara Hamee tells him the story of how the Yeerks enslaved the Hork-Bajir, and how Aldrea, an Andalite, and her companion, Dak Hamee, a Hork-Bajir, tried to save their world from the invasion.\nAnimorphs: Animorphs is a science fantasy series of young adult books written by Katherine Applegate and her husband Michael Grant, writing together under the name K. A. Applegate, and published by Scholastic.\nAnimorphs:  It is told in first person, with all six main characters taking turns narrating the books through their own perspectives.\n\n[[ ## answer ## ]]\nAnimorphs\n\nReturn a JSON object with every output field."
+        }
+      ],
+      "temperature": 0.0,
+      "max_tokens": 128,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "response_schema",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "critique": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "critique"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"critique\":\"The answer is correct. The series is 'Animorphs', and the answer uses the evidence provided in the context.\"}"
+          }
+        }
+      ],
+      "created": 1794429792,
+      "model": "Qwen3-0.6B-Tasks",
+      "system_fingerprint": "b1-8f02796",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 30,
+        "prompt_tokens": 493,
+        "total_tokens": 523,
+        "prompt_tokens_details": {
+          "cached_tokens": 23
+        }
+      },
+      "id": "chatcmpl-Vlyqu6bgnlLOJxyqlGZGKu9hoXTQ0kS7",
+      "timings": {
+        "cache_n": 23,
+        "prompt_n": 470,
+        "prompt_ms": 2959.716,
+        "prompt_per_token_ms": 6.297268085106383,
+        "prompt_per_second": 158.79901990596397,
+        "predicted_n": 30,
+        "predicted_ms": 859.563,
+        "predicted_per_token_ms": 29.640103448275863,
+        "predicted_per_second": 33.738073881728276
+      }
+    }
+  },
+  {
+    "round": 9,
+    "run": "original",
+    "request": {
+      "model": "Qwen3-0.6B-Tasks",
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "Your input fields are:\n1. `question` (string)\n2. `context` (string)\n3. `draft` (string)\n4. `critique` (string)\n\nYour output fields are:\n1. `answer` (string)\n\nReturn compact JSON matching the provider JSON Schema. No markdown.\n\nRevise the answer using the critique and supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.\n\nFor a question asking what office or position someone held, prefer a role explicitly described as served over one only described as named or appointed. For a question asking what they were named or appointed to, use the appointment evidence.\n\nGive only the office title without its country or jurisdiction. Keep words integral to the title."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhich novel series has the companion book The Moon Archive?\n\n[[ ## context ## ]]\nThe Moon Archive is a companion book to the Starbound series. Starbound is a science fiction novel series.\n\n[[ ## draft ## ]]\nStarbound\n\n[[ ## critique ## ]]\nThe answer is correct. Starbound is the series; The Moon Archive is a companion book.\n\nReturn a JSON object with every output field."
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"answer\":\"Starbound\"}"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": "[[ ## question ## ]]\nWhat science fantasy young adult series, told in first person, has a set of companion books narrating the stories of enslaved worlds and alien species?\n\n[[ ## context ## ]]\nThe Hork-Bajir Chronicles: The Hork-Bajir Chronicles is the second companion book to the \"Animorphs\" series, written by K. A. Applegate.\nThe Hork-Bajir Chronicles:  The book is introduced by Tobias, who flies to the valley of the free Hork-Bajir, where Jara Hamee tells him the story of how the Yeerks enslaved the Hork-Bajir, and how Aldrea, an Andalite, and her companion, Dak Hamee, a Hork-Bajir, tried to save their world from the invasion.\nAnimorphs: Animorphs is a science fantasy series of young adult books written by Katherine Applegate and her husband Michael Grant, writing together under the name K. A. Applegate, and published by Scholastic.\nAnimorphs:  It is told in first person, with all six main characters taking turns narrating the books through their own perspectives.\n\n[[ ## draft ## ]]\nAnimorphs\n\n[[ ## critique ## ]]\nThe answer is correct. The series is 'Animorphs', and the answer uses the evidence provided in the context.\n\nReturn a JSON object with every output field."
+        }
+      ],
+      "temperature": 0.0,
+      "max_tokens": 128,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "response_schema",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "answer": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "answer"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "response": {
+      "choices": [
+        {
+          "finish_reason": "stop",
+          "index": 0,
+          "message": {
+            "role": "assistant",
+            "content": "{\"answer\":\"Animorphs\"}"
+          }
+        }
+      ],
+      "created": 1794429797,
+      "model": "Qwen3-0.6B-Tasks",
+      "system_fingerprint": "b1-8f02796",
+      "object": "chat.completion",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 558,
+        "total_tokens": 566,
+        "prompt_tokens_details": {
+          "cached_tokens": 27
+        }
+      },
+      "id": "chatcmpl-y9481FmbMMLmogyGUtKwRbbGBGOzpwEr",
+      "timings": {
+        "cache_n": 27,
+        "prompt_n": 531,
+        "prompt_ms": 3438.689,
+        "prompt_per_token_ms": 6.475873822975518,
+        "prompt_per_second": 154.4193150354685,
+        "predicted_n": 8,
+        "predicted_ms": 221.29,
+        "predicted_per_token_ms": 31.61285714285714,
+        "predicted_per_second": 31.632699173030865
+      }
+    }
+  }
+]

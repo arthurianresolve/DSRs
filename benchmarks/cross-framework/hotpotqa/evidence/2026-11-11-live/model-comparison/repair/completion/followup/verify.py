@@ -156,6 +156,23 @@ assert not prospective["exact_match"] and normalized(prospective["answer"]) == "
 assert "ambassador to Velora" in prospective["context"] and "Consul General" in prospective["context"]
 assert read(native / "clarified/stdout.json")["samples"][0]["exact_match"]
 
+probe = root / "diagnostics/semantic-prompt"
+probe_summary = read(probe / "summary.json")
+assert probe_summary["binary_sha256"] != build["binary_sha256"]
+assert [(run["name"], run["native_exit"], run["exact_matches"], run["provider_requests"])
+        for run in probe_summary["runs"]] == [("original", 2, 1, 9)]
+probe_output = read(probe / "original/stdout.json")
+assert [sample["answer"] for sample in probe_output["samples"]] == ["no", "ambassador", "Animorphs"]
+probe_calls = read(probe / "requests.json")
+probe_receipts = read(probe / "transport-receipts.json")
+assert len(probe_calls) == len(probe_receipts) == 9
+assert "prefer a role explicitly described as served" in probe_calls[0]["request"]["messages"][0]["content"][0]["text"]
+for call, receipt in zip(probe_calls, probe_receipts, strict=True):
+    raw = (probe / f"round-{call['round']}.response.json").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == receipt["sha256"]
+    payload = json.loads(raw)
+    assert payload["response"] == call["response"]
+
 manifest_root = hotpotqa / "evidence/2026-11-11-live"
 manifest_path = manifest_root / "artifact-sha256.json"
 manifest = read(manifest_path)
