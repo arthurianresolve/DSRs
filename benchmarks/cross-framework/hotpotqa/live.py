@@ -57,8 +57,9 @@ class Proxy(BaseHTTPRequestHandler):
             if response_format.get("type") != "json_schema" or not isinstance(schema, dict):
                 raise ValueError("both clients must request provider-native JSON Schema")
             token_limit = body.get("max_tokens") or body.get("max_completion_tokens")
+            record.update(request_temperature=body.get("temperature"), request_max_tokens=token_limit)
             if token_limit != 128 or body.get("temperature") != 0:
-                raise ValueError("both clients must use temperature 0 and 128 output tokens")
+                raise ValueError(f"expected temperature 0 and 128 output tokens; received temperature={body.get('temperature')!r}, max_tokens={token_limit!r}")
             record.update(model=body["model"], response_format="json_schema", max_tokens=token_limit)
             messages = []
             for message in body["messages"]:
