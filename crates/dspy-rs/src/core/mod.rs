@@ -25,23 +25,29 @@ pub mod history;
 pub mod lm;
 pub mod module;
 mod predicted;
+pub mod sampling;
 mod schema;
 pub mod settings;
 pub mod signature;
 mod state;
 
-pub use errors::{ConversionError, ErrorClass, JsonishError, LmError, ParseError, PredictError};
+pub use errors::{
+    ConversionError, ErrorClass, JsonishError, LmCallError, LmError, LmFailureKind, ParseError,
+    PredictError,
+};
 pub use example::{ToInput, ToOutput};
 pub use history::{
     HistoryBuffer, HistoryEntry, HistoryRecord, clear_history, inspect_history,
     set_history_capacity,
 };
 pub use lm::{
-    Chat, ContentBlock, LM, LMClient, LMConfig, LMResponse, LmUsage, Message, Role,
-    TestCompletionModel, ToolLoopMode, ToolSet,
+    Chat, CompletionProvider, ContentBlock, CustomCompletionModel, LM, LMCallOptions, LMClient,
+    LMConfig, LMResponse, LmUsage, Message, Role, TestCompletionModel, ToolLoopError, ToolLoopMode,
+    ToolSet,
 };
 pub use module::{HistoryModule, Module, PredictorInfo, Predictors, WithLM, forward_all};
 pub use predicted::{CallMetadata, ConstraintResult, FieldMeta, Predicted};
+pub use sampling::{SamplingOptions, current_sampling_options, with_sampling_options};
 pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, InputRenderSpec, SignatureSchema};
 pub use settings::{Settings, configure, get_lm, try_get_lm, with_lm};
 pub use signature::{ConstraintKind, ConstraintSpec, Signature};

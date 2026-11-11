@@ -8,6 +8,26 @@ use tracing::{debug, trace, warn};
 
 use crate::LmUsage;
 
+/// Disk-tier initialization and lookup failures, with the backend cause intact.
+#[derive(Debug, thiserror::Error)]
+pub enum CacheError {
+    #[error("response cache {operation} failed: {source}")]
+    Backend {
+        operation: &'static str,
+        #[source]
+        source: anyhow::Error,
+    },
+}
+
+impl CacheError {
+    fn backend(operation: &'static str, source: impl Into<anyhow::Error>) -> Self {
+        Self::Backend {
+            operation,
+            source: source.into(),
+        }
+    }
+}
+
 /// Response-cache key: a 64-bit hash over the prompt + generation parameters.
 ///
 /// Hashed keys keep foyer lookups and disk serialization O(1) in prompt size.
@@ -81,18 +101,21 @@ impl ResponseCache {
     /// Builds the full memory + disk hybrid, returning the `TempDir` guard
     /// that must be held for as long as the cache lives.
     async fn try_build_hybrid() -> Result<(HybridCache<CacheKey, CacheEntry>, TempDir)> {
-        let dir = tempfile::tempdir()?;
+        let dir =
+            tempfile::tempdir().map_err(|error| CacheError::backend("create directory", error))?;
 
         let device = FsDeviceBuilder::new(dir.path())
             .with_capacity(DISK_CAPACITY)
-            .build()?;
+            .build()
+            .map_err(|error| CacheError::backend("create device", error))?;
 
         let hybrid = HybridCacheBuilder::new()
             .memory(MEMORY_CAPACITY)
             .storage()
             .with_engine_config(BlockEngineBuilder::new(device))
             .build()
-            .await?;
+            .await
+            .map_err(|error| CacheError::backend("initialize disk tier", error))?;
         Ok((hybrid, dir))
     }
 
@@ -110,9 +133,27 @@ impl ResponseCache {
     /// Fetches the full cached entry (including raw output) for a key.
     #[tracing::instrument(name = "dsrs.cache.get_entry", level = "trace", skip(self))]
     pub async fn get_entry(&self, key: CacheKey) -> Result<Option<CacheEntry>> {
-        let value = self.handler.get(&key).await?.map(|v| v.value().clone());
+        let value = self
+            .handler
+            .get(&key)
+            .await
+            .map_err(|error| CacheError::backend("read", error))?
+            .map(|v| v.value().clone());
         trace!(hit = value.is_some(), "cache lookup complete");
         Ok(value)
+    }
+
+    /// Replays only the response, without copying the stored prompt and usage.
+    #[tracing::instrument(name = "dsrs.cache.get_response", level = "trace", skip(self))]
+    pub(crate) async fn get_response(&self, key: CacheKey) -> Result<Option<String>> {
+        let response = self
+            .handler
+            .get(&key)
+            .await
+            .map_err(|error| CacheError::backend("read", error))?
+            .and_then(|entry| entry.value().raw_output.clone());
+        trace!(hit = response.is_some(), "cache lookup complete");
+        Ok(response)
     }
 
     /// Inserts an entry synchronously — the direct path used by [`LM::call`](crate::LM).

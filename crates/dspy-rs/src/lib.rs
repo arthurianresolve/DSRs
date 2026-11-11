@@ -120,14 +120,15 @@ pub mod utils;
 pub use adapter::chat::ChatAdapter;
 pub use augmentation::{Augmentation, Augmented, AugmentedOutput};
 pub use core::{
-    CallMetadata, Chat, ConstraintKind, ConstraintResult, ConstraintSpec, ContentBlock,
-    ConversionError, ErrorClass, FieldMeta, FieldMetadataSpec, FieldPath, FieldSchema,
-    HistoryBuffer, HistoryEntry, HistoryModule, HistoryRecord, InputRenderSpec, JsonishError, LM,
-    LMClient, LMConfig, LMResponse, LmError, LmUsage, Message, Module, ModuleState, ParseError,
-    PredictError, PredictState, Predicted, PredictorInfo, Predictors, Role, Settings, Signature,
-    SignatureSchema, TestCompletionModel, ToInput, ToOutput, ToolLoopMode, ToolSet, WithLM,
-    clear_history, configure, forward_all, get_lm, inspect_history, set_history_capacity,
-    try_get_lm, with_lm,
+    CallMetadata, Chat, CompletionProvider, ConstraintKind, ConstraintResult, ConstraintSpec,
+    ContentBlock, ConversionError, CustomCompletionModel, ErrorClass, FieldMeta, FieldMetadataSpec,
+    FieldPath, FieldSchema, HistoryBuffer, HistoryEntry, HistoryModule, HistoryRecord,
+    InputRenderSpec, JsonishError, LM, LMCallOptions, LMClient, LMConfig, LMResponse, LmCallError,
+    LmError, LmFailureKind, LmUsage, Message, Module, ModuleState, ParseError, PredictError,
+    PredictState, Predicted, PredictorInfo, Predictors, Role, SamplingOptions, Settings, Signature,
+    SignatureSchema, TestCompletionModel, ToInput, ToOutput, ToolLoopError, ToolLoopMode, ToolSet,
+    WithLM, clear_history, configure, current_sampling_options, forward_all, get_lm,
+    inspect_history, set_history_capacity, try_get_lm, with_lm, with_sampling_options,
 };
 pub use data::dataloader::{
     DataLoadError, DataLoader, RowRecord, TypedLoadOptions, UnknownFieldPolicy,
@@ -152,7 +153,7 @@ pub use trace::{
     is_capturing, is_replaying, replay,
 };
 #[cfg(feature = "cache")]
-pub use utils::{CacheEntry, CacheKey, ResponseCache};
+pub use utils::{CacheEntry, CacheError, CacheKey, ResponseCache};
 pub use utils::{TelemetryInitError, init_tracing, truncate};
 
 // Code Mode (vision report §5.5): tools as a sandboxed JS API. See

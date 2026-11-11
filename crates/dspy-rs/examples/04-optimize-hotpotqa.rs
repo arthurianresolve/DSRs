@@ -11,10 +11,9 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::prelude::*;
 
+/// Concisely answer the question, but be accurate.
 #[derive(Signature, Clone, Debug)]
 struct QA {
-    /// Concisely answer the question, but be accurate.
-
     #[input]
     question: String,
 
@@ -68,10 +67,12 @@ impl TypedMetric<HotpotRow, QAModule> for ExactMatchMetric {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder()
+    configure(
+        LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?);
+            .await?,
+    );
 
     let examples = DataLoader::load_hf::<HotpotRow>(
         "hotpotqa/hotpot_qa",

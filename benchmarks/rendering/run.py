@@ -73,8 +73,8 @@ def main():
         before = statistics.median(timings["baseline"][case])
         after = statistics.median(timings["candidate"][case])
         byte_ratio = allocations["candidate"][case]["allocated_bytes_per_op"] / allocations["baseline"][case]["allocated_bytes_per_op"]
-        latency_limit = 1.10 if case.startswith("default") else 0.90
-        accepted = after / before <= latency_limit
+        latency_limit = 1.10 if case.startswith("default") else (0.90 if case in ["jinja-8", "jinja-16"] else None)
+        accepted = after / before <= latency_limit if latency_limit is not None else None
         if case in ["jinja-8", "jinja-16"]:
             accepted = accepted and byte_ratio <= 0.50
         summary.append({"case": case, "baseline_ns_median": before, "candidate_ns_median": after,

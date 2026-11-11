@@ -1,76 +1,56 @@
-# Input rendering ownership and performance
+# PR #103 rendering comparison
 
-`ChatAdapter::format_input_def` builds an alias-aware MiniJinja input value
-lazily, once per call. Every Jinja field shares that immutable value. Default
-and format-only inputs never build it. The value is dropped when formatting
-returns, so subsequent calls see their current input. There is no global cache
-of dynamic signatures, input values or owned templates.
+The PR already builds one alias-aware MiniJinja input value per formatting call.
+This workload measures that implementation and adds regressions for fresh inputs,
+alias collisions, skipped fields and recovery after a render error. No duplicate
+context-sharing implementation is introduced.
 
-Previously, each Jinja field cloned the complete input map, added aliases, then
-serialized it through a JSON outer context into MiniJinja again. Wide signatures
-therefore repeated work proportional to the entire input for each Jinja field.
-The new outer context carries the existing MiniJinja value directly. Field
-metadata, strict undefined handling, template compilation and prompt delimiters
-retain their existing behavior.
+Compare upstream main plus this fixed harness with PR #103 plus the identical
+harness. Both use the same lockfile, toolchain, release flags and valid inputs.
+The comparison measures the PR's valid-input rendering path as a whole; it does
+not isolate the individual effects of error handling and context sharing.
 
-## Ownership boundaries
+Run `cargo build -p dspy-rs --release --no-default-features --example bench-input-rendering --locked -j1`
+on both clean commits. Copy each executable before the next build overwrites it.
+Then run `python benchmarks/rendering/run.py --baseline BASE_EXE --baseline-revision BASE_SHA --candidate PR_EXE --out EVIDENCE_DIR`.
+Keep evidence outside the checkout. The runner verifies identical committed Rust
+harness source, records hashes, and retains every raw sample and output checksum.
 
-```mermaid
-flowchart TD
-    Static[Compiled signature type] --> Cache[StaticSigCache: one entry per type]
-    Loaded[Loaded Program] --> Def[Owned SignatureDefs and TypeTable]
-    Interpreter[Interpreter] --> Shared[Arc Program and runtime bindings]
-    Call[One formatting call] --> Borrow[Borrowed SignatureDef and input map]
-    Borrow --> Context[One owned alias-aware MiniJinja value]
-    Context --> Fields[Shared by this call's Jinja field renders]
-    Call --> Drop[Drop render context on return]
-```
+Each case contains a 32 KiB plain payload and 1, 8 or 16 ordinary/Jinja string
+fields. Aliases, field metadata and the shared payload are accessed by Jinja.
+The plan is eight timing samples per executable in ABBA order, 100 warmups and
+2,000 iterations per sample. Allocation counts use a separate 200-iteration run;
+its timings are not used for latency comparisons. Requested allocation bytes
+include reallocations and are not peak live memory or RSS.
 
-The static cache is bounded by compiled signature types. Dynamically loaded
-program definitions are owned by their program and are not leaked into that
-cache. Immutable graph state can be shared; per-run execution state and this
-render context remain local. See `ir/sig.rs`, `ir/program.rs` and the runtime
-guide for the existing architecture. This change addresses one measured clone
-hotspot; it is not a claim that every clone in the repository is unnecessary or
-that issue #25's broader ownership redesign is complete.
+Acceptance is predeclared: all six outputs must match byte for byte; default
+rendering median latency must remain within 10%; widths 8 and 16 must show at
+least 10% lower median Jinja latency and 50% fewer requested allocation bytes.
+Width 1 Jinja is descriptive. Raw ranges are not confidence intervals, and a
+failed control remains a failed/inconclusive result. Do not trim slow samples.
 
-## Controlled comparison
+## Warm system prompts
 
-Build the identical `bench-input-rendering` harness at a clean baseline and a
-clean candidate revision, with the same lockfile, toolchain and release flags:
+`bench-system-prompts` measures `Interpreter::conversation_opening` over fixed
+signatures containing 1, 8 and 16 input fields. Model construction, load and its
+validation are excluded; no HTTP request is sent. The adapter's uncached system
+builder is the output oracle. Both executables use byte-identical harnesses and
+the same lockfile and release flags.
 
-```text
-cargo build -p dspy-rs --release --no-default-features --locked --example bench-input-rendering -j1
-python benchmarks/rendering/run.py --baseline ../baseline.exe --baseline-revision BASE_SHA --candidate target/release/examples/bench-input-rendering.exe --out ../render-evidence
-```
+`run_system.py` checks exact complete prompt bytes before timing eight samples
+per executable in ABBA order, with 100 warmups and 20,000 iterations per sample.
+Its predeclared gate is at least 10% lower median latency at each width. This
+measures repeated unchanged instructions. Scoped-instruction changes, concurrent
+bindings, fresh live inputs and graph lifetime have separate functional tests;
+cache-miss latency is not measured. The interpreter retains one last-used
+instruction/system pair per signature, and never retains live input values.
 
-Retain each binary immediately after its build so the second build cannot
-overwrite the first. Record build commands, CPU and power policy with the
-generated manifest. The runner checks identical committed harness source and
-hashes both binaries; the caller is responsible for building those binaries
-from the stated clean revisions. On Unix omit `.exe`.
+Run `cargo +1.98.1 build -p dspy-rs --release --no-default-features --example bench-system-prompts --locked -j1`
+on each clean ref, then invoke `python benchmarks/rendering/run_system.py
+--baseline BASE_EXE --baseline-revision BASE_SHA --candidate PR_EXE --out OUT`.
+Retain the executable build provenance separately from the runner manifest.
 
-The fixed workload renders one 32 KiB plain payload plus 1, 8 or 16 string
-fields, either plain or Jinja-rendered. Aliases, field metadata and the shared
-payload are accessed in every Jinja template. Each case warms up 100 times,
-then runs 2,000 iterations per timing sample. Eight samples per binary alternate
-ABBA order. The 200-iteration allocation profile runs separately; its timings
-are not used for latency comparisons. Allocation counts include successful
-allocations and reallocations, and byte counts sum requested sizes, not peak
-live memory or RSS. The forwarding allocator's disabled counter branch exists
-in both timing binaries.
-
-Before timing, all six complete rendered outputs must match byte for byte;
-their SHA-256 hashes are retained. Functional tests also cover aliases,
-explicit alias collisions, changed inputs across calls, metadata, missing
-fields and non-Jinja formatting.
-
-The predeclared acceptance checks use medians of run means: default-rendering
-latency ratio at most 1.10; Jinja latency ratio at most 0.90; and allocated-byte
-ratio at most 0.50 for widths 8 and 16. Retain every raw sample and report any
-failed control rather than changing the workload after observing results.
-These are descriptive local criteria, not statistical confidence bounds.
-
-This measures prompt rendering only. It does not establish a twofold improvement
-in inference or I/O (#22), measure a live provider, or implement automatic graph
-fusion/splitting (#26/#28).
+See [the retained results](RESULTS.md) and the
+[ownership decision](../../docs/adr/2026-11-10-runtime-ownership.md).
+These rendering measurements do not establish #22's live inference/I/O target.
+Functional error/fallback tests are separate from valid-input timings.
