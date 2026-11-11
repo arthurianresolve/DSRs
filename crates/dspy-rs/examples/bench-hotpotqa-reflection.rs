@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 #[derive(Signature, Clone, Debug)]
-/// Answer the question using the supplied context. Return only the short answer, without explanation.
+/// Answer the question using the supplied context. Write the short answer in the answer field, using the exact header [[ ## answer ## ]]. Finish with [[ ## completed ## ]]. Do not copy input fields.
 struct Answer {
     #[input]
     question: String,
@@ -29,7 +29,7 @@ struct Answer {
 }
 
 #[derive(Signature, Clone, Debug)]
-/// Critique the answer against the supplied context in one brief sentence.
+/// Critique the answer against the supplied context in one brief sentence. Write it in the critique field, using the exact header [[ ## critique ## ]]. Finish with [[ ## completed ## ]]. Do not copy input fields.
 struct Reflect {
     #[input]
     question: String,
@@ -42,7 +42,7 @@ struct Reflect {
 }
 
 #[derive(Signature, Clone, Debug)]
-/// Revise the answer using the critique and supplied context. Return only the short answer, without explanation.
+/// Revise the answer using the critique and supplied context. Write the short answer in the answer field, using the exact header [[ ## answer ## ]]. Finish with [[ ## completed ## ]]. Do not copy input fields.
 struct Revise {
     #[input]
     question: String,
@@ -170,8 +170,13 @@ async fn main() -> Result<()> {
     let live = args.iter().any(|s| s == "--live");
     let instrumented = args.iter().any(|s| s == "--profile-runtime");
     let smoke = args.iter().any(|s| s == "--smoke");
+    let protocol_check = args.iter().any(|s| s == "--check-protocol");
+    ensure!(
+        !(smoke && protocol_check),
+        "choose smoke or a full protocol check"
+    );
     ensure!(!smoke || live, "smoke mode requires a live provider");
-    let warmup = if smoke {
+    let warmup = if smoke || protocol_check {
         0
     } else if live {
         1
@@ -345,7 +350,7 @@ async fn main() -> Result<()> {
     }
     println!(
         "{}",
-        json!({"framework":"dsrs","kind":"pipeline_timing","iterations":iterations,"warmup":warmup,"live":live,"smoke":smoke,"instrumented":instrumented,
+        json!({"framework":"dsrs","kind":if protocol_check {"protocol_check"} else {"pipeline_timing"},"iterations":iterations,"warmup":warmup,"live":live,"smoke":smoke,"instrumented":instrumented,
         "simulated_wait_ms_per_stage":wait_ms,"cache":false,"history":false,"samples":samples})
     );
     if live {

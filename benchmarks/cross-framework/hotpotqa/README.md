@@ -40,6 +40,13 @@ lightweight SDK timers remain enabled in both. Instrumented runs provide
 attribution, not the cross-framework timing comparison. No simulated sleeps are
 inserted in live mode.
 
+Both client executables accept `--check-protocol` to run all three fixtures
+without warmup, using their configured `DSRS_PROFILE_BASE_URL` and
+`DSRS_PROFILE_MODEL`. Run with `1 0 --live --check-protocol`; these outputs are
+labelled `protocol_check` and are correctness diagnostics, not timing evidence.
+The task instructions explicitly name the delimiter output fields in both
+frameworks. A regression checks that these instructions remain identical.
+
 The report retains pipeline/stage wall time, provider-SDK elapsed time, actual
 adapter spans, proxy/server timings, generated tokens, process CPU time and
 answers. CPU is sampled at barriers after warmup and before process exit;

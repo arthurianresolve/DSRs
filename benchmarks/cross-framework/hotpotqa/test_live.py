@@ -1,4 +1,6 @@
 import json
+import ast
+import re
 import threading
 import unittest
 import tempfile
@@ -11,6 +13,15 @@ import live
 
 
 class ProfilingTests(unittest.TestCase):
+    def test_task_instructions_match_across_frameworks(self):
+        here = Path(__file__).resolve().parent
+        source = (here.parents[2] / "crates/dspy-rs/examples/bench-hotpotqa-reflection.rs").read_text(encoding="utf-8")
+        rust = {name: text for text, name in re.findall(r"/// (.+)\nstruct (Answer|Reflect|Revise)", source)}
+        python = {node.name: ast.get_docstring(node) for node in ast.parse((here / "bench_dspy.py").read_text(encoding="utf-8")).body
+                  if isinstance(node, ast.ClassDef) and node.name in {"Answer", "Reflect", "Revise"}}
+        self.assertEqual(set(rust), {"Answer", "Reflect", "Revise"})
+        self.assertEqual(rust, python)
+
     def test_interference_retries_preserve_attempts_and_incorrect_answers(self):
         data = {"samples": [{"exact_match": False}]}
         env = {"DSRS_PROFILE_BASE_URL": "http://localhost:1234/00-dsrs-timing/v1"}

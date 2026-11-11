@@ -10,14 +10,14 @@ from dspy.utils.dummies import DummyLM
 
 
 class Answer(dspy.Signature):
-    """Answer the question using the supplied context. Return only the short answer, without explanation."""
+    """Answer the question using the supplied context. Write the short answer in the answer field, using the exact header [[ ## answer ## ]]. Finish with [[ ## completed ## ]]. Do not copy input fields."""
     question: str = dspy.InputField()
     context: str = dspy.InputField()
     answer: str = dspy.OutputField()
 
 
 class Reflect(dspy.Signature):
-    """Critique the answer against the supplied context in one brief sentence."""
+    """Critique the answer against the supplied context in one brief sentence. Write it in the critique field, using the exact header [[ ## critique ## ]]. Finish with [[ ## completed ## ]]. Do not copy input fields."""
     question: str = dspy.InputField()
     context: str = dspy.InputField()
     answer: str = dspy.InputField()
@@ -25,7 +25,7 @@ class Reflect(dspy.Signature):
 
 
 class Revise(dspy.Signature):
-    """Revise the answer using the critique and supplied context. Return only the short answer, without explanation."""
+    """Revise the answer using the critique and supplied context. Write the short answer in the answer field, using the exact header [[ ## answer ## ]]. Finish with [[ ## completed ## ]]. Do not copy input fields."""
     question: str = dspy.InputField()
     context: str = dspy.InputField()
     draft: str = dspy.InputField()
@@ -99,10 +99,13 @@ def main():
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--profile-runtime", action="store_true")
     parser.add_argument("--smoke", action="store_true", help="One fixture, no warmup; protocol checking only")
+    parser.add_argument("--check-protocol", action="store_true", help="All fixtures, no warmup; correctness diagnostics, not timing evidence")
     args = parser.parse_args()
+    if args.smoke and args.check_protocol:
+        parser.error("choose smoke or a full protocol check")
     if args.smoke and not args.live:
         parser.error("smoke mode requires a live provider")
-    warmup = 0 if args.smoke else 1 if args.live else WARMUP
+    warmup = 0 if args.smoke or args.check_protocol else 1 if args.live else WARMUP
     if args.live and args.wait_ms:
         parser.error("live profiling must not inject simulated waiting")
     if args.iterations <= 0 or args.wait_ms < 0:
@@ -172,7 +175,7 @@ def main():
                     "provider_ns": PROVIDER_NS[provider_start:], "adapter_events": ADAPTER_EVENTS[adapter_start:],
                     "expected_answer": e["answer"], "exact_match": normalized(final.answer) == normalized(e["answer"]),
                     "draft": first.answer, "critique": feedback.critique})
-    print(json.dumps({"framework": "dspy", "kind": "pipeline_timing", "iterations": args.iterations,
+    print(json.dumps({"framework": "dspy", "kind": "protocol_check" if args.check_protocol else "pipeline_timing", "iterations": args.iterations,
         "warmup": warmup, "live": args.live, "smoke": args.smoke, "instrumented": args.profile_runtime, "simulated_wait_ms_per_stage": args.wait_ms,
         "cache": False, "history": False, "samples": samples}))
     if args.live:
