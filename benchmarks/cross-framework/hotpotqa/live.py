@@ -72,9 +72,11 @@ class Proxy(BaseHTTPRequestHandler):
             record["provider_wall_ns"] = time.perf_counter_ns() - provider_start
             for key in ("total_duration", "load_duration", "prompt_eval_duration", "eval_duration", "prompt_eval_count", "eval_count"):
                 record[key] = result.get(key, 0)
+            record["done_reason"] = result.get("done_reason")
+            finish_reason = "length" if record["done_reason"] == "length" else "stop"
             content = result["message"]["content"]
             payload = {"id": "profile-local", "object": "chat.completion", "created": int(time.time()),
-                       "model": body["model"], "choices": [{"index": 0, "finish_reason": "stop",
+                       "model": body["model"], "choices": [{"index": 0, "finish_reason": finish_reason,
                        "message": {"role": "assistant", "content": content}}],
                        "usage": {"prompt_tokens": result.get("prompt_eval_count", 0),
                        "completion_tokens": result.get("eval_count", 0),

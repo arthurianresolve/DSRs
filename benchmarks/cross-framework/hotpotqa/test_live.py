@@ -41,7 +41,7 @@ class ProfilingTests(unittest.TestCase):
                 received.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
                 payload = json.dumps({"message": {"content": "answer"}, "total_duration": 30,
                     "load_duration": 1, "prompt_eval_duration": 8, "eval_duration": 20,
-                    "prompt_eval_count": 3, "eval_count": 2}).encode()
+                    "prompt_eval_count": 3, "eval_count": 2, "done_reason": "length"}).encode()
                 self.send_response(200); self.send_header("Content-Length", str(len(payload)))
                 self.end_headers(); self.wfile.write(payload)
         upstream = ThreadingHTTPServer(("127.0.0.1", 0), Ollama)
@@ -57,6 +57,8 @@ class ProfilingTests(unittest.TestCase):
             self.assertEqual(received[0]["messages"], [{"role": "user", "content": "hello"}])
             self.assertEqual(received[0]["options"]["num_predict"], 64)
             self.assertEqual(response["usage"]["total_tokens"], 5)
+            self.assertEqual(response["choices"][0]["finish_reason"], "length")
+            self.assertEqual(live.Proxy.records[0]["done_reason"], "length")
             self.assertEqual(live.Proxy.records[0]["eval_duration"], 20)
             self.assertTrue(live.Proxy.records[0]["ok"])
         finally:
