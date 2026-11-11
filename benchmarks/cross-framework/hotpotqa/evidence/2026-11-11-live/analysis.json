@@ -1,0 +1,157 @@
+{
+  "source_revision": "bda64b29974cdd22e4e8004976a7e5c8f4d2263c",
+  "timing": [
+    {
+      "framework": "dsrs",
+      "pipelines": 6,
+      "requests": 18,
+      "pipeline_ms_mean": 21073.62701666667,
+      "pipeline_ms_median": 20187.9156,
+      "pipeline_ms_range": [
+        10897.1534,
+        34516.5694
+      ],
+      "run_pipeline_ms_means": [
+        20418.34013333333,
+        21728.9139
+      ],
+      "stage_ms_means": [
+        5744.48085,
+        7596.190716666667,
+        7732.95175
+      ],
+      "sdk_share_of_pipeline": 0.9999764002023506,
+      "client_residual_ms_per_pipeline": 0.4973333333333333,
+      "client_cpu_ms": 15.625,
+      "process_wall_ms": 126443.5155,
+      "non_cpu_wall_lower_bound_ms": 126427.8905,
+      "exact_matches": 0,
+      "server_phase_ms_means": {
+        "total_duration": 7013.479460111111,
+        "load_duration": 1.9537076666666668,
+        "prompt_eval_duration": 4292.013,
+        "eval_duration": 2685.2302222222224,
+        "provider_wall_ns": 7022.209927777778,
+        "proxy_wall_ns": 7022.491172222222
+      },
+      "token_means": {
+        "prompt_eval_count": 315.55555555555554,
+        "eval_count": 20.333333333333332
+      },
+      "stop_reasons": {
+        "stop": 18
+      }
+    },
+    {
+      "framework": "dspy",
+      "pipelines": 6,
+      "requests": 18,
+      "pipeline_ms_mean": 37097.25206666666,
+      "pipeline_ms_median": 33796.1066,
+      "pipeline_ms_range": [
+        20695.3253,
+        57047.3081
+      ],
+      "run_pipeline_ms_means": [
+        36951.18176666666,
+        37243.32236666667
+      ],
+      "stage_ms_means": [
+        10813.233516666665,
+        13130.8301,
+        13153.160133333335
+      ],
+      "sdk_share_of_pipeline": 0.999667986189978,
+      "client_residual_ms_per_pipeline": 12.3168,
+      "client_cpu_ms": 281.25,
+      "process_wall_ms": 222587.3751,
+      "non_cpu_wall_lower_bound_ms": 222306.1251,
+      "exact_matches": 0,
+      "server_phase_ms_means": {
+        "total_duration": 12331.267512555556,
+        "load_duration": 2.0208762777777776,
+        "prompt_eval_duration": 9199.892499944444,
+        "eval_duration": 3071.0176666666666,
+        "provider_wall_ns": 12341.330694444445,
+        "proxy_wall_ns": 12341.671011111112
+      },
+      "token_means": {
+        "prompt_eval_count": 391.77777777777777,
+        "eval_count": 21.88888888888889
+      },
+      "stop_reasons": {
+        "stop": 18
+      }
+    }
+  ],
+  "observed_dspy_over_dsrs_mean_wall_ratio": 1.7603638916702502,
+  "profile_passes": [
+    {
+      "run": "04-dsrs-profile",
+      "framework": "dsrs",
+      "instrumented": true,
+      "pipelines": 3,
+      "provider_requests": 9,
+      "pipeline_ns_mean": 18814024400.0,
+      "stage_ns_mean": [
+        5209535900,
+        7077116600,
+        6527366600
+      ],
+      "provider_sdk_ns_mean": 6271156500.0,
+      "client_other_wall_ns_per_pipeline": 554900.0,
+      "adapter_format_ns_mean": 6888.888888888889,
+      "adapter_parse_ns_mean": 18166.666666666668,
+      "server_phase_ns_mean": {
+        "total_duration": 6261088369.666667,
+        "load_duration": 1474757.7777777778,
+        "prompt_eval_duration": 3790165333.3333335,
+        "eval_duration": 2440394333.3333335
+      },
+      "tokens_mean": {
+        "prompt_eval_count": 315.55555555555554,
+        "eval_count": 20.333333333333332
+      },
+      "exact_matches": 0,
+      "process_interval": {
+        "wall_ns": 56442869100,
+        "cpu_ns": 15625000,
+        "non_cpu_wall_lower_bound_ns": 56427244100
+      }
+    },
+    {
+      "run": "05-dspy-profile",
+      "framework": "dspy",
+      "instrumented": true,
+      "pipelines": 3,
+      "provider_requests": 9,
+      "pipeline_ns_mean": 37994024400.0,
+      "stage_ns_mean": [
+        10547250400,
+        14030030733.333334,
+        13416719733.333334
+      ],
+      "provider_sdk_ns_mean": 12661081511.11111,
+      "client_other_wall_ns_per_pipeline": 10779866.666666666,
+      "adapter_format_ns_mean": 621422.2222222222,
+      "adapter_parse_ns_mean": 44766.666666666664,
+      "server_phase_ns_mean": {
+        "total_duration": 12635478397.222221,
+        "load_duration": 1471021.4444444445,
+        "prompt_eval_duration": 9612683888.88889,
+        "eval_duration": 2968485888.888889
+      },
+      "tokens_mean": {
+        "prompt_eval_count": 391.77777777777777,
+        "eval_count": 21.88888888888889
+      },
+      "exact_matches": 0,
+      "process_interval": {
+        "wall_ns": 113983430600,
+        "cpu_ns": 140625000,
+        "non_cpu_wall_lower_bound_ns": 113842805600
+      }
+    }
+  ],
+  "validity": "Descriptive, compiler-idle local-model measurements; not a general speedup or accuracy claim."
+}

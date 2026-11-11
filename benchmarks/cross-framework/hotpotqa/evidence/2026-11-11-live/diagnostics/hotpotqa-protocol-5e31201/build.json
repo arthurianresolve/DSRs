@@ -1,0 +1,19 @@
+{
+  "revision": "5e3120174f7592109f1db37d93692940d7ed5109",
+  "dirty_paths": [],
+  "started_utc": "2026-11-11T06:25:46.2429462Z",
+  "completed_utc": "2026-11-11T06:29:52.5866467Z",
+  "command": "cargo build -p dspy-rs --release --no-default-features --example bench-hotpotqa-reflection --locked -j 1 --target-dir C:\\Users\\georg\\Documents\\DSRs-target",
+  "incremental": "0",
+  "exit_code": 0,
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\r\nbinary: rustc\r\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\r\ncommit-date: 2026-10-13\r\nhost: x86_64-pc-windows-msvc\r\nrelease: 1.99.1\r\nLLVM version: 23.1.1\r\n",
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "cpu": {
+    "Name": "Intel(R) Core(TM) i7-10610U CPU @ 1.80GHz",
+    "NumberOfCores": 4,
+    "NumberOfLogicalProcessors": 8
+  },
+  "power_policy": "GUID des Energieschemas: 381b4222-f694-41f0-9685-ff5bb260df2e  (Ausbalanciert)\r\n",
+  "binary_sha256": "642caaae1db8055af5b9df48d4949aef717a464c6bbb7eaa71db8f9e8e7a913a",
+  "lock_sha256": "f9cea9f8ed91c895f9050e026b6908e2d9ce59f0f7db5185d50a2401b02382d1"
+}

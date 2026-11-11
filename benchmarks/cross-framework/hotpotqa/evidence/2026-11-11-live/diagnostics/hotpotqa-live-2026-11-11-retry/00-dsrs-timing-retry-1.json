@@ -1,0 +1,221 @@
+{
+  "framework": "dsrs",
+  "kind": "pipeline_timing",
+  "iterations": 1,
+  "warmup": 1,
+  "live": true,
+  "smoke": false,
+  "instrumented": false,
+  "simulated_wait_ms_per_stage": 0,
+  "cache": false,
+  "history": false,
+  "samples": [
+    {
+      "id": "5a8b57f25542995d1e6f1371",
+      "answer": "Yes",
+      "pipeline_ns": 31050079600,
+      "stage_ns": [
+        8381768200,
+        12252122200,
+        10416185400
+      ],
+      "simulated_wait_ns": 0,
+      "provider_ns": [
+        8381648300,
+        12252001400,
+        10416031700
+      ],
+      "adapter_events": [],
+      "expected_answer": "yes",
+      "exact_match": true,
+      "draft": "Yes",
+      "critique": "The answer is correct, as both Scott Derrickson and Ed Wood are indeed American filmmakers."
+    },
+    {
+      "id": "5a8c7595554299585d9e36b6",
+      "answer": "United States Ambassador",
+      "pipeline_ns": 44130101600,
+      "stage_ns": [
+        14691824000,
+        16176699200,
+        13261574600
+      ],
+      "simulated_wait_ns": 0,
+      "provider_ns": [
+        14691686500,
+        16176598900,
+        13261461200
+      ],
+      "adapter_events": [],
+      "expected_answer": "Chief of Protocol",
+      "exact_match": false,
+      "draft": "United States Ambassador to Ghana and Czechoslovakia",
+      "critique": "The answer is too specific, as the question asks for the government position, not the countries she was ambassador to."
+    },
+    {
+      "id": "5a85ea095542994775f606a8",
+      "answer": "The Hork-Bajir Chronicles is a companion book to the Animorphs series, written by K. A. Applegate, and takes place before book #23, \"The Pretender\", with events occurring between \"The Ellimist Chronicles\" and \"The Andalite Chronicles\".",
+      "pipeline_ns": 82343306800,
+      "stage_ns": [
+        18460325400,
+        23316202000,
+        40566775300
+      ],
+      "simulated_wait_ns": 0,
+      "provider_ns": [
+        18460197700,
+        23316064500,
+        40566616600
+      ],
+      "adapter_events": [],
+      "expected_answer": "Animorphs",
+      "exact_match": false,
+      "draft": "The Hork-Bajir Chronicles",
+      "critique": "The answer is accurate in stating that The Hork-Bajir Chronicles is a companion book to the Animorphs series, but it would be more informative to specify the author, K. A. Applegate, and provide more context about the series' continuity."
+    }
+  ],
+  "process_interval": {
+    "wall_ns": 157524387800,
+    "cpu_ns": 31250000,
+    "non_cpu_wall_lower_bound_ns": 157493137800
+  },
+  "provider_records": [
+    {
+      "run": "00-dsrs-timing-retry-1",
+      "started_ns": 212717710209700,
+      "request_sha256": "afbd3df81f399e4bc31bf72229db8467b555a1ec224806928b00a19e1f2f20a9",
+      "provider_wall_ns": 8379808300,
+      "total_duration": 8367410164,
+      "load_duration": 3395025,
+      "prompt_eval_duration": 6428895000,
+      "eval_duration": 1744807000,
+      "prompt_eval_count": 295,
+      "eval_count": 13,
+      "done_reason": "stop",
+      "ok": true,
+      "proxy_wall_ns": 8380058100
+    },
+    {
+      "run": "00-dsrs-timing-retry-1",
+      "started_ns": 212726092612400,
+      "request_sha256": "32d89dcd44d5ba6475a3771cc0a86070187b063f814ef43beb9149324a3032bb",
+      "provider_wall_ns": 12248997100,
+      "total_duration": 12244765728,
+      "load_duration": 1679813,
+      "prompt_eval_duration": 7979480000,
+      "eval_duration": 4206332000,
+      "prompt_eval_count": 315,
+      "eval_count": 29,
+      "done_reason": "stop",
+      "ok": true,
+      "proxy_wall_ns": 12249331600
+    },
+    {
+      "run": "00-dsrs-timing-retry-1",
+      "started_ns": 212738344766200,
+      "request_sha256": "342e8cf65c2c7b4d50fa39c4f21f9eb095f26129791809ff859c34d078a881bc",
+      "provider_wall_ns": 10413419600,
+      "total_duration": 10408397664,
+      "load_duration": 1937514,
+      "prompt_eval_duration": 7880272000,
+      "eval_duration": 2385357000,
+      "prompt_eval_count": 360,
+      "eval_count": 13,
+      "done_reason": "stop",
+      "ok": true,
+      "proxy_wall_ns": 10413747300
+    },
+    {
+      "run": "00-dsrs-timing-retry-1",
+      "started_ns": 212748760433400,
+      "request_sha256": "b0816df3c8568478532f08ccca311572f11b9db390e4c52a6192c8cd2abedccc",
+      "provider_wall_ns": 14689508500,
+      "total_duration": 14685022775,
+      "load_duration": 1765113,
+      "prompt_eval_duration": 9456352000,
+      "eval_duration": 5149803000,
+      "prompt_eval_count": 369,
+      "eval_count": 22,
+      "done_reason": "stop",
+      "ok": true,
+      "proxy_wall_ns": 14689782800
+    },
+    {
+      "run": "00-dsrs-timing-retry-1",
+      "started_ns": 212763452252800,
+      "request_sha256": "15af37ab7ea84ce934a96d2dcbf1630845dd4a436d682976fec010d663d031fd",
+      "provider_wall_ns": 16174428600,
+      "total_duration": 16170129369,
+      "load_duration": 1349910,
+      "prompt_eval_duration": 9620529000,
+      "eval_duration": 6475470000,
+      "prompt_eval_count": 398,
+      "eval_count": 34,
+      "done_reason": "stop",
+      "ok": true,
+      "proxy_wall_ns": 16174692700
+    },
+    {
+      "run": "00-dsrs-timing-retry-1",
+      "started_ns": 212779628903600,
+      "request_sha256": "5a83afe39e5fa3a8f5ba77b197cd5e47ab15282d96f648b07b323aca3b29f03c",
+      "provider_wall_ns": 13259537100,
+      "total_duration": 13244517685,
+      "load_duration": 1318410,
+      "prompt_eval_duration": 11168128000,
+      "eval_duration": 1983463000,
+      "prompt_eval_count": 448,
+      "eval_count": 15,
+      "done_reason": "stop",
+      "ok": true,
+      "proxy_wall_ns": 13259792300
+    },
+    {
+      "run": "00-dsrs-timing-retry-1",
+      "started_ns": 212792890693400,
+      "request_sha256": "c533f5826c559bc99828ab4d8a9a05207b8a34a9a9cc9961f4889fe8d4d26658",
+      "provider_wall_ns": 18457609300,
+      "total_duration": 18453846928,
+      "load_duration": 1601912,
+      "prompt_eval_duration": 14812571000,
+      "eval_duration": 3573265000,
+      "prompt_eval_count": 504,
+      "eval_count": 19,
+      "done_reason": "stop",
+      "ok": true,
+      "proxy_wall_ns": 18457923600
+    },
+    {
+      "run": "00-dsrs-timing-retry-1",
+      "started_ns": 212811351643600,
+      "request_sha256": "951473d71ba963237ebf4da915fec458b5873c4265ddbb0d991f134b78d54195",
+      "provider_wall_ns": 23313258300,
+      "total_duration": 23301664014,
+      "load_duration": 2040015,
+      "prompt_eval_duration": 13299569000,
+      "eval_duration": 9904694000,
+      "prompt_eval_count": 530,
+      "eval_count": 64,
+      "done_reason": "stop",
+      "ok": true,
+      "proxy_wall_ns": 23313535300
+    },
+    {
+      "run": "00-dsrs-timing-retry-1",
+      "started_ns": 212834667658000,
+      "request_sha256": "a2b268361ac3507faf568a6ef4d204fdd9a5b5498ddffdc3e1ce0b82b8622c2b",
+      "provider_wall_ns": 40563720300,
+      "total_duration": 40559016137,
+      "load_duration": 1261909,
+      "prompt_eval_duration": 18586729000,
+      "eval_duration": 21844428000,
+      "prompt_eval_count": 610,
+      "eval_count": 70,
+      "done_reason": "stop",
+      "ok": true,
+      "proxy_wall_ns": 40564086500
+    }
+  ],
+  "exit_code": 0,
+  "compiler_interference": []
+}

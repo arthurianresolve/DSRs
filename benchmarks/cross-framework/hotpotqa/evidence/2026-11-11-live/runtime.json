@@ -1,0 +1,16 @@
+{
+  "ollama_version": "0.40.16",
+  "ollama_binary_sha256": "a0c1e355537b0c037f2190edd339197fe3eb00387a46d6e26be695250262a790",
+  "kernel": "Linux 6.18.54.1-microsoft-standard-WSL2 x86_64",
+  "model": "llama3.2:3b",
+  "model_digest": "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72",
+  "cpu_only": true,
+  "cleanup": {
+    "portable_root_removed": "/tmp/dsrs-hotpotqa",
+    "owned_processes_stopped": [11502, 2388110],
+    "temporary_models_removed": ["llama3.2:1b", "llama3.2:3b"],
+    "newly_generated_keys_removed": true,
+    "system_packages_installed": false,
+    "linux_endpoint_verified_closed": true
+  }
+}

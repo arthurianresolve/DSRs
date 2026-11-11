@@ -1,0 +1,46 @@
+Traceback (most recent call last):
+  File "C:\Users\georg\Documents\DSRs-worktrees\fix-hotpotqa-profiling\benchmarks\cross-framework\hotpotqa\bench_dspy.py", line 183, in <module>
+    main()
+    ~~~~^^
+  File "C:\Users\georg\Documents\DSRs-worktrees\fix-hotpotqa-profiling\benchmarks\cross-framework\hotpotqa\bench_dspy.py", line 162, in main
+    first = call(answer, **inputs)
+  File "C:\Users\georg\Documents\DSRs-worktrees\fix-hotpotqa-profiling\benchmarks\cross-framework\hotpotqa\bench_dspy.py", line 157, in call
+    result = predict(**inputs)
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\predict\predict.py", line 130, in __call__
+    return super().__call__(**kwargs)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\utils\callback.py", line 326, in sync_wrapper
+    return fn(instance, *args, **kwargs)
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\primitives\module.py", line 110, in __call__
+    return self.forward(*args, **kwargs)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\predict\predict.py", line 253, in forward
+    completions = adapter(lm, lm_kwargs=config, signature=signature, demos=demos, inputs=kwargs)
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\adapters\chat_adapter.py", line 84, in __call__
+    raise e
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\adapters\chat_adapter.py", line 72, in __call__
+    return super().__call__(lm, lm_kwargs, signature, demos, inputs)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\adapters\base.py", line 206, in __call__
+    return self._call_postprocess(processed_signature, signature, outputs, lm, lm_kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\adapters\base.py", line 133, in _call_postprocess
+    value = self.parse(processed_signature, text)
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\utils\callback.py", line 326, in sync_wrapper
+    return fn(instance, *args, **kwargs)
+  File "C:\Users\georg\Documents\dsrs-build\hotpotqa-venv\Lib\site-packages\dspy\adapters\chat_adapter.py", line 239, in parse
+    raise AdapterParseError(
+    ...<4 lines>...
+    )
+dspy.utils.exceptions.AdapterParseError: Adapter ChatAdapter failed to parse the LM response. 
+
+LM Response: [[ Ambassador to Ghana and Czechoslovakia ]]
+{Ambassador to Ghana and Czechoslovakia}
+
+[[ ## completed ## ]] 
+
+Expected to find output fields in the LM response: [answer] 
+
+Actual output fields parsed from the LM response: [] 
+
+

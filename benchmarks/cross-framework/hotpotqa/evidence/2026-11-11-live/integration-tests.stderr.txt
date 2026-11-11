@@ -1,0 +1,317 @@
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\graph.rs:38:1
+   |
+38 | entity_impl!(Sym, "sym");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\graph.rs:38:1
+   |
+38 | entity_impl!(Sym, "sym");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\graph.rs:43:1
+   |
+43 | entity_impl!(NodeId, "n");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\graph.rs:48:1
+   |
+48 | entity_impl!(SigId, "sig");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\graph.rs:55:1
+   |
+55 | entity_impl!(ModelId, "m");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\graph.rs:60:1
+   |
+60 | entity_impl!(ToolId, "t");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated constant `std::u32::MAX`: replaced by the `MAX` associated constant on this type
+  --> crates\dspy-rs\src\ir\params.rs:22:1
+   |
+22 | entity_impl!(ParamId, "p");
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this warning originates in the macro `$crate::entity_impl` which comes from the expansion of the macro `entity_impl` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of deprecated method `std::sync::atomic::Atomic::<u32>::fetch_update`: renamed to `try_update` for consistency
+   --> crates\dspy-rs\src\ir\interp.rs:114:18
+    |
+114 |                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
+    |                  ^^^^^^^^^^^^
+    |
+help: replace the use of the deprecated method
+    |
+114 -                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
+114 +                 .try_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
+    |
+
+warning: fields `task_description`, `current_instruction`, `execution_feedback`, and `improved_instruction` are never read
+  --> crates\dspy-rs\src\optimizer\gepa.rs:28:5
+   |
+25 | struct ReflectOnInstruction {
+   |        -------------------- fields in this struct
+...
+28 |     task_description: String,
+   |     ^^^^^^^^^^^^^^^^
+...
+32 |     current_instruction: String,
+   |     ^^^^^^^^^^^^^^^^^^^
+...
+36 |     execution_feedback: String,
+   |     ^^^^^^^^^^^^^^^^^^
+...
+40 |     improved_instruction: String,
+   |     ^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `ReflectOnInstruction` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `task_description`, `current_instruction`, `better_rollout`, `worse_rollout`, and `rule` are never read
+  --> crates\dspy-rs\src\optimizer\simba.rs:38:5
+   |
+35 | struct IntrospectRollouts {
+   |        ------------------ fields in this struct
+...
+38 |     task_description: String,
+   |     ^^^^^^^^^^^^^^^^
+...
+42 |     current_instruction: String,
+   |     ^^^^^^^^^^^^^^^^^^^
+...
+46 |     better_rollout: String,
+   |     ^^^^^^^^^^^^^^
+...
+50 |     worse_rollout: String,
+   |     ^^^^^^^^^^^^^
+...
+54 |     rule: String,
+   |     ^^^^
+   |
+   = note: `IntrospectRollouts` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: `dspy-rs` (lib) generated 27 warnings (17 duplicates) (run `cargo fix --lib -p dspy-rs` to apply 1 suggestion)
+   Compiling dspy-rs v0.7.3 (C:\Users\georg\Documents\DSRs-worktrees\fix-hotpotqa-profiling\crates\dspy-rs)
+warning: fields `question` and `answer` are never read
+  --> crates\dspy-rs\tests\test_interaction_storage.rs:17:5
+   |
+15 | struct QA {
+   |        -- fields in this struct
+16 |     #[input]
+17 |     question: String,
+   |     ^^^^^^^^
+18 |     #[output]
+19 |     answer: String,
+   |     ^^^^^^
+   |
+   = note: `QA` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `dspy-rs` (test "test_interaction_storage") generated 1 warning
+warning: fields `question` and `answer` are never read
+  --> crates\dspy-rs\tests\test_mock_provider_contract.rs:9:5
+   |
+ 7 | struct QA {
+   |        -- fields in this struct
+ 8 |     #[input]
+ 9 |     question: String,
+   |     ^^^^^^^^
+10 |     #[output]
+11 |     answer: String,
+   |     ^^^^^^
+   |
+   = note: `QA` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `dspy-rs` (test "test_mock_provider_contract") generated 1 warning
+warning: fields `question` and `answer` are never read
+  --> crates\dspy-rs\tests\test_trace_history_semantics.rs:11:5
+   |
+ 9 | struct Step {
+   |        ---- fields in this struct
+10 |     #[input]
+11 |     question: String,
+   |     ^^^^^^^^
+12 |     #[output]
+13 |     answer: String,
+   |     ^^^^^^
+   |
+   = note: `Step` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `dspy-rs` (test "test_trace_history_semantics") generated 1 warning
+warning: fields `question`, `tools`, and `calls` are never read
+  --> crates\dspy-rs\tests\test_special_fields.rs:11:5
+   |
+ 9 | struct Choose {
+   |        ------ fields in this struct
+10 |     #[input]
+11 |     question: String,
+   |     ^^^^^^^^
+12 |     #[input]
+13 |     tools: Vec<Tool>,
+   |     ^^^^^
+14 |     #[output]
+15 |     calls: ToolCalls,
+   |     ^^^^^
+   |
+   = note: `Choose` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `history`, `question`, and `answer` are never read
+  --> crates\dspy-rs\tests\test_special_fields.rs:22:5
+   |
+20 | struct Conversation {
+   |        ------------ fields in this struct
+21 |     #[input]
+22 |     history: History,
+   |     ^^^^^^^
+23 |     #[input]
+24 |     question: String,
+   |     ^^^^^^^^
+25 |     #[output]
+26 |     answer: String,
+   |     ^^^^^^
+   |
+   = note: `Conversation` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `history`, `tools`, `question`, and `answer` are never read
+  --> crates\dspy-rs\tests\test_special_fields.rs:33:5
+   |
+31 | struct OptionalContext {
+   |        --------------- fields in this struct
+32 |     #[input]
+33 |     history: Option<History>,
+   |     ^^^^^^^
+34 |     #[input]
+35 |     tools: Option<Vec<Tool>>,
+   |     ^^^^^
+36 |     #[input]
+37 |     question: String,
+   |     ^^^^^^^^
+38 |     #[output]
+39 |     answer: String,
+   |     ^^^^^^
+   |
+   = note: `OptionalContext` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: `dspy-rs` (test "test_special_fields") generated 3 warnings
+warning: fields `question` and `answer` are never read
+  --> crates\dspy-rs\tests\test_native_scalar_output.rs:16:5
+   |
+14 | struct QA {
+   |        -- fields in this struct
+15 |     #[input]
+16 |     question: String,
+   |     ^^^^^^^^
+...
+19 |     answer: String,
+   |     ^^^^^^
+   |
+   = note: `QA` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `question`, `answer`, and `confidence` are never read
+  --> crates\dspy-rs\tests\test_native_scalar_output.rs:25:5
+   |
+23 | struct Pair {
+   |        ---- fields in this struct
+24 |     #[input]
+25 |     question: String,
+   |     ^^^^^^^^
+26 |     #[output]
+27 |     answer: String,
+   |     ^^^^^^
+28 |     #[output]
+29 |     confidence: f64,
+   |     ^^^^^^^^^^
+   |
+   = note: `Pair` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `question` and `city` are never read
+  --> crates\dspy-rs\tests\test_native_scalar_output.rs:42:5
+   |
+40 | struct Profile {
+   |        ------- fields in this struct
+41 |     #[input]
+42 |     question: String,
+   |     ^^^^^^^^
+43 |     #[output]
+44 |     city: City,
+   |     ^^^^
+   |
+   = note: `Profile` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `x` and `square` are never read
+  --> crates\dspy-rs\tests\test_native_scalar_output.rs:51:5
+   |
+49 | struct Square {
+   |        ------ fields in this struct
+50 |     #[input]
+51 |     x: i64,
+   |     ^
+52 |     #[output]
+53 |     square: i64,
+   |     ^^^^^^
+   |
+   = note: `Square` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `x` and `positive` are never read
+  --> crates\dspy-rs\tests\test_native_scalar_output.rs:60:5
+   |
+58 | struct Positive {
+   |        -------- fields in this struct
+59 |     #[input]
+60 |     x: i64,
+   |     ^
+61 |     #[output]
+62 |     positive: bool,
+   |     ^^^^^^^^
+   |
+   = note: `Positive` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: fields `x` and `half` are never read
+  --> crates\dspy-rs\tests\test_native_scalar_output.rs:69:5
+   |
+67 | struct Half {
+   |        ---- fields in this struct
+68 |     #[input]
+69 |     x: f64,
+   |     ^
+70 |     #[output]
+71 |     half: f64,
+   |     ^^^^
+   |
+   = note: `Half` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+warning: `dspy-rs` (test "test_native_scalar_output") generated 6 warnings
+    Finished `release` profile [optimized] target(s) in 13m 13s
+     Running tests\test_interaction_storage.rs (C:\Users\georg\Documents\DSRs-target\release\deps\test_interaction_storage-28a83e36492989f9.exe)
+     Running tests\test_lm_http_configuration.rs (C:\Users\georg\Documents\DSRs-target\release\deps\test_lm_http_configuration-e244469f7a7c1ed3.exe)
+     Running tests\test_lm_tool_loop_limits.rs (C:\Users\georg\Documents\DSRs-target\release\deps\test_lm_tool_loop_limits-4c34764ab804390f.exe)
+     Running tests\test_mock_provider_contract.rs (C:\Users\georg\Documents\DSRs-target\release\deps\test_mock_provider_contract-c12142ebe904e1f1.exe)
+     Running tests\test_native_render_integration.rs (C:\Users\georg\Documents\DSRs-target\release\deps\test_native_render_integration-5acf6d267d2cd93e.exe)
+     Running tests\test_native_scalar_output.rs (C:\Users\georg\Documents\DSRs-target\release\deps\test_native_scalar_output-52b866544dc9e7b2.exe)
+     Running tests\test_special_fields.rs (C:\Users\georg\Documents\DSRs-target\release\deps\test_special_fields-1fbadc270dad7028.exe)
+     Running tests\test_trace_history_semantics.rs (C:\Users\georg\Documents\DSRs-target\release\deps\test_trace_history_semantics-c7719a64ca12dca9.exe)

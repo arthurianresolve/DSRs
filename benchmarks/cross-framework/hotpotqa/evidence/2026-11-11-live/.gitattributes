@@ -1,0 +1,5 @@
+* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# Native logs retain original whitespace, including malformed model output.
+*.txt -whitespace
+.gitattributes text eol=lf whitespace
+RESULTS.md text eol=lf whitespace

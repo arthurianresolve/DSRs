@@ -1,0 +1,16 @@
+{
+  "revision": "bda64b29974cdd22e4e8004976a7e5c8f4d2263c",
+  "started_utc": "2026-11-11T08:06:04.2578634Z",
+  "completed_utc": "2026-11-11T08:09:51.9359791Z",
+  "command": "cargo build -p dspy-rs --release --no-default-features --example bench-hotpotqa-reflection --locked -j 1 --target-dir C:\\Users\\georg\\Documents\\DSRs-target",
+  "incremental": "0",
+  "exit_code": 0,
+  "reused_built_crate": false,
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: x86_64-pc-windows-msvc\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27)",
+  "cpu_identifier": "Intel64 Family 6 Model 142 Stepping 12, GenuineIntel",
+  "logical_cpus": "8",
+  "power_policy": "GUID des Energieschemas: 381b4222-f694-41f0-9685-ff5bb260df2e  (Ausbalanciert)",
+  "binary_sha256": "f92fad4d85f0e59e727677ed3e981bd2fdd730f37a7113aaf2861d49d0e85783",
+  "lock_sha256": "f9cea9f8ed91c895f9050e026b6908e2d9ce59f0f7db5185d50a2401b02382d1"
+}

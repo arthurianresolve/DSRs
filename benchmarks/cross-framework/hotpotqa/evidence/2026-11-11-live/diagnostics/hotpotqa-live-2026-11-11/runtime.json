@@ -1,0 +1,6 @@
+{
+  "ollama_binary_sha256": "a0c1e355537b0c037f2190edd339197fe3eb00387a46d6e26be695250262a790",
+  "linux_kernel": "6.18.54.1-microsoft-standard-WSL2 x86_64",
+  "runtime": "Temporary portable Ollama 0.40.16 under /tmp/dsrs-hotpotqa; models in that temporary tree; one sequential request and one loaded model; no system package installation",
+  "controller_command": "python benchmarks/cross-framework/hotpotqa/live.py --rust C:\\Users\\georg\\Documents\\DSRs-target\\release\\examples\\bench-hotpotqa-reflection.exe --out C:\\Users\\georg\\Documents\\dsrs-build\\hotpotqa-live-2026-11-11 --ollama http://127.0.0.1:11434 --model llama3.2:3b --samples 2 --wsl-distro Ubuntu-24.04"
+}

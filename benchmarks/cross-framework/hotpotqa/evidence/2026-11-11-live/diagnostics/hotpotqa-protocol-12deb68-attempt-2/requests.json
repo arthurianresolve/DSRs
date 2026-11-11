@@ -1,0 +1,11 @@
+[
+  {
+    "run": "protocol-dsrs",
+    "started_ns": 216478331731100,
+    "request_temperature": 0.0,
+    "request_max_tokens": null,
+    "ok": false,
+    "error": "expected temperature 0 and 128 output tokens; received temperature=0.0, max_tokens=None",
+    "proxy_wall_ns": 134700
+  }
+]

@@ -1,0 +1,7 @@
+Error: LLM call failed
+
+Caused by:
+    0: provider error from llama3.2:3b: completion failed (Server, HTTP status Some(500)): HttpError: Invalid status code 500 Internal Server Error with message: {"error": {"message": "both clients must use temperature 0 and 128 output tokens", "type": "profiling_error"}}
+    1: completion failed (Server, HTTP status Some(500)): HttpError: Invalid status code 500 Internal Server Error with message: {"error": {"message": "both clients must use temperature 0 and 128 output tokens", "type": "profiling_error"}}
+    2: HttpError: Invalid status code 500 Internal Server Error with message: {"error": {"message": "both clients must use temperature 0 and 128 output tokens", "type": "profiling_error"}}
+    3: Invalid status code 500 Internal Server Error with message: {"error": {"message": "both clients must use temperature 0 and 128 output tokens", "type": "profiling_error"}}

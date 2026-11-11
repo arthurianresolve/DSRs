@@ -1,0 +1,10 @@
+{
+  "utc": "2026-11-11T06:06:16.3408347Z",
+  "power_policy": "GUID des Energieschemas: 381b4222-f694-41f0-9685-ff5bb260df2e  (Ausbalanciert)\r\n",
+  "battery": [
+    {
+      "BatteryStatus": 2,
+      "EstimatedChargeRemaining": 97
+    }
+  ]
+}

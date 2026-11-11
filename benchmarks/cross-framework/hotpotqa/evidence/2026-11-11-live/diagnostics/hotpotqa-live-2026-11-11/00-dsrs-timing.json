@@ -1,0 +1,226 @@
+{
+  "framework": "dsrs",
+  "kind": "pipeline_timing",
+  "iterations": 1,
+  "warmup": 1,
+  "live": true,
+  "smoke": false,
+  "instrumented": false,
+  "simulated_wait_ms_per_stage": 0,
+  "cache": false,
+  "history": false,
+  "samples": [
+    {
+      "id": "5a8b57f25542995d1e6f1371",
+      "answer": "Yes",
+      "pipeline_ns": 34724936000,
+      "stage_ns": [
+        8371302900,
+        13606017700,
+        12747612500
+      ],
+      "simulated_wait_ns": 0,
+      "provider_ns": [
+        8371127100,
+        13605873700,
+        12747477000
+      ],
+      "adapter_events": [],
+      "expected_answer": "yes",
+      "exact_match": true,
+      "draft": "Yes",
+      "critique": "The answer is correct, as both Scott Derrickson and Ed Wood are indeed American filmmakers."
+    },
+    {
+      "id": "5a8c7595554299585d9e36b6",
+      "answer": "United States Ambassador",
+      "pipeline_ns": 45358162300,
+      "stage_ns": [
+        13905161700,
+        16219317800,
+        15233680200
+      ],
+      "simulated_wait_ns": 0,
+      "provider_ns": [
+        13905032800,
+        16219186400,
+        15233564900
+      ],
+      "adapter_events": [],
+      "expected_answer": "Chief of Protocol",
+      "exact_match": false,
+      "draft": "United States Ambassador to Ghana and Czechoslovakia",
+      "critique": "The answer is too specific, as the question asks for the government position, not the countries she was ambassador to."
+    },
+    {
+      "id": "5a85ea095542994775f606a8",
+      "answer": "The Hork-Bajir Chronicles is a companion book to the Animorphs series, written by K. A. Applegate, and takes place before book #23, \"The Pretender\", with events occurring between \"The Ellimist Chronicles\" and \"The Andalite Chronicles\".",
+      "pipeline_ns": 81129863300,
+      "stage_ns": [
+        17471369000,
+        30776421000,
+        32882068800
+      ],
+      "simulated_wait_ns": 0,
+      "provider_ns": [
+        17471235800,
+        30776280300,
+        32881927600
+      ],
+      "adapter_events": [],
+      "expected_answer": "Animorphs",
+      "exact_match": false,
+      "draft": "The Hork-Bajir Chronicles",
+      "critique": "The answer is accurate in stating that The Hork-Bajir Chronicles is a companion book to the Animorphs series, but it would be more informative to specify the author, K. A. Applegate, and provide more context about the series' continuity."
+    }
+  ],
+  "process_interval": {
+    "wall_ns": 161291768900,
+    "cpu_ns": 15625000,
+    "non_cpu_wall_lower_bound_ns": 161276143900
+  },
+  "provider_records": [
+    {
+      "run": "00-dsrs-timing",
+      "started_ns": 207898742105300,
+      "request_sha256": "afbd3df81f399e4bc31bf72229db8467b555a1ec224806928b00a19e1f2f20a9",
+      "provider_wall_ns": 8368761800,
+      "total_duration": 8352430840,
+      "load_duration": 1736214,
+      "prompt_eval_duration": 6384529000,
+      "eval_duration": 1905468000,
+      "prompt_eval_count": 295,
+      "eval_count": 13,
+      "ok": true,
+      "proxy_wall_ns": 8369045000
+    },
+    {
+      "run": "00-dsrs-timing",
+      "started_ns": 207907114191800,
+      "request_sha256": "32d89dcd44d5ba6475a3771cc0a86070187b063f814ef43beb9149324a3032bb",
+      "provider_wall_ns": 13602996800,
+      "total_duration": 13598341566,
+      "load_duration": 2483418,
+      "prompt_eval_duration": 8971651000,
+      "eval_duration": 4559138000,
+      "prompt_eval_count": 315,
+      "eval_count": 29,
+      "ok": true,
+      "proxy_wall_ns": 13603327900
+    },
+    {
+      "run": "00-dsrs-timing",
+      "started_ns": 207920719740500,
+      "request_sha256": "342e8cf65c2c7b4d50fa39c4f21f9eb095f26129791809ff859c34d078a881bc",
+      "provider_wall_ns": 12744799000,
+      "total_duration": 12740516233,
+      "load_duration": 2243416,
+      "prompt_eval_duration": 10606319000,
+      "eval_duration": 2055681999,
+      "prompt_eval_count": 360,
+      "eval_count": 13,
+      "ok": true,
+      "proxy_wall_ns": 12745143100
+    },
+    {
+      "run": "00-dsrs-timing",
+      "started_ns": 207933467322600,
+      "request_sha256": "b0816df3c8568478532f08ccca311572f11b9db390e4c52a6192c8cd2abedccc",
+      "provider_wall_ns": 13902829800,
+      "total_duration": 13897163282,
+      "load_duration": 4538332,
+      "prompt_eval_duration": 9391836000,
+      "eval_duration": 4443382000,
+      "prompt_eval_count": 369,
+      "eval_count": 22,
+      "ok": true,
+      "proxy_wall_ns": 13903102900
+    },
+    {
+      "run": "00-dsrs-timing",
+      "started_ns": 207947372371500,
+      "request_sha256": "15af37ab7ea84ce934a96d2dcbf1630845dd4a436d682976fec010d663d031fd",
+      "provider_wall_ns": 16216131100,
+      "total_duration": 16204607241,
+      "load_duration": 1682112,
+      "prompt_eval_duration": 11227066000,
+      "eval_duration": 4926596000,
+      "prompt_eval_count": 398,
+      "eval_count": 34,
+      "ok": true,
+      "proxy_wall_ns": 16216491600
+    },
+    {
+      "run": "00-dsrs-timing",
+      "started_ns": 207963591828400,
+      "request_sha256": "5a83afe39e5fa3a8f5ba77b197cd5e47ab15282d96f648b07b323aca3b29f03c",
+      "provider_wall_ns": 15231246700,
+      "total_duration": 15215662347,
+      "load_duration": 2141716,
+      "prompt_eval_duration": 13055886000,
+      "eval_duration": 2099929000,
+      "prompt_eval_count": 448,
+      "eval_count": 15,
+      "ok": true,
+      "proxy_wall_ns": 15231506400
+    },
+    {
+      "run": "00-dsrs-timing",
+      "started_ns": 207978825222200,
+      "request_sha256": "c533f5826c559bc99828ab4d8a9a05207b8a34a9a9cc9961f4889fe8d4d26658",
+      "provider_wall_ns": 17468688500,
+      "total_duration": 17456122175,
+      "load_duration": 1712613,
+      "prompt_eval_duration": 14947002000,
+      "eval_duration": 2448668000,
+      "prompt_eval_count": 504,
+      "eval_count": 19,
+      "ok": true,
+      "proxy_wall_ns": 17468953900
+    },
+    {
+      "run": "00-dsrs-timing",
+      "started_ns": 207996296907300,
+      "request_sha256": "951473d71ba963237ebf4da915fec458b5873c4265ddbb0d991f134b78d54195",
+      "provider_wall_ns": 30773245900,
+      "total_duration": 30769647687,
+      "load_duration": 1448210,
+      "prompt_eval_duration": 19131360000,
+      "eval_duration": 11573923000,
+      "prompt_eval_count": 530,
+      "eval_count": 64,
+      "ok": true,
+      "proxy_wall_ns": 30773542800
+    },
+    {
+      "run": "00-dsrs-timing",
+      "started_ns": 208027073340400,
+      "request_sha256": "a2b268361ac3507faf568a6ef4d204fdd9a5b5498ddffdc3e1ce0b82b8622c2b",
+      "provider_wall_ns": 32879577800,
+      "total_duration": 32875647822,
+      "load_duration": 1803113,
+      "prompt_eval_duration": 19442831000,
+      "eval_duration": 13347709000,
+      "prompt_eval_count": 610,
+      "eval_count": 70,
+      "ok": true,
+      "proxy_wall_ns": 32879841100
+    }
+  ],
+  "exit_code": 0,
+  "compiler_interference": [
+    "cargo.exe",
+    "cargo.exe",
+    "cargo.exe",
+    "cargo.exe",
+    "cargo.exe",
+    "cargo.exe",
+    "cargo.exe",
+    "cargo.exe",
+    "cargo.exe",
+    "cargo.exe",
+    "cargo.exe",
+    "cargo.exe",
+    "cargo.exe"
+  ]
+}

@@ -1,0 +1,35 @@
+[
+  {
+    "run": "00-dsrs-timing-retry-1",
+    "framework": "dsrs",
+    "instrumented": false,
+    "pipelines": 3,
+    "provider_requests": 9,
+    "pipeline_ns_mean": 52507829333.333336,
+    "stage_ns_mean": [
+      13844639200,
+      17248341133.333332,
+      21414845100
+    ],
+    "provider_sdk_ns_mean": 17502478533.333332,
+    "client_other_wall_ns_per_pipeline": 393733.3333333333,
+    "adapter_format_ns_mean": null,
+    "adapter_parse_ns_mean": null,
+    "server_phase_ns_mean": {
+      "total_duration": 17492752273.77778,
+      "load_duration": 1816624.5555555555,
+      "prompt_eval_duration": 11025836111.11111,
+      "eval_duration": 6363068777.777778
+    },
+    "tokens_mean": {
+      "prompt_eval_count": 425.44444444444446,
+      "eval_count": 31
+    },
+    "exact_matches": 1,
+    "process_interval": {
+      "wall_ns": 157524387800,
+      "cpu_ns": 31250000,
+      "non_cpu_wall_lower_bound_ns": 157493137800
+    }
+  }
+]

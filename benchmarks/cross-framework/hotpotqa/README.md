@@ -62,6 +62,9 @@ time also includes result serialization and controller handoff. Its
 precise scheduler idle measurement: overlapping worker CPU and descheduling
 prevent that interpretation. Request timing and server phases identify waiting
 triggers; SDK time includes transport and provider waiting, not CPU alone.
+Process CPU counters have OS-dependent resolution. In this Windows run they
+advance in 15.625 ms increments; a zero delta means below the observed counter
+resolution, not zero work. Interpret the non-CPU lower bound at that precision.
 Pipeline-minus-SDK wall time is a residual, not isolated adapter CPU. Server
 phase times are Ollama's reported elapsed durations, not hardware CPU counters.
 
@@ -73,6 +76,9 @@ establish HotpotQA benchmark accuracy, production bottlenecks, confidence
 intervals or general speedup guarantees. Cold model/prompt costs are excluded.
 The manifest records model digest/version, executable/workload hashes, commit,
 toolchain and Python package versions; retain the build record alongside it.
+
+The completed local-model run and its limitations are documented in
+[the retained live results](evidence/2026-11-11-live/RESULTS.md).
 
 ## Offline controlled workload
 

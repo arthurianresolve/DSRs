@@ -1,0 +1,50 @@
+{
+  "measured_source": "bda64b29974cdd22e4e8004976a7e5c8f4d2263c",
+  "build_exit": 0,
+  "controller_exit": 0,
+  "accepted_runs": 6,
+  "interference_retries_used": 0,
+  "real_requests_including_warmup": 108,
+  "measured_requests": 54,
+  "timing_requests": 36,
+  "instrumented_requests": 18,
+  "all_responses_valid_json": true,
+  "all_measured_compiler_interference": [],
+  "workload_hashes_rechecked": true,
+  "release_integration_tests": {
+    "exit": 0,
+    "passed": 62,
+    "ignored_live": 3
+  },
+  "protocol_checks": {
+    "exit": 0,
+    "frameworks": 2,
+    "requests_per_framework": 9,
+    "exact_matches_per_framework": 0
+  },
+  "python_harness_tests": {
+    "exit": 0,
+    "passed": 7
+  },
+  "timing_quality": {
+    "dsrs": "0/6",
+    "dspy": "0/6"
+  },
+  "command": [
+    "live.py",
+    "--rust",
+    "frozen-profile-bda64b2-f92fad4d/bench-hotpotqa-reflection.exe",
+    "--out",
+    "hotpotqa-live-json-2026-11-11",
+    "--ollama",
+    "http://127.0.0.1:11434",
+    "--model",
+    "llama3.2:3b",
+    "--samples",
+    "2",
+    "--interference-retries",
+    "12",
+    "--wsl-distro",
+    "Ubuntu-24.04"
+  ]
+}

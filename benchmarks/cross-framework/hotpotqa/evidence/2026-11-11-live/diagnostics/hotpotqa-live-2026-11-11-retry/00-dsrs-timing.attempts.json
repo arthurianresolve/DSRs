@@ -1,0 +1,11 @@
+[
+  {
+    "run": "00-dsrs-timing",
+    "accepted": false,
+    "error": "compiler activity detected during the measured interval"
+  },
+  {
+    "run": "00-dsrs-timing-retry-1",
+    "accepted": true
+  }
+]

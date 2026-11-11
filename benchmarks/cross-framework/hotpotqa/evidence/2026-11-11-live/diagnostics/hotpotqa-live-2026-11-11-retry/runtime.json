@@ -1,0 +1,10 @@
+{
+  "ollama_binary_sha256": "a0c1e355537b0c037f2190edd339197fe3eb00387a46d6e26be695250262a790",
+  "linux_kernel": "6.18.54.1-microsoft-standard-WSL2 x86_64",
+  "runtime": "Temporary portable Ollama 0.40.16, CPU-only, under /tmp/dsrs-hotpotqa; one sequential request and one loaded model",
+  "binary_source": "cc62d7ad1fb1d8abc627c75f78f57447ef7a6b92",
+  "controller_source": "d326062aa64415d153e86c7dad59a711aeff4427",
+  "source_equivalence": "git diff --exit-code cc62d7a d326062 -- crates Cargo.toml Cargo.lock rust-toolchain.toml exited 0; later changes are Python/controller/docs only",
+  "binary_copy": "Frozen executable copied byte-for-byte outside the shared Cargo target; controller manifest records its SHA-256",
+  "controller_command": "python benchmarks/cross-framework/hotpotqa/live.py --rust C:\\Users\\georg\\Documents\\dsrs-build\\frozen-profile-cc62d7a\\bench-hotpotqa-reflection.exe --out C:\\Users\\georg\\Documents\\dsrs-build\\hotpotqa-live-2026-11-11-retry --ollama http://127.0.0.1:11434 --model llama3.2:3b --samples 2 --interference-retries 12 --wsl-distro Ubuntu-24.04"
+}

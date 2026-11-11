@@ -1,0 +1,105 @@
+
+running 7 tests
+test persistence_failure_is_returned_to_the_caller ... ok
+test failed_parsing_updates_the_same_record ... ok
+test cancellation_and_provider_failures_are_persistent ... ok
+test reopens_complete_typed_records_with_history_disabled ... ok
+test captured_traces_are_reopened_and_joined_to_call_ids ... ok
+test independent_handles_do_not_lose_concurrent_updates ... ok
+test torn_tail_is_recovered_but_corruption_is_rejected ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+
+running 21 tests
+test invalid_additional_parameters_fail_as_a_typed_request_error ... ok
+test permanent_status_fails_without_retry::case_1 ... ok
+test explicit_provider_limits_and_other_parameters_are_preserved::case_1 ... ok
+test permanent_status_fails_without_retry::case_2 ... ok
+test permanent_status_fails_without_retry::case_4 ... ok
+test retries_are_bounded_and_zero_disables_them::case_1 ... ok
+test explicit_provider_limits_and_other_parameters_are_preserved::case_2 ... ok
+test permanent_status_fails_without_retry::case_3 ... ok
+test provider_identity_changes_rebuild_client_and_allow_clearing_credentials ... ok
+test token_limit_and_config_copies_reach_the_http_payload::case_1 ... ok
+test token_limit_and_config_copies_reach_the_http_payload::case_3 ... ok
+test token_limit_and_config_copies_reach_the_http_payload::case_4 ... ok
+test token_limit_and_config_copies_reach_the_http_payload::case_2 ... ok
+test token_limit_and_config_copies_reach_the_http_payload::case_5 ... ok
+test token_limit_and_config_copies_reach_the_http_payload::case_6 ... ok
+test retries_are_bounded_and_zero_disables_them::case_2 ... ok
+test token_limit_and_config_copies_reach_the_http_payload::case_7 ... ok
+test token_limit_and_config_copies_reach_the_http_payload::case_8 ... ok
+test transient_status_retries_then_succeeds::case_2 ... ok
+test transient_status_retries_then_succeeds::case_3 ... ok
+test transient_status_retries_then_succeeds::case_1 ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+
+running 9 tests
+test missing_tool_feedback_remains_recoverable_without_executing_other_tools ... ok
+test caller_managed_loops_return_tool_calls_with_zero_auto_limit ... ok
+test final_completion_is_allowed_after_last_tool_round::case_1 ... ok
+test tool_execution_failure_keeps_name_context_and_original_cause ... ok
+test exhausted_limit_prevents_additional_tool_side_effects::case_2 ... ok
+test exhausted_limit_prevents_additional_tool_side_effects::case_3 ... ok
+test final_completion_is_allowed_after_last_tool_round::case_2 ... ok
+test exhausted_limit_prevents_additional_tool_side_effects::case_1 ... ok
+test zero_limit_allows_text_responses ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 3 tests
+test mock_and_dispatcher_use_the_same_provider_contract_and_lm_configuration ... ok
+test third_party_provider_uses_scoped_lm_and_call_overrides ... ok
+test public_errors_preserve_http_kind_retry_policy_and_nested_source ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 3 tests
+test native_json_enforces_nested_assertions_and_retains_nested_soft_checks ... ok
+test native_input_render_errors_are_fallible_and_do_not_reach_the_provider ... ok
+test one_signature_keeps_native_and_delimited_prompts_separate_across_runs ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 4 tests
+test live_ollama_scalar_string_and_numeric_object_fallbacks ... ignored, requires local Ollama with llama3.2 pulled
+test scalar_predictions_preserve_aliases_demos_history_and_conversations ... ok
+test scalar_coercion_keeps_constraints_and_continuation_input_format ... ok
+test multiple_outputs_and_tool_agents_keep_object_schemas ... ok
+
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 16 tests
+test live_typed_tool_fields::case_1 ... ignored, requires a running Ollama model; run explicitly
+test fields_are_recognized_through_typed_schema ... ok
+test live_typed_tool_fields::case_2 ... ignored, requires a running Ollama model; run explicitly
+test invalid_tool_schema_fails_before_request ... ok
+test history_rejects_system_role_injection ... ok
+test empty_declarations_can_return_no_tool_calls ... ok
+test native_and_prompt_tools_produce_the_same_typed_calls::case_1 ... ok
+test ordinary_history_lists_are_not_special_conversation_fields ... ok
+test conversation_surface_keeps_typed_tool_declarations ... ok
+test native_and_prompt_tools_produce_the_same_typed_calls::case_2 ... ok
+test absent_optional_context_does_not_require_history_or_tools ... ok
+test history_is_inserted_as_conversation_messages ... ok
+test prompt_fallback_executes_tools_and_formats_results_as_text ... ok
+test prompt_fallback_obeys_zero_tool_round_limit ... ok
+test prompt_fallback_rejects_malformed_tool_arguments ... ok
+test requested_tools_survive_metadata_and_strict_replay ... ok
+
+test result: ok. 14 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 2 tests
+test parse_failure_is_the_same_typed_failure_in_trace_and_history ... ok
+test runtime_trace_history_and_replay_preserve_composed_dataflow ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

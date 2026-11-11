@@ -1,0 +1,9 @@
+[
+  {
+    "run": "protocol-dsrs",
+    "started_ns": 216324303094400,
+    "ok": false,
+    "error": "both clients must use temperature 0 and 128 output tokens",
+    "proxy_wall_ns": 111700
+  }
+]

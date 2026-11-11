@@ -1,0 +1,4 @@
+Error: failed to parse LLM response
+
+Caused by:
+    1 field(s) failed to parse

@@ -1,0 +1,360 @@
+{
+  "framework": "dsrs",
+  "kind": "pipeline_timing",
+  "output_format": "json_schema",
+  "iterations": 1,
+  "warmup": 1,
+  "live": true,
+  "smoke": false,
+  "instrumented": true,
+  "simulated_wait_ms_per_stage": 0,
+  "cache": false,
+  "history": false,
+  "samples": [
+    {
+      "id": "5a8b57f25542995d1e6f1371",
+      "answer": "Yes, both were American filmmakers.",
+      "pipeline_ns": 19454020200,
+      "stage_ns": [
+        4787845000,
+        7892435500,
+        6773735400
+      ],
+      "simulated_wait_ns": 0,
+      "provider_ns": [
+        4787635000,
+        7892253500,
+        6773576200
+      ],
+      "adapter_events": [
+        [
+          "dsrs.adapter.format_input",
+          7200
+        ],
+        [
+          "dsrs.adapter.parse",
+          41100
+        ],
+        [
+          "dsrs.adapter.format_input",
+          8100
+        ],
+        [
+          "dsrs.adapter.parse",
+          12400
+        ],
+        [
+          "dsrs.adapter.format_input",
+          6500
+        ],
+        [
+          "dsrs.adapter.parse",
+          17700
+        ]
+      ],
+      "expected_answer": "yes",
+      "exact_match": false,
+      "draft": "Yes",
+      "critique": "Answer is too simplistic and doesn't consider the nationality of the individuals, only their association with the US film industry."
+    },
+    {
+      "id": "5a8c7595554299585d9e36b6",
+      "answer": "United States Ambassador to Ghana and Czechoslovakia",
+      "pipeline_ns": 27753706500,
+      "stage_ns": [
+        8231211400,
+        9709314100,
+        9813176800
+      ],
+      "simulated_wait_ns": 0,
+      "provider_ns": [
+        8231067700,
+        9709126800,
+        9812847900
+      ],
+      "adapter_events": [
+        [
+          "dsrs.adapter.format_input",
+          5500
+        ],
+        [
+          "dsrs.adapter.parse",
+          15100
+        ],
+        [
+          "dsrs.adapter.format_input",
+          5200
+        ],
+        [
+          "dsrs.adapter.parse",
+          16100
+        ],
+        [
+          "dsrs.adapter.format_input",
+          8700
+        ],
+        [
+          "dsrs.adapter.parse",
+          11600
+        ]
+      ],
+      "expected_answer": "Chief of Protocol",
+      "exact_match": false,
+      "draft": "United States Ambassador to Ghana and Czechoslovakia",
+      "critique": "The answer is too specific and does not mention Shirley Temple's adult career as a diplomat."
+    },
+    {
+      "id": "5a85ea095542994775f606a8",
+      "answer": "The Hork-Bajir Chronicles by K. A. Applegate",
+      "pipeline_ns": 9234346500,
+      "stage_ns": [
+        2609551300,
+        3629600200,
+        2995187600
+      ],
+      "simulated_wait_ns": 0,
+      "provider_ns": [
+        2609394300,
+        3629463300,
+        2995043800
+      ],
+      "adapter_events": [
+        [
+          "dsrs.adapter.format_input",
+          7700
+        ],
+        [
+          "dsrs.adapter.parse",
+          9100
+        ],
+        [
+          "dsrs.adapter.format_input",
+          4400
+        ],
+        [
+          "dsrs.adapter.parse",
+          26600
+        ],
+        [
+          "dsrs.adapter.format_input",
+          8700
+        ],
+        [
+          "dsrs.adapter.parse",
+          13800
+        ]
+      ],
+      "expected_answer": "Animorphs",
+      "exact_match": false,
+      "draft": "The Hork-Bajir Chronicles by K. A. Applegate",
+      "critique": "The answer is accurate but lacks depth, providing only the title and author of the companion book."
+    }
+  ],
+  "process_interval": {
+    "wall_ns": 56442869100,
+    "cpu_ns": 15625000,
+    "non_cpu_wall_lower_bound_ns": 56427244100
+  },
+  "provider_records": [
+    {
+      "run": "04-dsrs-profile",
+      "started_ns": 221338241301600,
+      "request_temperature": 0.0,
+      "request_max_tokens": 128,
+      "model": "llama3.2:3b",
+      "response_format": "json_schema",
+      "max_tokens": 128,
+      "request_sha256": "d118e99fb1c9ef76bcd730e6c2f6c6cb8f19822ffed01ea0ae6a6ff3b7464191",
+      "provider_wall_ns": 4785546800,
+      "total_duration": 4781506439,
+      "load_duration": 1685511,
+      "prompt_eval_duration": 4031516000,
+      "eval_duration": 700890000,
+      "prompt_eval_count": 194,
+      "eval_count": 7,
+      "done_reason": "stop",
+      "response_content": "{\"answer\": \"Yes\"}",
+      "response_json_valid": true,
+      "ok": true,
+      "proxy_wall_ns": 4785801200
+    },
+    {
+      "run": "04-dsrs-profile",
+      "started_ns": 221343029917400,
+      "request_temperature": 0.0,
+      "request_max_tokens": 128,
+      "model": "llama3.2:3b",
+      "response_format": "json_schema",
+      "max_tokens": 128,
+      "request_sha256": "d6e184e4e9633b880df79cb42f892b1c66525220e016912a407d785da226a45f",
+      "provider_wall_ns": 7889019300,
+      "total_duration": 7884410458,
+      "load_duration": 1229327,
+      "prompt_eval_duration": 4307903000,
+      "eval_duration": 3553147000,
+      "prompt_eval_count": 209,
+      "eval_count": 30,
+      "done_reason": "stop",
+      "response_content": "{\"critique\": \"Answer is too simplistic and doesn't consider the nationality of the individuals, only their association with the US film industry.\"}",
+      "response_json_valid": true,
+      "ok": true,
+      "proxy_wall_ns": 7889362200
+    },
+    {
+      "run": "04-dsrs-profile",
+      "started_ns": 221350921422600,
+      "request_temperature": 0.0,
+      "request_max_tokens": 128,
+      "model": "llama3.2:3b",
+      "response_format": "json_schema",
+      "max_tokens": 128,
+      "request_sha256": "19cbf9ac2a179b5d2a098311f7900def8066f5fe9657481479f5b133ff2e4147",
+      "provider_wall_ns": 6771781700,
+      "total_duration": 6758881023,
+      "load_duration": 1819615,
+      "prompt_eval_duration": 4984838000,
+      "eval_duration": 1753625000,
+      "prompt_eval_count": 249,
+      "eval_count": 15,
+      "done_reason": "stop",
+      "response_content": "{\n  \"answer\": \"Yes, both were American filmmakers.\"\n}",
+      "response_json_valid": true,
+      "ok": true,
+      "proxy_wall_ns": 6772040600
+    },
+    {
+      "run": "04-dsrs-profile",
+      "started_ns": 221357695215100,
+      "request_temperature": 0.0,
+      "request_max_tokens": 128,
+      "model": "llama3.2:3b",
+      "response_format": "json_schema",
+      "max_tokens": 128,
+      "request_sha256": "84183b65dce41df4400036788f4edafb7810d01fcdbae946c13f441e2812cee9",
+      "provider_wall_ns": 8229295500,
+      "total_duration": 8225963157,
+      "load_duration": 1200816,
+      "prompt_eval_duration": 6331598000,
+      "eval_duration": 1881102000,
+      "prompt_eval_count": 268,
+      "eval_count": 16,
+      "done_reason": "stop",
+      "response_content": "{\"answer\": \"United States Ambassador to Ghana and Czechoslovakia\"}",
+      "response_json_valid": true,
+      "ok": true,
+      "proxy_wall_ns": 8229528000
+    },
+    {
+      "run": "04-dsrs-profile",
+      "started_ns": 221365926425200,
+      "request_temperature": 0.0,
+      "request_max_tokens": 128,
+      "model": "llama3.2:3b",
+      "response_format": "json_schema",
+      "max_tokens": 128,
+      "request_sha256": "13e300a2f4dc377aa452ceb7f9b5930cc0cbb16bb199701c10e2713ceba996ed",
+      "provider_wall_ns": 9707311400,
+      "total_duration": 9684800308,
+      "load_duration": 1907113,
+      "prompt_eval_duration": 6694076000,
+      "eval_duration": 2975997000,
+      "prompt_eval_count": 292,
+      "eval_count": 25,
+      "done_reason": "stop",
+      "response_content": "{\"critique\": \"The answer is too specific and does not mention Shirley Temple's adult career as a diplomat.\"}",
+      "response_json_valid": true,
+      "ok": true,
+      "proxy_wall_ns": 9707579200
+    },
+    {
+      "run": "04-dsrs-profile",
+      "started_ns": 221375636653600,
+      "request_temperature": 0.0,
+      "request_max_tokens": 128,
+      "model": "llama3.2:3b",
+      "response_format": "json_schema",
+      "max_tokens": 128,
+      "request_sha256": "bb39cc75f386a19505025eae1f5ba6ad8c83ad0b03ac0301650f7c6b199255eb",
+      "provider_wall_ns": 9810153600,
+      "total_duration": 9806369373,
+      "load_duration": 944307,
+      "prompt_eval_duration": 7401666000,
+      "eval_duration": 2378338000,
+      "prompt_eval_count": 327,
+      "eval_count": 19,
+      "done_reason": "stop",
+      "response_content": "{\n  \"answer\": \"United States Ambassador to Ghana and Czechoslovakia\"\n}",
+      "response_json_valid": true,
+      "ok": true,
+      "proxy_wall_ns": 9810437800
+    },
+    {
+      "run": "04-dsrs-profile",
+      "started_ns": 221385449284300,
+      "request_temperature": 0.0,
+      "request_max_tokens": 128,
+      "model": "llama3.2:3b",
+      "response_format": "json_schema",
+      "max_tokens": 128,
+      "request_sha256": "7ded46e655bee1123a6f8503bdcad35592315e8cb8a601dbd49ca8ee45404442",
+      "provider_wall_ns": 2607324700,
+      "total_duration": 2604416035,
+      "load_duration": 1388010,
+      "prompt_eval_duration": 125197000,
+      "eval_duration": 2454398000,
+      "prompt_eval_count": 403,
+      "eval_count": 20,
+      "done_reason": "stop",
+      "response_content": "{\"answer\": \"The Hork-Bajir Chronicles by K. A. Applegate\"}",
+      "response_json_valid": true,
+      "ok": true,
+      "proxy_wall_ns": 2607550900
+    },
+    {
+      "run": "04-dsrs-profile",
+      "started_ns": 221388058347600,
+      "request_temperature": 0.0,
+      "request_max_tokens": 128,
+      "model": "llama3.2:3b",
+      "response_format": "json_schema",
+      "max_tokens": 128,
+      "request_sha256": "273922b1d64e1d6ee013e9258b974a89c606ed2a2667136bf98b5aa7d4adbcbb",
+      "provider_wall_ns": 3627614600,
+      "total_duration": 3614243832,
+      "load_duration": 1566211,
+      "prompt_eval_duration": 116287000,
+      "eval_duration": 3453483000,
+      "prompt_eval_count": 431,
+      "eval_count": 28,
+      "done_reason": "stop",
+      "response_content": "{\n  \"critique\": \"The answer is accurate but lacks depth, providing only the title and author of the companion book.\" }",
+      "response_json_valid": true,
+      "ok": true,
+      "proxy_wall_ns": 3627874800
+    },
+    {
+      "run": "04-dsrs-profile",
+      "started_ns": 221391688432000,
+      "request_temperature": 0.0,
+      "request_max_tokens": 128,
+      "model": "llama3.2:3b",
+      "response_format": "json_schema",
+      "max_tokens": 128,
+      "request_sha256": "e5764a00f5bcda0177acaaa62f869c336ac6f554c85e70e099f8084dac0693b3",
+      "provider_wall_ns": 2992851700,
+      "total_duration": 2989204702,
+      "load_duration": 1531910,
+      "prompt_eval_duration": 118407000,
+      "eval_duration": 2812569000,
+      "prompt_eval_count": 467,
+      "eval_count": 23,
+      "done_reason": "stop",
+      "response_content": "{\n  \"answer\": \"The Hork-Bajir Chronicles by K. A. Applegate\"\n}",
+      "response_json_valid": true,
+      "ok": true,
+      "proxy_wall_ns": 2993157300
+    }
+  ],
+  "exit_code": 0,
+  "compiler_interference": []
+}
