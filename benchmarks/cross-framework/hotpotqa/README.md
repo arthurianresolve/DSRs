@@ -25,6 +25,8 @@ compiler activity detected during a run invalidates it and is retained as a
 failure. No other benchmarks/model requests should run concurrently. The
 controller checks once per second, so the observer itself introduces some host
 overhead and cannot exclude every short unrelated task.
+Requests keep the model loaded for 30 minutes, longer than the controller's
+15-minute idle-wait limit, so waiting after warmup does not unload the model.
 
 Two runs per framework follow ABBA order. Each process warms one complete pass
 over the three fixtures, then times one pass. A separate instrumented pass per

@@ -63,7 +63,7 @@ class Proxy(BaseHTTPRequestHandler):
                     raise ValueError("message content must be text")
                 messages.append({"role": message["role"], "content": content})
             upstream = {"model": body["model"], "messages": messages, "stream": False,
-                        "keep_alive": "10m", "options": {"temperature": body["temperature"],
+                        "keep_alive": "30m", "options": {"temperature": body["temperature"],
                         "num_predict": body.get("max_tokens") or body.get("max_completion_tokens"),
                         "seed": 0, "num_thread": 4, "num_ctx": 2048}}
             record["request_sha256"] = hashlib.sha256(json.dumps(upstream, sort_keys=True).encode()).hexdigest()
@@ -240,7 +240,7 @@ def main():
                 "files": {str(p.relative_to(repo)): sha(p) for p in [here / "live.py", here / "bench_dspy.py", here / "fixture.json", repo / "crates/dspy-rs/examples/bench-hotpotqa-reflection.rs", repo / "Cargo.lock"]},
                 "packages": dict(sorted((d.metadata["Name"], d.version) for d in importlib.metadata.distributions())),
                 "policy": {"cache": False, "history": False, "retries": 0, "temperature": 0, "max_tokens": 64,
-                           "seed": 0, "num_thread": 4, "num_ctx": 2048, "warmup_passes": 1, "timed_passes": 1,
+                           "seed": 0, "num_thread": 4, "num_ctx": 2048, "keep_alive": "30m", "warmup_passes": 1, "timed_passes": 1,
                            "samples_per_framework": args.samples, "quality": "normalized final-answer exact match, reported without excluding failures"}}
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     Proxy.ollama = args.ollama
