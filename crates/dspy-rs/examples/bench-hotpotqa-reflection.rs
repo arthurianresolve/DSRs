@@ -1,5 +1,12 @@
 //! Offline three-stage HotpotQA reflection workload. See benchmarks/cross-framework/hotpotqa.
+use std::io::{BufRead, Write};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tracing_subscriber::{
+    Layer,
+    layer::{Context, SubscriberExt},
+    registry::LookupSpan,
+};
 
 use anyhow::{Result, ensure};
 use dspy_rs::ir::SignatureDef;
@@ -52,6 +59,68 @@ struct Revise {
 const CRITIQUE: &str = "The answer agrees with the supporting context.";
 const FIXTURE: &str = include_str!("../../../benchmarks/cross-framework/hotpotqa/fixture.json");
 
+#[derive(Clone, Default)]
+struct AdapterTimings(Arc<Mutex<Vec<(String, u64)>>>);
+impl<S: tracing::Subscriber + for<'a> LookupSpan<'a>> Layer<S> for AdapterTimings {
+    fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        if let Some(span) = ctx.span(id) {
+            span.extensions_mut().insert(Instant::now());
+        }
+    }
+    fn on_exit(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        if let Some(span) = ctx.span(id) {
+            if let Some(start) = span.extensions_mut().remove::<Instant>() {
+                self.0.lock().unwrap().push((
+                    span.metadata().name().to_string(),
+                    start.elapsed().as_nanos() as u64,
+                ));
+            }
+        }
+    }
+}
+
+struct TimedProvider {
+    inner: LMClient,
+    waits: Arc<Mutex<Vec<u64>>>,
+}
+impl dspy_rs::CompletionProvider for TimedProvider {
+    async fn completion(
+        &self,
+        request: rig::completion::CompletionRequest,
+    ) -> Result<rig::completion::CompletionResponse<()>, rig::completion::CompletionError> {
+        use dspy_rs::CompletionProvider;
+        let start = Instant::now();
+        let result = self.inner.completion(request).await;
+        self.waits
+            .lock()
+            .unwrap()
+            .push(start.elapsed().as_nanos() as u64);
+        result
+    }
+}
+
+fn barrier(label: &str) -> Result<()> {
+    if std::env::var_os("DSRS_PROFILE_BARRIER").is_some() {
+        println!("{label}");
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)?;
+        ensure!(line.trim() == "continue", "controller barrier closed");
+    }
+    Ok(())
+}
+
+fn normalized(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .filter(|w| !["a", "an", "the"].contains(w))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[derive(Deserialize)]
 struct Fixture {
     examples: Vec<Example>,
@@ -98,6 +167,22 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let iterations: usize = args.first().map(|s| s.parse()).transpose()?.unwrap_or(200);
     let wait_ms: u64 = args.get(1).map(|s| s.parse()).transpose()?.unwrap_or(0);
+    let live = args.iter().any(|s| s == "--live");
+    let instrumented = args.iter().any(|s| s == "--profile-runtime");
+    let warmup = if live { 1 } else { 20 };
+    ensure!(
+        !live || wait_ms == 0,
+        "live profiling must not inject simulated waiting"
+    );
+    let adapter_timings = AdapterTimings::default();
+    if instrumented {
+        let layer = adapter_timings
+            .clone()
+            .with_filter(tracing_subscriber::filter::filter_fn(|m| {
+                m.name().starts_with("dsrs.adapter.")
+            }));
+        tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer))?;
+    }
     ensure!(iterations > 0, "iterations must be positive");
     let fixture: Fixture = serde_json::from_str(FIXTURE)?;
     if args.iter().any(|arg| arg == "--profile-adapter") {
@@ -114,7 +199,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let replies = (0..iterations + 20).flat_map(|_| {
+    let replies = (0..iterations + warmup).flat_map(|_| {
         fixture.examples.iter().flat_map(|e| {
             [
                 response("answer", &e.answer),
@@ -124,15 +209,36 @@ async fn main() -> Result<()> {
             .map(|text| AssistantContent::Text(Text { text }))
         })
     });
-    let lm = LM::builder()
-        .model("openai:mock".to_string())
-        .api_key("unused-offline".into())
-        .cache(false)
-        .max_retries(0)
-        .build()
-        .await?
-        .with_client(LMClient::Test(TestCompletionModel::new(replies)))
-        .await?;
+    let waits = Arc::new(Mutex::new(Vec::new()));
+    let base_url = std::env::var("DSRS_PROFILE_BASE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:18084/v1".into());
+    let model = std::env::var("DSRS_PROFILE_MODEL").unwrap_or_else(|_| "llama3.2:1b".into());
+    let lm = if live {
+        LM::builder()
+            .base_url(base_url.clone())
+            .model(model.clone())
+            .temperature(0.0)
+            .max_tokens(192)
+            .cache(false)
+            .max_retries(0)
+            .build()
+            .await?
+            .with_client(LMClient::custom(TimedProvider {
+                inner: LMClient::from_local(&base_url, &model)?,
+                waits: waits.clone(),
+            }))
+            .await?
+    } else {
+        LM::builder()
+            .model("openai:mock".to_string())
+            .api_key("unused-offline".into())
+            .cache(false)
+            .max_retries(0)
+            .build()
+            .await?
+            .with_client(LMClient::Test(TestCompletionModel::new(replies)))
+            .await?
+    };
     lm.history.set_capacity(0);
     dspy_rs::set_history_capacity(0);
     let answer = Predict::<Answer>::builder()
@@ -149,8 +255,13 @@ async fn main() -> Result<()> {
     revise.set_history_capacity(0);
 
     let mut samples = Vec::new();
-    for iteration in 0..iterations + 20 {
+    for iteration in 0..iterations + warmup {
+        if live && iteration == warmup {
+            barrier("READY")?;
+        }
         for e in &fixture.examples {
+            let provider_start = waits.lock().unwrap().len();
+            let adapter_start = adapter_timings.0.lock().unwrap().len();
             let pipeline_start = Instant::now();
             let mut stage_ns = [0; 3];
             let mut wait_ns = 0;
@@ -168,7 +279,7 @@ async fn main() -> Result<()> {
                 .into_inner();
             stage_ns[0] = start.elapsed().as_nanos();
             ensure!(
-                first.answer == e.answer,
+                live || first.answer == e.answer,
                 "initial answer mismatch for {}",
                 e.id
             );
@@ -187,7 +298,7 @@ async fn main() -> Result<()> {
                 .into_inner();
             stage_ns[1] = start.elapsed().as_nanos();
             ensure!(
-                feedback.critique == CRITIQUE,
+                live || feedback.critique == CRITIQUE,
                 "critique mismatch for {}",
                 e.id
             );
@@ -200,27 +311,34 @@ async fn main() -> Result<()> {
                 .call(ReviseInput {
                     question: e.question.clone(),
                     context: e.context.clone(),
-                    draft: first.answer,
-                    critique: feedback.critique,
+                    draft: first.answer.clone(),
+                    critique: feedback.critique.clone(),
                 })
                 .await?
                 .into_inner();
             stage_ns[2] = start.elapsed().as_nanos();
             ensure!(
-                final_answer.answer == e.answer,
+                live || final_answer.answer == e.answer,
                 "revised answer mismatch for {}",
                 e.id
             );
-            if iteration >= 20 {
+            if iteration >= warmup {
+                let provider_ns = waits.lock().unwrap()[provider_start..].to_vec();
+                let adapter_events = adapter_timings.0.lock().unwrap()[adapter_start..].to_vec();
                 samples.push(json!({"id":e.id,"answer":final_answer.answer,"pipeline_ns":pipeline_start.elapsed().as_nanos() as u64,
-                    "stage_ns":stage_ns.map(|n|n as u64),"simulated_wait_ns":wait_ns as u64}));
+                    "stage_ns":stage_ns.map(|n|n as u64),"simulated_wait_ns":wait_ns as u64,
+                    "provider_ns":provider_ns,"adapter_events":adapter_events,"expected_answer":e.answer,
+                    "exact_match":normalized(&final_answer.answer)==normalized(&e.answer),"draft":first.answer,"critique":feedback.critique}));
             }
         }
     }
     println!(
         "{}",
-        json!({"framework":"dsrs","kind":"pipeline_timing","iterations":iterations,"warmup":20,
+        json!({"framework":"dsrs","kind":"pipeline_timing","iterations":iterations,"warmup":warmup,"live":live,"instrumented":instrumented,
         "simulated_wait_ms_per_stage":wait_ms,"cache":false,"history":false,"samples":samples})
     );
+    if live {
+        barrier("DONE")?;
+    }
     Ok(())
 }

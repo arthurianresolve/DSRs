@@ -293,6 +293,7 @@ impl ChatAdapter {
     /// 2. Field structure template (the `[[ ## field ## ]]` layout the LM should follow)
     /// 3. Response instructions (which fields to produce, in what order)
     /// 4. Task description (the def's instruction or the override)
+    #[tracing::instrument(name = "dsrs.adapter.format_system", skip_all)]
     pub fn build_system_def(
         &self,
         def: &SignatureDef,
@@ -389,6 +390,7 @@ impl ChatAdapter {
         )
     }
 
+    #[tracing::instrument(name = "dsrs.adapter.format_input", skip_all)]
     fn try_format_input_with_response(
         &self,
         def: &SignatureDef,
@@ -504,6 +506,7 @@ impl ChatAdapter {
     /// no global cache, no leak).
     #[tracing::instrument(name = "dsrs.adapter.parse", level = "debug", skip_all,
         fields(signature = %def.name, fields = def.outputs.len()))]
+    #[tracing::instrument(name = "dsrs.adapter.parse", skip_all)]
     pub fn parse_output_def(
         &self,
         def: &SignatureDef,
