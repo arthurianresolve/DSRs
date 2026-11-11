@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import queue
 import statistics
 import subprocess
 import sys
@@ -13,6 +14,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
 import psutil
 
@@ -20,8 +22,11 @@ import psutil
 def request_json(url, body=None):
     request = Request(url, None if body is None else json.dumps(body).encode(),
                       {"Content-Type": "application/json"})
-    with urlopen(request, timeout=240) as response:
-        return json.load(response)
+    try:
+        with urlopen(request, timeout=240) as response:
+            return json.load(response)
+    except HTTPError as error:
+        raise RuntimeError(f"HTTP {error.code}: {error.read().decode(errors='replace')[:2000]}") from error
 
 
 def sha(path):
@@ -47,10 +52,20 @@ class Proxy(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             if body.get("stream") or body.get("tools") or body.get("response_format"):
                 raise ValueError("this experiment uses non-streaming delimiter predictions without tools")
-            upstream = {"model": body["model"], "messages": body["messages"], "stream": False,
+            messages = []
+            for message in body["messages"]:
+                content = message["content"]
+                if isinstance(content, list):
+                    if not all(block.get("type") == "text" for block in content):
+                        raise ValueError("this fixture accepts text messages only")
+                    content = "".join(block["text"] for block in content)
+                if not isinstance(content, str):
+                    raise ValueError("message content must be text")
+                messages.append({"role": message["role"], "content": content})
+            upstream = {"model": body["model"], "messages": messages, "stream": False,
                         "keep_alive": "10m", "options": {"temperature": body["temperature"],
-                        "num_predict": body.get("max_tokens", body.get("max_completion_tokens")),
-                        "seed": 0, "num_thread": 4}}
+                        "num_predict": body.get("max_tokens") or body.get("max_completion_tokens"),
+                        "seed": 0, "num_thread": 4, "num_ctx": 2048}}
             record["request_sha256"] = hashlib.sha256(json.dumps(upstream, sort_keys=True).encode()).hexdigest()
             provider_start = time.perf_counter_ns()
             result = request_json(self.ollama + "/api/chat", upstream)
@@ -79,12 +94,21 @@ class Proxy(BaseHTTPRequestHandler):
 
 
 def cpu_ns(process):
-    times = process.cpu_times()
-    return round((times.user + times.system) * 1e9)
+    # Windows venv executables can be redirectors; include the real interpreter.
+    total = 0
+    for member in [process, *process.children(recursive=True)]:
+        times = member.cpu_times()
+        total += round((times.user + times.system) * 1e9)
+    return total
 
 
 def read_line(process, label):
-    line = process.stdout.readline()
+    result = queue.Queue()
+    threading.Thread(target=lambda: result.put(process.stdout.readline()), daemon=True).start()
+    try:
+        line = result.get(timeout=600)
+    except queue.Empty:
+        raise TimeoutError(f"child did not reach {label} within 10 minutes") from None
     if not line:
         raise RuntimeError(f"child exited before {label}; exit={process.poll()}")
     return line.strip()
@@ -112,12 +136,13 @@ def run(command, env, output, name, wsl):
     with (output / (name + ".stderr.txt")).open("w", encoding="utf-8") as stderr:
         child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                  stderr=stderr, env=env, text=True, encoding="utf-8", bufsize=1)
+        monitor_stop = threading.Event()
+        observer = None
         try:
             if read_line(child, "warmup barrier") != "READY":
                 raise RuntimeError("unexpected child warmup output")
             process = psutil.Process(child.pid)
             wait_idle(wsl)
-            monitor_stop = threading.Event()
             interference = []
             def monitor():
                 while not monitor_stop.wait(1):
@@ -158,6 +183,8 @@ def run(command, env, output, name, wsl):
             (output / (name + ".failure.json")).write_text(json.dumps({"error": str(error), "exit_code": child.poll()}), encoding="utf-8")
             raise
         finally:
+            monitor_stop.set()
+            if observer is not None: observer.join(timeout=5)
             if child.poll() is None:
                 child.kill(); child.wait()
 
@@ -173,8 +200,8 @@ def summarize(data):
             "stage_ns_mean": [statistics.mean(s["stage_ns"][i] for s in samples) for i in range(3)],
             "provider_sdk_ns_mean": sdk / len(records),
             "client_other_wall_ns_per_pipeline": (pipeline - sdk) / len(samples),
-            "adapter_format_ns_mean": statistics.mean([n for key, n in adapter if "format" in key]) if adapter else None,
-            "adapter_parse_ns_mean": statistics.mean([n for key, n in adapter if "parse" in key]) if adapter else None,
+            "adapter_format_ns_mean": sum(n for key, n in adapter if "format" in key) / len(records) if adapter else None,
+            "adapter_parse_ns_mean": sum(n for key, n in adapter if "parse" in key) / len(records) if adapter else None,
             "server_phase_ns_mean": {k: statistics.mean(r[k] for r in records) for k in
                 ["total_duration", "load_duration", "prompt_eval_duration", "eval_duration"]},
             "tokens_mean": {k: statistics.mean(r[k] for r in records) for k in ["prompt_eval_count", "eval_count"]},
@@ -187,7 +214,7 @@ def main():
     parser.add_argument("--rust", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--ollama", default="http://127.0.0.1:11434")
-    parser.add_argument("--model", default="llama3.2:1b")
+    parser.add_argument("--model", default="llama3.2:3b")
     parser.add_argument("--samples", type=int, default=2)
     parser.add_argument("--port", type=int, default=18084)
     parser.add_argument("--wsl-distro", help="Also gate measurements on compiler activity in this WSL distribution")
@@ -203,14 +230,17 @@ def main():
     args.out.mkdir(parents=True, exist_ok=False)
     manifest = {"revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
                 "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "platform": platform.platform(),
+                "processor": platform.processor(), "physical_cores": psutil.cpu_count(logical=False),
+                "logical_cpus": psutil.cpu_count(), "cpu_frequency": psutil.cpu_freq()._asdict() if psutil.cpu_freq() else None,
+                "wsl_distro": args.wsl_distro,
                 "rustc": subprocess.check_output(["rustc", "-Vv"], text=True), "python": sys.version,
                 "binary_sha256": sha(args.rust), "model": args.model,
                 "ollama_version": request_json(args.ollama + "/api/version"),
                 "models": request_json(args.ollama + "/api/tags"),
                 "files": {str(p.relative_to(repo)): sha(p) for p in [here / "live.py", here / "bench_dspy.py", here / "fixture.json", repo / "crates/dspy-rs/examples/bench-hotpotqa-reflection.rs", repo / "Cargo.lock"]},
                 "packages": dict(sorted((d.metadata["Name"], d.version) for d in importlib.metadata.distributions())),
-                "policy": {"cache": False, "history": False, "retries": 0, "temperature": 0, "max_tokens": 192,
-                           "seed": 0, "num_thread": 4, "warmup_passes": 1, "timed_passes": 1,
+                "policy": {"cache": False, "history": False, "retries": 0, "temperature": 0, "max_tokens": 64,
+                           "seed": 0, "num_thread": 4, "num_ctx": 2048, "warmup_passes": 1, "timed_passes": 1,
                            "samples_per_framework": args.samples, "quality": "normalized final-answer exact match, reported without excluding failures"}}
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     Proxy.ollama = args.ollama

@@ -4,21 +4,20 @@ import json
 from pathlib import Path
 import time
 import os
-import re
 
 import dspy
 from dspy.utils.dummies import DummyLM
 
 
 class Answer(dspy.Signature):
-    """Answer the question using the supplied context."""
+    """Answer the question using the supplied context. Return only the short answer, without explanation."""
     question: str = dspy.InputField()
     context: str = dspy.InputField()
     answer: str = dspy.OutputField()
 
 
 class Reflect(dspy.Signature):
-    """Critique the answer against the supplied context."""
+    """Critique the answer against the supplied context in one brief sentence."""
     question: str = dspy.InputField()
     context: str = dspy.InputField()
     answer: str = dspy.InputField()
@@ -26,7 +25,7 @@ class Reflect(dspy.Signature):
 
 
 class Revise(dspy.Signature):
-    """Revise the answer using the critique and supplied context."""
+    """Revise the answer using the critique and supplied context. Return only the short answer, without explanation."""
     question: str = dspy.InputField()
     context: str = dspy.InputField()
     draft: str = dspy.InputField()
@@ -99,8 +98,11 @@ def main():
     parser.add_argument("--profile-adapter", action="store_true")
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--profile-runtime", action="store_true")
+    parser.add_argument("--smoke", action="store_true", help="One fixture, no warmup; protocol checking only")
     args = parser.parse_args()
-    warmup = 1 if args.live else WARMUP
+    if args.smoke and not args.live:
+        parser.error("smoke mode requires a live provider")
+    warmup = 0 if args.smoke else 1 if args.live else WARMUP
     if args.live and args.wait_ms:
         parser.error("live profiling must not inject simulated waiting")
     if args.iterations <= 0 or args.wait_ms < 0:
@@ -108,6 +110,8 @@ def main():
     if dspy.__version__ != "3.2.1":
         raise RuntimeError("Install the pinned DSPy 3.2.1 benchmark environment")
     examples = json.loads(Path(__file__).with_name("fixture.json").read_text(encoding="utf-8"))["examples"]
+    if args.smoke:
+        examples = examples[:1]
     if args.profile_adapter:
         if args.wait_ms:
             parser.error("adapter replay has no simulated waiting")
@@ -126,9 +130,9 @@ def main():
     for _ in range(args.iterations + warmup):
         for e in examples:
             replies.extend([{"answer": e["answer"]}, {"critique": CRITIQUE}, {"answer": e["answer"]}])
-    lm = (TimedLM("openai/" + os.environ.get("DSRS_PROFILE_MODEL", "llama3.2:1b"),
+    lm = (TimedLM("openai/" + os.environ.get("DSRS_PROFILE_MODEL", "llama3.2:3b"),
         api_base=os.environ["DSRS_PROFILE_BASE_URL"], api_key="local-profile", cache=False,
-        temperature=0, max_tokens=192, num_retries=0) if args.live else DummyLM(replies))
+        temperature=0, max_tokens=64, num_retries=0) if args.live else DummyLM(replies))
     # DummyLM.forward consumes canned responses directly; it performs no cache lookup.
     lm.cache = False
     adapter_type = TimedAdapter if args.profile_runtime else dspy.ChatAdapter
@@ -169,7 +173,7 @@ def main():
                     "expected_answer": e["answer"], "exact_match": normalized(final.answer) == normalized(e["answer"]),
                     "draft": first.answer, "critique": feedback.critique})
     print(json.dumps({"framework": "dspy", "kind": "pipeline_timing", "iterations": args.iterations,
-        "warmup": warmup, "live": args.live, "instrumented": args.profile_runtime, "simulated_wait_ms_per_stage": args.wait_ms,
+        "warmup": warmup, "live": args.live, "smoke": args.smoke, "instrumented": args.profile_runtime, "simulated_wait_ms_per_stage": args.wait_ms,
         "cache": False, "history": False, "samples": samples}))
     if args.live:
         barrier("DONE")

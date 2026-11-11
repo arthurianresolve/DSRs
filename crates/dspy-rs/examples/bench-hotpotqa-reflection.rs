@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 #[derive(Signature, Clone, Debug)]
-/// Answer the question using the supplied context.
+/// Answer the question using the supplied context. Return only the short answer, without explanation.
 struct Answer {
     #[input]
     question: String,
@@ -29,7 +29,7 @@ struct Answer {
 }
 
 #[derive(Signature, Clone, Debug)]
-/// Critique the answer against the supplied context.
+/// Critique the answer against the supplied context in one brief sentence.
 struct Reflect {
     #[input]
     question: String,
@@ -42,7 +42,7 @@ struct Reflect {
 }
 
 #[derive(Signature, Clone, Debug)]
-/// Revise the answer using the critique and supplied context.
+/// Revise the answer using the critique and supplied context. Return only the short answer, without explanation.
 struct Revise {
     #[input]
     question: String,
@@ -169,7 +169,15 @@ async fn main() -> Result<()> {
     let wait_ms: u64 = args.get(1).map(|s| s.parse()).transpose()?.unwrap_or(0);
     let live = args.iter().any(|s| s == "--live");
     let instrumented = args.iter().any(|s| s == "--profile-runtime");
-    let warmup = if live { 1 } else { 20 };
+    let smoke = args.iter().any(|s| s == "--smoke");
+    ensure!(!smoke || live, "smoke mode requires a live provider");
+    let warmup = if smoke {
+        0
+    } else if live {
+        1
+    } else {
+        20
+    };
     ensure!(
         !live || wait_ms == 0,
         "live profiling must not inject simulated waiting"
@@ -184,7 +192,10 @@ async fn main() -> Result<()> {
         tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer))?;
     }
     ensure!(iterations > 0, "iterations must be positive");
-    let fixture: Fixture = serde_json::from_str(FIXTURE)?;
+    let mut fixture: Fixture = serde_json::from_str(FIXTURE)?;
+    if smoke {
+        fixture.examples.truncate(1);
+    }
     if args.iter().any(|arg| arg == "--profile-adapter") {
         ensure!(wait_ms == 0, "adapter replay has no simulated waiting");
         let profiles: Vec<_> = fixture.examples.iter().map(|e| json!({"id":e.id,
@@ -212,13 +223,13 @@ async fn main() -> Result<()> {
     let waits = Arc::new(Mutex::new(Vec::new()));
     let base_url = std::env::var("DSRS_PROFILE_BASE_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:18084/v1".into());
-    let model = std::env::var("DSRS_PROFILE_MODEL").unwrap_or_else(|_| "llama3.2:1b".into());
+    let model = std::env::var("DSRS_PROFILE_MODEL").unwrap_or_else(|_| "llama3.2:3b".into());
     let lm = if live {
         LM::builder()
             .base_url(base_url.clone())
             .model(model.clone())
             .temperature(0.0)
-            .max_tokens(192)
+            .max_tokens(64)
             .cache(false)
             .max_retries(0)
             .build()
@@ -334,7 +345,7 @@ async fn main() -> Result<()> {
     }
     println!(
         "{}",
-        json!({"framework":"dsrs","kind":"pipeline_timing","iterations":iterations,"warmup":warmup,"live":live,"instrumented":instrumented,
+        json!({"framework":"dsrs","kind":"pipeline_timing","iterations":iterations,"warmup":warmup,"live":live,"smoke":smoke,"instrumented":instrumented,
         "simulated_wait_ms_per_stage":wait_ms,"cache":false,"history":false,"samples":samples})
     );
     if live {
