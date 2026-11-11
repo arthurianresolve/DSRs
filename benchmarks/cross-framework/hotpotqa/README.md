@@ -22,7 +22,11 @@ python benchmarks/cross-framework/hotpotqa/live.py --rust target/release/example
 
 Omit `--wsl-distro` on other systems. Measurements wait for compiler-idle windows;
 compiler activity detected during a run invalidates it and is retained as a
-failure. No other benchmarks/model requests should run concurrently. The
+failure. The controller waits and repeats the complete warmup/measured attempt,
+up to `--interference-retries` additional attempts (default three). Accepted runs
+keep their planned ABBA order; every attempt has a distinct artifact name and
+an acceptance log. Provider/parse failures stop immediately, and incorrect
+answers are retained rather than retried. No other benchmarks/model requests should run concurrently. The
 controller checks once per second, so the observer itself introduces some host
 overhead and cannot exclude every short unrelated task.
 Requests keep the model loaded for 30 minutes, longer than the controller's

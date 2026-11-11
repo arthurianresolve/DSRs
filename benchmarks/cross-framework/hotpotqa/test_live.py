@@ -1,6 +1,9 @@
 import json
 import threading
 import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 from types import SimpleNamespace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -8,6 +11,39 @@ import live
 
 
 class ProfilingTests(unittest.TestCase):
+    def test_interference_retries_preserve_attempts_and_incorrect_answers(self):
+        data = {"samples": [{"exact_match": False}]}
+        env = {"DSRS_PROFILE_BASE_URL": "http://localhost:1234/00-dsrs-timing/v1"}
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(live, "wait_idle"), patch.object(live, "run", side_effect=[
+                live.CompilerInterference("busy"), data
+            ]) as execute:
+                name, actual = live.run_controlled([], env, Path(directory), "00-dsrs-timing", None, 1)
+            self.assertEqual(name, "00-dsrs-timing-retry-1")
+            self.assertIs(actual, data)
+            self.assertFalse(actual["samples"][0]["exact_match"])
+            self.assertEqual(execute.call_args_list[0].args[3], "00-dsrs-timing")
+            self.assertEqual(execute.call_args_list[1].args[1]["DSRS_PROFILE_BASE_URL"],
+                             "http://localhost:1234/00-dsrs-timing-retry-1/v1")
+            attempts = json.loads((Path(directory) / "00-dsrs-timing.attempts.json").read_text())
+            self.assertEqual([a["accepted"] for a in attempts], [False, True])
+
+    def test_provider_failures_are_not_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(live, "wait_idle"), patch.object(live, "run", side_effect=RuntimeError("provider failed")) as execute:
+                with self.assertRaisesRegex(RuntimeError, "provider failed"):
+                    live.run_controlled([], {"DSRS_PROFILE_BASE_URL": "http://localhost/x/v1"}, Path(directory), "x", None, 3)
+            self.assertEqual(execute.call_count, 1)
+
+    def test_interference_retry_budget_is_bounded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(live, "wait_idle"), patch.object(live, "run", side_effect=live.CompilerInterference("busy")) as execute:
+                with self.assertRaises(live.CompilerInterference):
+                    live.run_controlled([], {"DSRS_PROFILE_BASE_URL": "http://localhost/x/v1"}, Path(directory), "x", None, 1)
+            self.assertEqual(execute.call_count, 2)
+            attempts = json.loads((Path(directory) / "x.attempts.json").read_text())
+            self.assertTrue(all(not a["accepted"] for a in attempts))
+
     def test_cpu_counts_windows_interpreter_children(self):
         class Process:
             def __init__(self, user, system, children=()):

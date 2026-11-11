@@ -134,6 +134,10 @@ def wait_idle(wsl):
         time.sleep(2)
 
 
+class CompilerInterference(RuntimeError):
+    pass
+
+
 def run(command, env, output, name, wsl):
     with (output / (name + ".stderr.txt")).open("w", encoding="utf-8") as stderr:
         child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -176,7 +180,7 @@ def run(command, env, output, name, wsl):
             if child.returncode:
                 raise RuntimeError(f"child exit {child.returncode}")
             if interference:
-                raise RuntimeError("compiler activity detected during the measured interval")
+                raise CompilerInterference("compiler activity detected during the measured interval")
             assert len(data["provider_records"]) == len(data["samples"]) * 3
             assert all(r["ok"] for r in data["provider_records"])
             assert all(len(s["provider_ns"]) == 3 for s in data["samples"])
@@ -192,6 +196,27 @@ def run(command, env, output, name, wsl):
             if observer is not None: observer.join(timeout=5)
             if child.poll() is None:
                 child.kill(); child.wait()
+
+
+def run_controlled(command, env, output, label, wsl, interference_retries):
+    attempts = []
+    proxy_origin = env["DSRS_PROFILE_BASE_URL"].rsplit("/", 2)[0]
+    for attempt in range(interference_retries + 1):
+        wait_idle(wsl)
+        name = label if attempt == 0 else f"{label}-retry-{attempt}"
+        attempt_env = dict(env, DSRS_PROFILE_BASE_URL=f"{proxy_origin}/{name}/v1")
+        try:
+            data = run(command, attempt_env, output, name, wsl)
+        except CompilerInterference as error:
+            attempts.append({"run": name, "accepted": False, "error": str(error)})
+            (output / (label + ".attempts.json")).write_text(json.dumps(attempts, indent=2), encoding="utf-8")
+            print(f"rejected {name}: compiler interference", flush=True)
+            if attempt == interference_retries:
+                raise
+            continue
+        attempts.append({"run": name, "accepted": True})
+        (output / (label + ".attempts.json")).write_text(json.dumps(attempts, indent=2), encoding="utf-8")
+        return name, data
 
 
 def summarize(data):
@@ -221,11 +246,15 @@ def main():
     parser.add_argument("--ollama", default="http://127.0.0.1:11434")
     parser.add_argument("--model", default="llama3.2:3b")
     parser.add_argument("--samples", type=int, default=2)
+    parser.add_argument("--interference-retries", type=int, default=3,
+                        help="Additional complete attempts after compiler interference; provider/parse failures stop immediately")
     parser.add_argument("--port", type=int, default=18084)
     parser.add_argument("--wsl-distro", help="Also gate measurements on compiler activity in this WSL distribution")
     args = parser.parse_args()
     if args.samples < 2 or args.samples % 2:
         parser.error("samples must be even and at least two")
+    if args.interference_retries < 0:
+        parser.error("interference retries must be nonnegative")
     here = Path(__file__).resolve().parent
     repo = here.parents[2]
     if args.out.resolve().is_relative_to(repo):
@@ -246,7 +275,8 @@ def main():
                 "packages": dict(sorted((d.metadata["Name"], d.version) for d in importlib.metadata.distributions())),
                 "policy": {"cache": False, "history": False, "retries": 0, "temperature": 0, "max_tokens": 64,
                            "seed": 0, "num_thread": 4, "num_ctx": 2048, "keep_alive": "30m", "warmup_passes": 1, "timed_passes": 1,
-                           "samples_per_framework": args.samples, "quality": "normalized final-answer exact match, reported without excluding failures"}}
+                           "samples_per_framework": args.samples, "interference_retries": args.interference_retries,
+                           "quality": "normalized final-answer exact match, reported without excluding failures"}}
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     Proxy.ollama = args.ollama
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Proxy)
@@ -256,13 +286,12 @@ def main():
         order = [(f, False) for f in ["dsrs", "dspy", "dspy", "dsrs"] * (args.samples // 2)]
         order += [("dsrs", True), ("dspy", True)]
         for index, (framework, instrumented) in enumerate(order):
-            wait_idle(args.wsl_distro)
             name = f"{index:02d}-{framework}-{'profile' if instrumented else 'timing'}"
             command = ([str(args.rust.resolve())] if framework == "dsrs" else [sys.executable, str(here / "bench_dspy.py")]) + ["1", "0", "--live"]
             if instrumented: command.append("--profile-runtime")
             env = dict(os.environ, DSRS_PROFILE_BASE_URL=f"http://127.0.0.1:{args.port}/{name}/v1",
                        DSRS_PROFILE_MODEL=args.model, DSRS_PROFILE_BARRIER="1")
-            data = run(command, env, args.out, name, args.wsl_distro)
+            name, data = run_controlled(command, env, args.out, name, args.wsl_distro, args.interference_retries)
             results.append({"run": name, **summarize(data)})
             (args.out / "summary.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
             print(f"validated {name}: {len(data['samples'])} pipelines", flush=True)
