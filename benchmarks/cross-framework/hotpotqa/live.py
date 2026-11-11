@@ -178,6 +178,9 @@ def run(command, env, output, name, wsl):
             assert len(data["provider_records"]) == len(data["samples"]) * 3
             assert all(r["ok"] for r in data["provider_records"])
             assert all(len(s["provider_ns"]) == 3 for s in data["samples"])
+            if data["instrumented"]:
+                assert all(sum(key == "dsrs.adapter.parse" for key, _ in s["adapter_events"]) == 3
+                           for s in data["samples"]), "each stage must contribute exactly one parse span"
             return data
         except Exception as error:
             (output / (name + ".failure.json")).write_text(json.dumps({"error": str(error), "exit_code": child.poll()}), encoding="utf-8")

@@ -648,7 +648,6 @@ impl ChatAdapter {
     /// no global cache, no leak).
     #[tracing::instrument(name = "dsrs.adapter.parse", level = "debug", skip_all,
         fields(signature = %def.name, fields = def.outputs.len()))]
-    #[tracing::instrument(name = "dsrs.adapter.parse", skip_all)]
     pub fn parse_output_def(
         &self,
         def: &SignatureDef,
