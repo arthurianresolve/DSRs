@@ -1,0 +1,31 @@
+{
+  "assessment": "retrospective; the original experiment predates this quality gate",
+  "original_controller_exit": 0,
+  "measurement_status": "complete",
+  "quality_status": "failed",
+  "metric": "normalized final-answer exact match",
+  "required_exact_match_rate": 1.0,
+  "by_framework": {
+    "dsrs": {
+      "timing": {
+        "exact_matches": 0,
+        "samples": 6
+      },
+      "profile": {
+        "exact_matches": 0,
+        "samples": 3
+      }
+    },
+    "dspy": {
+      "timing": {
+        "exact_matches": 0,
+        "samples": 6
+      },
+      "profile": {
+        "exact_matches": 0,
+        "samples": 3
+      }
+    }
+  },
+  "equal_quality_comparison_eligible": false
+}

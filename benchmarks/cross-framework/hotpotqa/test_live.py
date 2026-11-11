@@ -13,6 +13,43 @@ import live
 
 
 class ProfilingTests(unittest.TestCase):
+    def quality_runs(self):
+        return [{"framework": framework, "instrumented": instrumented,
+                 "pipelines": 3, "exact_matches": 3} for framework, instrumented in
+                [("dsrs", False), ("dspy", False), ("dspy", False), ("dsrs", False),
+                 ("dsrs", True), ("dspy", True)]]
+
+    def test_equal_zero_quality_does_not_pass_the_quality_gate(self):
+        runs = self.quality_runs()
+        for run in runs:
+            run["exact_matches"] = 0
+        outcome = live.quality_verdict(runs)
+        self.assertEqual(outcome["quality_status"], "failed")
+        self.assertFalse(outcome["equal_quality_comparison_eligible"])
+        self.assertEqual(outcome["by_framework"]["dsrs"]["timing"], {"exact_matches": 0, "samples": 6})
+        self.assertTrue(all(r["exact_matches"] == 0 for r in runs))
+
+    def test_quality_failure_in_either_framework_or_profile_is_retained(self):
+        for index in (0, 1, 4, 5):
+            with self.subTest(index=index):
+                runs = self.quality_runs()
+                runs[index]["exact_matches"] = 2
+                outcome = live.quality_verdict(runs)
+                self.assertEqual(outcome["quality_status"], "failed")
+                self.assertFalse(outcome["equal_quality_comparison_eligible"])
+                self.assertEqual(runs[index]["exact_matches"], 2)
+
+    def test_quality_gate_accepts_correct_answers_from_both_frameworks(self):
+        outcome = live.quality_verdict(self.quality_runs())
+        self.assertEqual(outcome["quality_status"], "passed")
+        self.assertTrue(outcome["equal_quality_comparison_eligible"])
+
+    def test_missing_or_mismatched_quality_evidence_cannot_pass(self):
+        for runs in ([], self.quality_runs()[:1], self.quality_runs()[:-1], self.quality_runs()[1:]):
+            with self.subTest(runs=runs):
+                with self.assertRaises(ValueError):
+                    live.quality_verdict(runs)
+
     def test_task_instructions_match_across_frameworks(self):
         here = Path(__file__).resolve().parent
         source = (here.parents[2] / "crates/dspy-rs/examples/bench-hotpotqa-reflection.rs").read_text(encoding="utf-8")

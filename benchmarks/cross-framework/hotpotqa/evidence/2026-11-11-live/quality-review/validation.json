@@ -1,0 +1,15 @@
+{
+  "assessment": "Post-run answer and pipeline verification; no new real-model measurements",
+  "harness_regressions": {"passed": 11, "exit_code": 0},
+  "retrospective_quality_gate": {"exit_code": 2, "expected_exit_code": 2, "quality_status": "failed"},
+  "recorded_measured_replies_verified_against_parsed_values": 54,
+  "recorded_protocol_replies_verified_against_parsed_values": 18,
+  "final_answers_reviewed_including_warmups_and_protocol": 42,
+  "controlled_provider_check": {
+    "dsrs": {"requests": 9, "final_exact_matches": 3, "examples": 3, "exit_code": 0},
+    "dspy": {"requests": 9, "final_exact_matches": 3, "examples": 3, "exit_code": 0},
+    "model_quality_evidence": false
+  },
+  "original_measurement_artifacts_changed": false,
+  "alternative_model_comparison": "pending authenticated access"
+}

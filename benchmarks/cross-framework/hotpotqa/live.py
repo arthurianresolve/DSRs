@@ -258,6 +258,29 @@ def summarize(data):
             "process_interval": data["process_interval"]}
 
 
+def quality_verdict(results):
+    """Keep completed measurements distinct from a successful answer-quality check."""
+    if not results or {r["framework"] for r in results} != {"dsrs", "dspy"}:
+        raise ValueError("quality evaluation requires both frameworks")
+    by_framework = {}
+    for framework in ("dsrs", "dspy"):
+        phases = {}
+        for label, instrumented in (("timing", False), ("profile", True)):
+            runs = [r for r in results if r["framework"] == framework and r["instrumented"] == instrumented]
+            if not runs or any(r["pipelines"] <= 0 or not 0 <= r["exact_matches"] <= r["pipelines"] for r in runs):
+                raise ValueError(f"missing or invalid {framework} {label} quality measurements")
+            phases[label] = {"exact_matches": sum(r["exact_matches"] for r in runs),
+                             "samples": sum(r["pipelines"] for r in runs)}
+        by_framework[framework] = phases
+    for phase in ("timing", "profile"):
+        if by_framework["dsrs"][phase]["samples"] != by_framework["dspy"][phase]["samples"]:
+            raise ValueError(f"frameworks have different {phase} sample counts")
+    passed = all(p["exact_matches"] == p["samples"] for phases in by_framework.values() for p in phases.values())
+    return {"quality_status": "passed" if passed else "failed",
+            "metric": "normalized final-answer exact match", "required_exact_match_rate": 1.0,
+            "by_framework": by_framework, "equal_quality_comparison_eligible": passed}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rust", type=Path, required=True)
@@ -295,7 +318,7 @@ def main():
                 "policy": {"cache": False, "history": False, "retries": 0, "temperature": 0, "max_tokens": 128, "output_format": "json_schema",
                            "seed": 0, "num_thread": 4, "num_ctx": 2048, "keep_alive": "30m", "warmup_passes": 1, "timed_passes": 1,
                            "samples_per_framework": args.samples, "interference_retries": args.interference_retries,
-                           "quality": "normalized final-answer exact match, reported without excluding failures"}}
+                           "quality": "normalized final-answer exact match; all samples must match; failures retained without retry"}}
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     Proxy.ollama = args.ollama
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Proxy)
@@ -313,11 +336,16 @@ def main():
             name, data = run_controlled(command, env, args.out, name, args.wsl_distro, args.interference_retries)
             results.append({"run": name, **summarize(data)})
             (args.out / "summary.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
-            print(f"validated {name}: {len(data['samples'])} pipelines", flush=True)
+            print(f"measurement recorded {name}: {len(data['samples'])} pipelines, "
+                  f"{results[-1]['exact_matches']}/{len(data['samples'])} exact matches", flush=True)
     finally:
         (args.out / "all-provider-records.json").write_text(json.dumps(Proxy.records, indent=2), encoding="utf-8")
         server.shutdown(); server.server_close()
+    outcome = {"measurement_status": "complete", **quality_verdict(results)}
+    (args.out / "outcome.json").write_text(json.dumps(outcome, indent=2), encoding="utf-8")
+    print(f"measurement complete; answer quality {outcome['quality_status']}", flush=True)
+    return 0 if outcome["equal_quality_comparison_eligible"] else 2
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

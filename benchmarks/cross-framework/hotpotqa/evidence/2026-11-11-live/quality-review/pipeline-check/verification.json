@@ -1,0 +1,21 @@
+{
+  "kind": "controlled_response_pipeline_check",
+  "not_model_quality_evidence": true,
+  "binary_sha256": "f92fad4d85f0e59e727677ed3e981bd2fdd730f37a7113aaf2861d49d0e85783",
+  "results": [
+    {
+      "framework": "dsrs",
+      "exit_code": 0,
+      "requests": 9,
+      "exact_matches": 3,
+      "examples": 3
+    },
+    {
+      "framework": "dspy",
+      "exit_code": 0,
+      "requests": 9,
+      "exact_matches": 3,
+      "examples": 3
+    }
+  ]
+}

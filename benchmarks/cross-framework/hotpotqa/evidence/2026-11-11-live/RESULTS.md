@@ -2,7 +2,7 @@
 
 ## Scope and result
 
-This run completes the real provider/I/O attribution work for #23. Both clients
+This run supplies real provider/I/O attribution measurements for #23. Both clients
 execute Answer → Reflect → Revise over the same three supporting-sentence
 HotpotQA fixtures, using a real local CPU-only `llama3.2:3b` model. It measures
 this workload and identifies its waiting triggers; it does not establish a
@@ -73,6 +73,13 @@ token counts and generated answers differ, the model's prompt-cache behavior
 is not reset between requests, and neither client meets the exact-match quality
 target. These results do **not** demonstrate a 2× improvement, a universally
 faster implementation, or faster execution of an equally correct program.
+
+A subsequent [answer-quality review](QUALITY_REVIEW.md) checked the actual texts,
+raw model replies and request/response plumbing. It found correct verbose answers,
+an ambiguous reference question and genuine model-generated errors. The original
+controller's exit 0 meant measurement completion; it had no quality acceptance
+gate. Retrospective evaluation with the new gate fails. The original raw data and
+scores below remain unchanged.
 
 ## Adapter attribution and waiting
 

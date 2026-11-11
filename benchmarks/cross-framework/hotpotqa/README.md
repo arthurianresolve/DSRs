@@ -79,6 +79,18 @@ toolchain and Python package versions; retain the build record alongside it.
 
 The completed local-model run and its limitations are documented in
 [the retained live results](evidence/2026-11-11-live/RESULTS.md).
+Its [answer-quality review](evidence/2026-11-11-live/QUALITY_REVIEW.md) distinguishes
+formatting mismatches, an ambiguous reference question and factual model errors.
+
+Measurement completion and answer quality are separate outcomes. After all
+planned runs, the controller writes `outcome.json`. Its quality gate requires
+every final answer in both timing and instrumented passes to match the reference;
+it exits with status 2 when quality fails. Failed answers remain in the reports
+and are never retried to obtain a passing score. A passed quality gate establishes
+eligibility for further comparison, not proof of a speedup. The earlier retained
+experiment predates this gate: its native controller exit was 0, but retrospective
+quality evaluation fails. The raw experiment files and exact-match scores remain
+unchanged.
 
 ## Offline controlled workload
 
