@@ -1,0 +1,1940 @@
+[
+  {
+    "file": "prompt-results.json",
+    "status": "completed",
+    "requests": 72,
+    "stop_reasons": {
+      "stop": 72
+    },
+    "scores": [
+      {
+        "variant": "baseline",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "No",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "baseline",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "Yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "baseline",
+        "framework": "dspy",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "No",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "Shirley Temple",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles is a science fantasy young adult series told in first person, with a set of companion books narrating the stories of enslaved worlds and alien species.",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "baseline",
+        "framework": "dspy",
+        "cases": "original",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "Yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "Shirley Temple",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles is a science fantasy young adult series told in first person, with a set of companion books narrating the stories of enslaved worlds and alien species.",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "baseline",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "Mara and Leon have the same nationality.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "baseline",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "The answer is incorrect.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "baseline",
+        "framework": "dspy",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "No, Mara and Leon do not have the same nationality.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "baseline",
+        "framework": "dspy",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "Mara and Leon do not have the same nationality.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "independent_check",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "no",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "no",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "yes",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "independent_check",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "no",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "yes",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "independent_check",
+        "framework": "dspy",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "no",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "no",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "independent_check",
+        "framework": "dspy",
+        "cases": "original",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "no",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles is a science fantasy young adult series, told in first person, with a set of companion books narrating the stories of enslaved worlds and alien species.",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "independent_check",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "no",
+            "expected": "no",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "no",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "independent_check",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "yes",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound series",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "independent_check",
+        "framework": "dspy",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "no",
+            "expected": "no",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "no",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "independent_check",
+        "framework": "dspy",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "no",
+            "expected": "no",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound series",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "sampling-results.json",
+    "status": "completed",
+    "requests": 108,
+    "stop_reasons": {
+      "stop": 108
+    },
+    "scores": [
+      {
+        "variant": "sampling_seed_0",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "No",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_0",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "final",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "No",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_0",
+        "framework": "dspy",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "No",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "Shirley Temple was the woman who portrayed Corliss Archer in the film Kiss and Tell.",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_0",
+        "framework": "dspy",
+        "cases": "original",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "Yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "Shirley Temple was the woman who portrayed Corliss Archer in the film Kiss and Tell.",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles is the science fantasy young adult series, told in first person, with a set of companion books narrating the stories of enslaved worlds and alien species.",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_0",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "Mara and Leon have the same nationality.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_0",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "Mara and Leon have different nationalities, one Canadian and one French.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_0",
+        "framework": "dspy",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "No, Mara and Leon do not have the same nationality.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_0",
+        "framework": "dspy",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "Mara and Leon have different nationalities.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_1",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "no",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_1",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_1",
+        "framework": "dspy",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "No",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "Shirley Temple",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles is a science fantasy young adult series told in first person, with a set of companion books narrating the stories of enslaved worlds and alien species.",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_1",
+        "framework": "dspy",
+        "cases": "original",
+        "stage": "final",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "No",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "Shirley Temple",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles is a science fantasy young adult series told in first person, with the companion books narrating the stories of enslaved worlds and alien species.",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_1",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "No",
+            "expected": "no",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "Mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "The Moon Archive is a companion book to the Starbound series.",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_1",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "No",
+            "expected": "no",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "Mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "The Moon Archive is a companion book to the Starbound series.",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_1",
+        "framework": "dspy",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "No, Mara and Leon do not have the same nationality.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_1",
+        "framework": "dspy",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "Mara and Leon do not have the same nationality.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_2",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "No",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_2",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "Yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_2",
+        "framework": "dspy",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "No",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "The woman who portrayed Corliss Archer in the film Kiss and Tell was Shirley Temple Black.",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles is a science fantasy young adult series told in first person, with a set of companion books narrating the stories of enslaved worlds and alien species.",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_2",
+        "framework": "dspy",
+        "cases": "original",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "Yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "Shirley Temple Black",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles is a science fantasy young adult series told in first person, with a set of companion books narrating the stories of enslaved worlds and alien species.",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_2",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "false",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "The Moon Archive is a companion book to the Starbound series.",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_2",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "false",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "The Moon Archive is a companion book to the Starbound series.",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_2",
+        "framework": "dspy",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "No, Mara and Leon do not have the same nationality.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "The Moon Archive is a companion book to the Starbound series.",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "sampling_seed_2",
+        "framework": "dspy",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "Mara and Leon have different nationalities (Canadian and French).",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "The Moon Archive is a companion book to the Starbound series.",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "thinking-results.json",
+    "status": "completed",
+    "requests": 18,
+    "stop_reasons": {
+      "stop": 18
+    },
+    "scores": [
+      {
+        "variant": "thinking",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "Yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles is a science fantasy young adult series told in first person, with companion books narrating enslaved worlds and alien species. It is written by K. A. Applegate and features the story of the Hork-Bajir and their enslaved people, as well as the Andalite and Hork-Bajir characters.",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "thinking",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "Yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles is a science fantasy young adult series told in first person, with companion books narrating enslaved worlds and alien species.",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "thinking",
+        "framework": "dspy",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "Yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "Ambassador to Ghana and Ambassador to Czechoslovakia.",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "thinking",
+        "framework": "dspy",
+        "cases": "original",
+        "stage": "final",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "Yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "Ambassador to Ghana and Ambassador to Czechoslovakia.",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "Animorphs",
+            "expected": "Animorphs",
+            "exact_match": true
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "grounded-reflection-results.json",
+    "status": "completed",
+    "requests": 18,
+    "stop_reasons": {
+      "stop": 18
+    },
+    "scores": [
+      {
+        "variant": "grounded",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "No, Scott Derrickson and Ed Wood were of the same nationality.",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "Shirley Temple was the woman who portrayed Corliss Archer in the film Kiss and Tell.",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles is a science fantasy young adult series told in first person, with a set of companion books narrating the stories of enslaved worlds and alien species.",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "grounded",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "final",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "No, Scott Derrickson and Ed Wood were of different nationalities.",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "Shirley Temple was the woman who portrayed Corliss Archer in the film Kiss and Tell.",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles is a science fantasy young adult series told in first person, with a set of companion books narrating the stories of enslaved worlds and alien species.",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "grounded",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "Mara and Leon have the same nationality.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "The actor who played Rowan later served as mayor.",
+            "expected": "mayor",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "The Starbound series.",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "grounded",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "The evidence provided does not directly answer the question. The context sentences only describe the nationalities of the individuals, not their relationship to each other.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "The actor who played Rowan later served as mayor.",
+            "expected": "mayor",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "The Starbound series.",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "concise-reflection-results.json",
+    "status": "completed",
+    "requests": 18,
+    "stop_reasons": {
+      "stop": 18
+    },
+    "scores": [
+      {
+        "variant": "concise",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "false",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "concise",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "final",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "false",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "concise",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "false",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "concise",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "false",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "full-prompt-results.json",
+    "status": "completed",
+    "requests": 18,
+    "stop_reasons": {
+      "stop": 18
+    },
+    "scores": [
+      {
+        "variant": "full_prompt",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "false",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "full_prompt",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "final",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "false",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "full_prompt",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "Mara and Leon have the same nationality.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "The Moon Archive is a companion book to the Starbound series.",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "full_prompt",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "Mara and Leon have different nationalities, one Canadian and one French.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "The Moon Archive is a companion book to the Starbound series.",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "model-control-results.json",
+    "status": "completed",
+    "requests": 9,
+    "stop_reasons": {
+      "stop": 9
+    },
+    "scores": [
+      {
+        "variant": "model_control",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "Yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "Animorphs",
+            "expected": "Animorphs",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "model_control",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "Yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "checked-reflection-results.json",
+    "status": "completed",
+    "requests": 18,
+    "stop_reasons": {
+      "stop": 18
+    },
+    "scores": [
+      {
+        "variant": "checked_reflection",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 2,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "Yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "Animorphs",
+            "expected": "Animorphs",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "checked_reflection",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "Yes",
+            "expected": "yes",
+            "exact_match": true
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "checked_reflection",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 3,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "No",
+            "expected": "no",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      },
+      {
+        "variant": "checked_reflection",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 3,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "No",
+            "expected": "no",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "Starbound",
+            "expected": "Starbound",
+            "exact_match": true
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "checked-small-results.json",
+    "status": "completed",
+    "requests": 18,
+    "stop_reasons": {
+      "stop": 18
+    },
+    "scores": [
+      {
+        "variant": "checked_reflection",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "draft",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "No",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "checked_reflection",
+        "framework": "dsrs",
+        "cases": "original",
+        "stage": "final",
+        "matches": 0,
+        "total": 3,
+        "answers": [
+          {
+            "id": "5a8b57f25542995d1e6f1371",
+            "answer": "No",
+            "expected": "yes",
+            "exact_match": false
+          },
+          {
+            "id": "5a8c7595554299585d9e36b6",
+            "answer": "United States ambassador to Ghana and to Czechoslovakia",
+            "expected": "Chief of Protocol",
+            "exact_match": false
+          },
+          {
+            "id": "5a85ea095542994775f606a8",
+            "answer": "The Hork-Bajir Chronicles",
+            "expected": "Animorphs",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "checked_reflection",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "draft",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "Mara and Leon have the same nationality.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "The Moon Archive is a companion book to the Starbound series.",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      },
+      {
+        "variant": "checked_reflection",
+        "framework": "dsrs",
+        "cases": "additional",
+        "stage": "final",
+        "matches": 1,
+        "total": 3,
+        "answers": [
+          {
+            "id": "synthetic-nationality",
+            "answer": "The answer is incorrect. The question asks whether Mara and Leon have the same nationality, but the context provided only states that Mara is Canadian and Leon is French. There is no information to confirm their nationalities.",
+            "expected": "no",
+            "exact_match": false
+          },
+          {
+            "id": "synthetic-role",
+            "answer": "mayor",
+            "expected": "mayor",
+            "exact_match": true
+          },
+          {
+            "id": "synthetic-series",
+            "answer": "The Moon Archive is a companion book to the Starbound series.",
+            "expected": "Starbound",
+            "exact_match": false
+          }
+        ]
+      }
+    ]
+  }
+]

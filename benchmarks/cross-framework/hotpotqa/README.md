@@ -85,6 +85,10 @@ The [Qwen3-0.6B-Tasks rerun](evidence/2026-11-11-live/model-comparison/RESULTS.m
 completed fresh native pipelines with 1/3 exact matches each. It verifies field
 propagation against real replies but still fails answer quality; its browser
 transport makes it unsuitable for latency comparisons.
+The [DSRs failure investigation](evidence/2026-11-11-live/model-comparison/diagnosis/RESULTS.md)
+also checks the previous full prompt, alternative layouts, grounding, sampling
+and a larger model. Its unsuccessful candidates are retained; they have not been
+adopted as runtime fixes.
 
 Measurement completion and answer quality are separate outcomes. After all
 planned runs, the controller writes `outcome.json`. Its quality gate requires

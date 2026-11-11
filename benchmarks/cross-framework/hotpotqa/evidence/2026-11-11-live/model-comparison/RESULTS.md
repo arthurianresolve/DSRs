@@ -7,6 +7,10 @@ requests over the same three HotpotQA fixtures. **DSRs: 1/3 exact matches;
 DSPy: 1/3 exact matches. Answer quality failed.** Native exit 0 establishes
 protocol completion, not a passing answer-quality gate.
 
+The subsequent [DSRs failure investigation](diagnosis/RESULTS.md) tests prompt,
+sampling, reasoning, grounding and model alternatives. It identifies a correct
+draft being overwritten after incorrect criticism, but finds no verified fix.
+
 | Question/reference | DSRs final answer | DSPy final answer |
 | --- | --- | --- |
 | Same nationality? `yes` | `Yes` (match) | `Yes` (match) |
