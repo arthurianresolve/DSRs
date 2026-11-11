@@ -50,8 +50,16 @@ class Proxy(BaseHTTPRequestHandler):
             if not self.path.endswith("/v1/chat/completions"):
                 raise ValueError("unexpected completion endpoint")
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if body.get("stream") or body.get("tools") or body.get("response_format"):
-                raise ValueError("this experiment uses non-streaming delimiter predictions without tools")
+            if body.get("stream") or body.get("tools"):
+                raise ValueError("this experiment uses non-streaming predictions without tools")
+            response_format = body.get("response_format") or {}
+            schema = response_format.get("json_schema", {}).get("schema")
+            if response_format.get("type") != "json_schema" or not isinstance(schema, dict):
+                raise ValueError("both clients must request provider-native JSON Schema")
+            token_limit = body.get("max_tokens") or body.get("max_completion_tokens")
+            if token_limit != 128 or body.get("temperature") != 0:
+                raise ValueError("both clients must use temperature 0 and 128 output tokens")
+            record.update(model=body["model"], response_format="json_schema", max_tokens=token_limit)
             messages = []
             for message in body["messages"]:
                 content = message["content"]
@@ -62,7 +70,7 @@ class Proxy(BaseHTTPRequestHandler):
                 if not isinstance(content, str):
                     raise ValueError("message content must be text")
                 messages.append({"role": message["role"], "content": content})
-            upstream = {"model": body["model"], "messages": messages, "stream": False,
+            upstream = {"model": body["model"], "messages": messages, "stream": False, "format": schema,
                         "keep_alive": "30m", "options": {"temperature": body["temperature"],
                         "num_predict": body.get("max_tokens") or body.get("max_completion_tokens"),
                         "seed": 0, "num_thread": 4, "num_ctx": 2048}}
@@ -75,6 +83,11 @@ class Proxy(BaseHTTPRequestHandler):
             record["done_reason"] = result.get("done_reason")
             finish_reason = "length" if record["done_reason"] == "length" else "stop"
             content = result["message"]["content"]
+            record["response_content"] = content
+            try:
+                record["response_json_valid"] = isinstance(json.loads(content), dict)
+            except json.JSONDecodeError:
+                record["response_json_valid"] = False
             payload = {"id": "profile-local", "object": "chat.completion", "created": int(time.time()),
                        "model": body["model"], "choices": [{"index": 0, "finish_reason": finish_reason,
                        "message": {"role": "assistant", "content": content}}],
@@ -158,7 +171,8 @@ def run(command, env, output, name, wsl):
             before_cpu = cpu_ns(process)
             before_wall = time.perf_counter_ns()
             with Proxy.lock:
-                warmup_count = len([r for r in Proxy.records if r["run"] == name])
+                warmup_records = [r.copy() for r in Proxy.records if r["run"] == name]
+                warmup_count = len(warmup_records)
             child.stdin.write("continue\n"); child.stdin.flush()
             raw = read_line(child, "result")
             data = json.loads(raw)
@@ -182,7 +196,11 @@ def run(command, env, output, name, wsl):
             if interference:
                 raise CompilerInterference("compiler activity detected during the measured interval")
             assert len(data["provider_records"]) == len(data["samples"]) * 3
+            assert warmup_count == len(data["samples"]) * 3
+            assert all(r["ok"] and r["response_json_valid"] for r in warmup_records), "warmup returned malformed JSON"
             assert all(r["ok"] for r in data["provider_records"])
+            assert all(r["response_json_valid"] for r in data["provider_records"]), "provider returned malformed JSON"
+            assert all(r["model"] == env["DSRS_PROFILE_MODEL"] for r in data["provider_records"])
             assert all(len(s["provider_ns"]) == 3 for s in data["samples"])
             if data["instrumented"]:
                 assert all(sum(key == "dsrs.adapter.parse" for key, _ in s["adapter_events"]) == 3
@@ -273,7 +291,7 @@ def main():
                 "models": request_json(args.ollama + "/api/tags"),
                 "files": {str(p.relative_to(repo)): sha(p) for p in [here / "live.py", here / "bench_dspy.py", here / "fixture.json", repo / "crates/dspy-rs/examples/bench-hotpotqa-reflection.rs", repo / "Cargo.lock"]},
                 "packages": dict(sorted((d.metadata["Name"], d.version) for d in importlib.metadata.distributions())),
-                "policy": {"cache": False, "history": False, "retries": 0, "temperature": 0, "max_tokens": 64,
+                "policy": {"cache": False, "history": False, "retries": 0, "temperature": 0, "max_tokens": 128, "output_format": "json_schema",
                            "seed": 0, "num_thread": 4, "num_ctx": 2048, "keep_alive": "30m", "warmup_passes": 1, "timed_passes": 1,
                            "samples_per_framework": args.samples, "interference_retries": args.interference_retries,
                            "quality": "normalized final-answer exact match, reported without excluding failures"}}
@@ -287,7 +305,7 @@ def main():
         order += [("dsrs", True), ("dspy", True)]
         for index, (framework, instrumented) in enumerate(order):
             name = f"{index:02d}-{framework}-{'profile' if instrumented else 'timing'}"
-            command = ([str(args.rust.resolve())] if framework == "dsrs" else [sys.executable, str(here / "bench_dspy.py")]) + ["1", "0", "--live"]
+            command = ([str(args.rust.resolve())] if framework == "dsrs" else [sys.executable, str(here / "bench_dspy.py")]) + ["1", "0", "--live", "--json-output"]
             if instrumented: command.append("--profile-runtime")
             env = dict(os.environ, DSRS_PROFILE_BASE_URL=f"http://127.0.0.1:{args.port}/{name}/v1",
                        DSRS_PROFILE_MODEL=args.model, DSRS_PROFILE_BARRIER="1")

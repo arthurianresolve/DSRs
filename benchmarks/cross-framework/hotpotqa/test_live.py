@@ -86,7 +86,7 @@ class ProfilingTests(unittest.TestCase):
             def log_message(self, *args): pass
             def do_POST(self):
                 received.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
-                payload = json.dumps({"message": {"content": "answer"}, "total_duration": 30,
+                payload = json.dumps({"message": {"content": '{"answer":"answer"}'}, "total_duration": 30,
                     "load_duration": 1, "prompt_eval_duration": 8, "eval_duration": 20,
                     "prompt_eval_count": 3, "eval_count": 2, "done_reason": "length"}).encode()
                 self.send_response(200); self.send_header("Content-Length", str(len(payload)))
@@ -98,16 +98,28 @@ class ProfilingTests(unittest.TestCase):
         for server in [upstream, proxy]:
             threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
+            schema = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"], "additionalProperties": False}
             response = live.request_json(f"http://127.0.0.1:{proxy.server_port}/test/v1/chat/completions",
                 {"model": "local", "messages": [{"role": "user", "content": [{"type": "text", "text": "hello"}]}],
-                 "temperature": 0, "max_tokens": 64})
+                 "temperature": 0, "max_tokens": 128,
+                 "response_format": {"type": "json_schema", "json_schema": {"name": "Answer", "schema": schema, "strict": True}}})
             self.assertEqual(received[0]["messages"], [{"role": "user", "content": "hello"}])
-            self.assertEqual(received[0]["options"]["num_predict"], 64)
+            self.assertEqual(received[0]["options"]["num_predict"], 128)
+            self.assertEqual(received[0]["format"], schema)
             self.assertEqual(response["usage"]["total_tokens"], 5)
             self.assertEqual(response["choices"][0]["finish_reason"], "length")
             self.assertEqual(live.Proxy.records[0]["done_reason"], "length")
+            self.assertEqual(live.Proxy.records[0]["response_content"], '{"answer":"answer"}')
+            self.assertTrue(live.Proxy.records[0]["response_json_valid"])
             self.assertEqual(live.Proxy.records[0]["eval_duration"], 20)
             self.assertTrue(live.Proxy.records[0]["ok"])
+            import bench_dspy
+            lm = bench_dspy.TimedLM("openai/local", api_base=f"http://127.0.0.1:{proxy.server_port}/sdk/v1",
+                api_key="local-profile", cache=False, temperature=0, max_tokens=128, num_retries=0)
+            actual = bench_dspy.StrictJSONAdapter()(lm, {}, bench_dspy.Answer, [], {"question": "x", "context": "y"})
+            self.assertEqual(actual, [{"answer": "answer"}])
+            self.assertEqual(len(received), 2)
+            self.assertEqual(received[1]["format"]["properties"]["answer"]["type"], "string")
         finally:
             for server in [proxy, upstream]: server.shutdown(); server.server_close()
 

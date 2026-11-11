@@ -1,4 +1,4 @@
-//! Offline three-stage HotpotQA reflection workload. See benchmarks/cross-framework/hotpotqa.
+//! Offline and live HotpotQA reflection workload. See benchmarks/cross-framework/hotpotqa.
 use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 #[derive(Signature, Clone, Debug)]
-/// Answer the question using the supplied context. Write the short answer in the answer field, using the exact header [[ ## answer ## ]]. Finish with [[ ## completed ## ]]. Do not copy input fields.
+/// Answer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.
 struct Answer {
     #[input]
     question: String,
@@ -29,7 +29,7 @@ struct Answer {
 }
 
 #[derive(Signature, Clone, Debug)]
-/// Critique the answer against the supplied context in one brief sentence. Write it in the critique field, using the exact header [[ ## critique ## ]]. Finish with [[ ## completed ## ]]. Do not copy input fields.
+/// Critique the answer against the supplied context. Put one brief sentence in the critique output field. Do not copy input fields.
 struct Reflect {
     #[input]
     question: String,
@@ -42,7 +42,7 @@ struct Reflect {
 }
 
 #[derive(Signature, Clone, Debug)]
-/// Revise the answer using the critique and supplied context. Write the short answer in the answer field, using the exact header [[ ## answer ## ]]. Finish with [[ ## completed ## ]]. Do not copy input fields.
+/// Revise the answer using the critique and supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.
 struct Revise {
     #[input]
     question: String,
@@ -60,42 +60,53 @@ const CRITIQUE: &str = "The answer agrees with the supporting context.";
 const FIXTURE: &str = include_str!("../../../benchmarks/cross-framework/hotpotqa/fixture.json");
 
 #[derive(Clone, Default)]
-struct AdapterTimings(Arc<Mutex<Vec<(String, u64)>>>);
+struct AdapterTimings {
+    adapter: Arc<Mutex<Vec<(String, u64)>>>,
+    provider: Arc<Mutex<Vec<u64>>>,
+}
 impl<S: tracing::Subscriber + for<'a> LookupSpan<'a>> Layer<S> for AdapterTimings {
+    fn on_new_span(
+        &self,
+        _: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: Context<'_, S>,
+    ) {
+        if let Some(span) = ctx.span(id) {
+            if span.metadata().name() == "dsrs.provider.completion" {
+                span.extensions_mut().insert(Instant::now());
+            }
+        }
+    }
     fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
         if let Some(span) = ctx.span(id) {
-            span.extensions_mut().insert(Instant::now());
+            if span.metadata().name().starts_with("dsrs.adapter.") {
+                span.extensions_mut().insert(Instant::now());
+            }
         }
     }
     fn on_exit(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
         if let Some(span) = ctx.span(id) {
-            if let Some(start) = span.extensions_mut().remove::<Instant>() {
-                self.0.lock().unwrap().push((
-                    span.metadata().name().to_string(),
-                    start.elapsed().as_nanos() as u64,
-                ));
+            if span.metadata().name().starts_with("dsrs.adapter.") {
+                if let Some(start) = span.extensions_mut().remove::<Instant>() {
+                    self.adapter.lock().unwrap().push((
+                        span.metadata().name().to_string(),
+                        start.elapsed().as_nanos() as u64,
+                    ));
+                }
             }
         }
     }
-}
-
-struct TimedProvider {
-    inner: LMClient,
-    waits: Arc<Mutex<Vec<u64>>>,
-}
-impl dspy_rs::CompletionProvider for TimedProvider {
-    async fn completion(
-        &self,
-        request: rig::completion::CompletionRequest,
-    ) -> Result<rig::completion::CompletionResponse<()>, rig::completion::CompletionError> {
-        use dspy_rs::CompletionProvider;
-        let start = Instant::now();
-        let result = self.inner.completion(request).await;
-        self.waits
-            .lock()
-            .unwrap()
-            .push(start.elapsed().as_nanos() as u64);
-        result
+    fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
+        if let Some(span) = ctx.span(&id) {
+            if span.metadata().name() == "dsrs.provider.completion" {
+                if let Some(start) = span.extensions_mut().remove::<Instant>() {
+                    self.provider
+                        .lock()
+                        .unwrap()
+                        .push(start.elapsed().as_nanos() as u64);
+                }
+            }
+        }
     }
 }
 
@@ -171,6 +182,11 @@ async fn main() -> Result<()> {
     let instrumented = args.iter().any(|s| s == "--profile-runtime");
     let smoke = args.iter().any(|s| s == "--smoke");
     let protocol_check = args.iter().any(|s| s == "--check-protocol");
+    let json_output = args.iter().any(|s| s == "--json-output");
+    ensure!(
+        !json_output || live,
+        "JSON output mode requires a live provider"
+    );
     ensure!(
         !(smoke && protocol_check),
         "choose smoke or a full protocol check"
@@ -188,11 +204,12 @@ async fn main() -> Result<()> {
         "live profiling must not inject simulated waiting"
     );
     let adapter_timings = AdapterTimings::default();
-    if instrumented {
+    if instrumented || live {
         let layer = adapter_timings
             .clone()
-            .with_filter(tracing_subscriber::filter::filter_fn(|m| {
-                m.name().starts_with("dsrs.adapter.")
+            .with_filter(tracing_subscriber::filter::filter_fn(move |m| {
+                (live && m.name() == "dsrs.provider.completion")
+                    || (instrumented && m.name().starts_with("dsrs.adapter."))
             }));
         tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer))?;
     }
@@ -225,7 +242,7 @@ async fn main() -> Result<()> {
             .map(|text| AssistantContent::Text(Text { text }))
         })
     });
-    let waits = Arc::new(Mutex::new(Vec::new()));
+    let waits = adapter_timings.provider.clone();
     let base_url = std::env::var("DSRS_PROFILE_BASE_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:18084/v1".into());
     let model = std::env::var("DSRS_PROFILE_MODEL").unwrap_or_else(|_| "llama3.2:3b".into());
@@ -234,16 +251,13 @@ async fn main() -> Result<()> {
             .base_url(base_url.clone())
             .model(model.clone())
             .temperature(0.0)
-            .max_tokens(64)
+            .max_tokens(128)
             .cache(false)
             .max_retries(0)
             .build()
             .await?
-            .with_client(LMClient::custom(TimedProvider {
-                inner: LMClient::from_local(&base_url, &model)?,
-                waits: waits.clone(),
-            }))
-            .await?
+            .with_custom_output_schema(json_output)
+            .with_scalar_output_schema(false)
     } else {
         LM::builder()
             .model("openai:mock".to_string())
@@ -277,7 +291,7 @@ async fn main() -> Result<()> {
         }
         for e in &fixture.examples {
             let provider_start = waits.lock().unwrap().len();
-            let adapter_start = adapter_timings.0.lock().unwrap().len();
+            let adapter_start = adapter_timings.adapter.lock().unwrap().len();
             let pipeline_start = Instant::now();
             let mut stage_ns = [0; 3];
             let mut wait_ns = 0;
@@ -340,7 +354,8 @@ async fn main() -> Result<()> {
             );
             if iteration >= warmup {
                 let provider_ns = waits.lock().unwrap()[provider_start..].to_vec();
-                let adapter_events = adapter_timings.0.lock().unwrap()[adapter_start..].to_vec();
+                let adapter_events =
+                    adapter_timings.adapter.lock().unwrap()[adapter_start..].to_vec();
                 samples.push(json!({"id":e.id,"answer":final_answer.answer,"pipeline_ns":pipeline_start.elapsed().as_nanos() as u64,
                     "stage_ns":stage_ns.map(|n|n as u64),"simulated_wait_ns":wait_ns as u64,
                     "provider_ns":provider_ns,"adapter_events":adapter_events,"expected_answer":e.answer,
@@ -350,7 +365,7 @@ async fn main() -> Result<()> {
     }
     println!(
         "{}",
-        json!({"framework":"dsrs","kind":if protocol_check {"protocol_check"} else {"pipeline_timing"},"iterations":iterations,"warmup":warmup,"live":live,"smoke":smoke,"instrumented":instrumented,
+        json!({"framework":"dsrs","kind":if protocol_check {"protocol_check"} else {"pipeline_timing"},"output_format":if json_output {"json_schema"} else {"delimiter"},"iterations":iterations,"warmup":warmup,"live":live,"smoke":smoke,"instrumented":instrumented,
         "simulated_wait_ms_per_stage":wait_ms,"cache":false,"history":false,"samples":samples})
     );
     if live {

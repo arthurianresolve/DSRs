@@ -6,10 +6,14 @@
 instrumented HTTP proxy. The proxy translates their OpenAI-compatible requests
 to Ollama's native `/api/chat` endpoint so the report can retain server-reported
 loading, prompt-evaluation and generation timings and token counts. It does not
-generate, substitute or repair model answers. Both clients use the delimiter
-protocol, identical fixture/task instructions, temperature 0, 64 output tokens,
+generate, substitute or repair model answers. Both clients use provider-native
+JSON Schema output, identical fixture/task instructions, temperature 0, 128 output tokens,
 seed 0 at the proxy, four model CPU threads, a 2,048-token context, no response cache/history/retries,
-and one sequential request per stage. DSPy's JSON-adapter fallback is disabled.
+and one sequential request per stage. DSRs opts into the known endpoint's schema
+support and disables scalar JSON output for object parity. DSPy uses JSONAdapter
+formatting/parsing with its pinned schema exporter and no second-request
+fallback. Raw provider JSON must be valid before a run can be accepted, even if
+a client parser would tolerate or repair malformed JSON.
 
 Build a clean committed checkout using a locked release build, retaining the
 command/toolchain/exit and the executable hash. Then, with the pinned Python
@@ -36,20 +40,22 @@ Two runs per framework follow ABBA order. Each process warms one complete pass
 over the three fixtures, then times one pass. A separate instrumented pass per
 framework records actual adapter formatting/parsing, including Rust's system
 prompt cache behavior. Adapter instrumentation is excluded from the ABBA runs;
-lightweight SDK timers remain enabled in both. Instrumented runs provide
+lightweight SDK timers remain enabled in both. Rust records the full lifetime
+of the provider-dispatch span, including awaits, while Python times LM.forward.
+Instrumented runs provide
 attribution, not the cross-framework timing comparison. No simulated sleeps are
 inserted in live mode.
 
 Both client executables accept `--check-protocol` to run all three fixtures
 without warmup, using their configured `DSRS_PROFILE_BASE_URL` and
-`DSRS_PROFILE_MODEL`. Run with `1 0 --live --check-protocol`; these outputs are
+`DSRS_PROFILE_MODEL`. Run with `1 0 --live --json-output --check-protocol`; these outputs are
 labelled `protocol_check` and are correctness diagnostics, not timing evidence.
-The task instructions explicitly name the delimiter output fields in both
+The task instructions explicitly name the output fields in both
 frameworks. A regression checks that these instructions remain identical.
 
 The report retains pipeline/stage wall time, provider-SDK elapsed time, actual
 adapter spans, proxy/server timings, generated tokens, process CPU time and
-answers. CPU is sampled at barriers after warmup and before process exit;
+answers, raw response JSON and provider stop reasons. CPU is sampled at barriers after warmup and before process exit;
 initialization/imports/model construction are excluded. Process-interval wall
 time also includes result serialization and controller handoff. Its
 `max(0, wall - process CPU)` is a **lower bound on non-CPU wall time**, not a

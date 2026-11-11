@@ -127,6 +127,7 @@ macro_rules! completion_clients {
         }
 
         impl CompletionProvider for LMClient {
+            #[tracing::instrument(name = "dsrs.provider.completion", level = "debug", skip_all)]
             async fn completion(
                 &self,
                 request: CompletionRequest,

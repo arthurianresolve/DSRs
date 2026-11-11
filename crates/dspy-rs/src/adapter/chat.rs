@@ -446,6 +446,7 @@ impl ChatAdapter {
     /// System prompt for a provider-native JSON response. Primitive native outputs
     /// use the schema supplied through the API; complex outputs retain its prompt
     /// copy so nested descriptions remain visible to grammar-only providers.
+    #[tracing::instrument(name = "dsrs.adapter.format_system", skip_all)]
     pub fn build_system_json_def(
         &self,
         def: &SignatureDef,
@@ -734,6 +735,7 @@ impl ChatAdapter {
 
     /// Parses provider-native JSON output through the same coercion and constraint stage
     /// as delimiter responses. JSON object keys may use LM-facing aliases.
+    #[tracing::instrument(name = "dsrs.adapter.parse", skip_all)]
     pub fn parse_output_json_def(
         &self,
         def: &SignatureDef,

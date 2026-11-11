@@ -1,4 +1,4 @@
-"""Offline DSPy counterpart of bench-hotpotqa-reflection.rs; no provider calls."""
+"""DSPy counterpart of bench-hotpotqa-reflection.rs, with offline and live modes."""
 import argparse
 import json
 from pathlib import Path
@@ -7,17 +7,18 @@ import os
 
 import dspy
 from dspy.utils.dummies import DummyLM
+from dspy.adapters.json_adapter import _get_structured_outputs_response_format
 
 
 class Answer(dspy.Signature):
-    """Answer the question using the supplied context. Write the short answer in the answer field, using the exact header [[ ## answer ## ]]. Finish with [[ ## completed ## ]]. Do not copy input fields."""
+    """Answer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields."""
     question: str = dspy.InputField()
     context: str = dspy.InputField()
     answer: str = dspy.OutputField()
 
 
 class Reflect(dspy.Signature):
-    """Critique the answer against the supplied context in one brief sentence. Write it in the critique field, using the exact header [[ ## critique ## ]]. Finish with [[ ## completed ## ]]. Do not copy input fields."""
+    """Critique the answer against the supplied context. Put one brief sentence in the critique output field. Do not copy input fields."""
     question: str = dspy.InputField()
     context: str = dspy.InputField()
     answer: str = dspy.InputField()
@@ -25,7 +26,7 @@ class Reflect(dspy.Signature):
 
 
 class Revise(dspy.Signature):
-    """Revise the answer using the critique and supplied context. Write the short answer in the answer field, using the exact header [[ ## answer ## ]]. Finish with [[ ## completed ## ]]. Do not copy input fields."""
+    """Revise the answer using the critique and supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields."""
     question: str = dspy.InputField()
     context: str = dspy.InputField()
     draft: str = dspy.InputField()
@@ -47,7 +48,7 @@ class TimedLM(dspy.LM):
         finally:
             PROVIDER_NS.append(time.perf_counter_ns() - start)
 
-class TimedAdapter(dspy.ChatAdapter):
+class AdapterTiming:
     def format(self, *args, **kwargs):
         start = time.perf_counter_ns()
         try:
@@ -60,6 +61,18 @@ class TimedAdapter(dspy.ChatAdapter):
             return super().parse(*args, **kwargs)
         finally:
             ADAPTER_EVENTS.append(("dsrs.adapter.parse", time.perf_counter_ns() - start))
+
+class TimedAdapter(AdapterTiming, dspy.ChatAdapter):
+    pass
+
+class StrictJSONAdapter(dspy.JSONAdapter):
+    """Use the declared schema-capable endpoint without a second-request fallback."""
+    def __call__(self, lm, lm_kwargs, signature, demos, inputs):
+        lm_kwargs = dict(lm_kwargs, response_format=_get_structured_outputs_response_format(signature))
+        return dspy.ChatAdapter.__call__(self, lm, lm_kwargs, signature, demos, inputs)
+
+class TimedJSONAdapter(AdapterTiming, StrictJSONAdapter):
+    pass
 
 def barrier(label):
     if os.environ.get("DSRS_PROFILE_BARRIER"):
@@ -100,7 +113,10 @@ def main():
     parser.add_argument("--profile-runtime", action="store_true")
     parser.add_argument("--smoke", action="store_true", help="One fixture, no warmup; protocol checking only")
     parser.add_argument("--check-protocol", action="store_true", help="All fixtures, no warmup; correctness diagnostics, not timing evidence")
+    parser.add_argument("--json-output", action="store_true", help="Use the declared provider-native JSON Schema endpoint")
     args = parser.parse_args()
+    if args.json_output and not args.live:
+        parser.error("JSON output mode requires a live provider")
     if args.smoke and args.check_protocol:
         parser.error("choose smoke or a full protocol check")
     if args.smoke and not args.live:
@@ -135,11 +151,14 @@ def main():
             replies.extend([{"answer": e["answer"]}, {"critique": CRITIQUE}, {"answer": e["answer"]}])
     lm = (TimedLM("openai/" + os.environ.get("DSRS_PROFILE_MODEL", "llama3.2:3b"),
         api_base=os.environ["DSRS_PROFILE_BASE_URL"], api_key="local-profile", cache=False,
-        temperature=0, max_tokens=64, num_retries=0) if args.live else DummyLM(replies))
+        temperature=0, max_tokens=128, num_retries=0) if args.live else DummyLM(replies))
     # DummyLM.forward consumes canned responses directly; it performs no cache lookup.
     lm.cache = False
-    adapter_type = TimedAdapter if args.profile_runtime else dspy.ChatAdapter
-    dspy.configure(lm=lm, adapter=adapter_type(use_json_adapter_fallback=False), disable_history=True)
+    if args.json_output:
+        adapter = (TimedJSONAdapter if args.profile_runtime else StrictJSONAdapter)()
+    else:
+        adapter = (TimedAdapter if args.profile_runtime else dspy.ChatAdapter)(use_json_adapter_fallback=False)
+    dspy.configure(lm=lm, adapter=adapter, disable_history=True)
     answer, reflect, revise = dspy.Predict(Answer), dspy.Predict(Reflect), dspy.Predict(Revise)
     samples = []
     for iteration in range(args.iterations + warmup):
@@ -175,7 +194,7 @@ def main():
                     "provider_ns": PROVIDER_NS[provider_start:], "adapter_events": ADAPTER_EVENTS[adapter_start:],
                     "expected_answer": e["answer"], "exact_match": normalized(final.answer) == normalized(e["answer"]),
                     "draft": first.answer, "critique": feedback.critique})
-    print(json.dumps({"framework": "dspy", "kind": "protocol_check" if args.check_protocol else "pipeline_timing", "iterations": args.iterations,
+    print(json.dumps({"framework": "dspy", "kind": "protocol_check" if args.check_protocol else "pipeline_timing", "output_format": "json_schema" if args.json_output else "delimiter", "iterations": args.iterations,
         "warmup": warmup, "live": args.live, "smoke": args.smoke, "instrumented": args.profile_runtime, "simulated_wait_ms_per_stage": args.wait_ms,
         "cache": False, "history": False, "samples": samples}))
     if args.live:
