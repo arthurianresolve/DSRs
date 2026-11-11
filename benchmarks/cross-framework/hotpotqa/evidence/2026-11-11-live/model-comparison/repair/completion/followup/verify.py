@@ -36,17 +36,17 @@ def canonical(question, answer):
 
 
 build = read(root / "build-record.json")
+record_path = (root / "build-record.json").relative_to(repo).as_posix()
+evidence_commit = subprocess.check_output(
+    ["git", "log", "-n", "1", "--format=%H", "--", record_path],
+    cwd=repo,
+    text=True,
+).strip()
+assert evidence_commit
 for path, expected in build["source_blob_sha256"].items():
-    current = hashlib.sha256((repo / path).read_bytes()).hexdigest()
-    assert current in (expected, build["source_sha256"][path]), path
-    try:
-        committed = subprocess.check_output(
-            ["git", "show", f"HEAD:{path}"], cwd=repo, stderr=subprocess.DEVNULL
-        )
-    except subprocess.CalledProcessError:
-        committed = b""
-    if hashlib.sha256(committed).hexdigest() != expected:
-        committed = subprocess.check_output(["git", "show", f":{path}"], cwd=repo)
+    committed = subprocess.check_output(
+        ["git", "show", f"{evidence_commit}:{path}"], cwd=repo
+    )
     assert hashlib.sha256(committed).hexdigest() == expected, path
 assert all((root / name).read_text(encoding="utf-8").strip() == "0" for name in
            ("build.exit.txt", "rust-tests.exit.txt", "python-tests.exit.txt"))

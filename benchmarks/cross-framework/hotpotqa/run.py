@@ -37,7 +37,11 @@ def main():
         "rustc": subprocess.check_output(["rustc", "-Vv"], text=True),
         "cargo": subprocess.check_output(["cargo", "--version"], text=True).strip(),
         "rust_executable_sha256": sha256(rust),
-        "files": {p.name: sha256(p) for p in [here / "fixture.json", here / "bench_dspy.py", here / "run.py", repo / "Cargo.lock"]},
+        "files": {str(p.relative_to(repo)): sha256(p) for p in [here / "fixture.json", here / "supported-answer-annotations.json",
+            here / "bench_dspy.py", here / "scoring.py", here / "run.py",
+            repo / "crates/dspy-rs/examples/bench-hotpotqa-reflection.rs",
+            repo / "crates/dspy-rs/examples/support/hotpotqa_retrieval.rs",
+            repo / "crates/dspy-rs/examples/support/hotpotqa_scoring.rs", repo / "Cargo.lock"]},
         "python_packages": dict(sorted((d.metadata["Name"], d.version) for d in importlib.metadata.distributions())),
         "protocol": {"order": "ABBA repeated", "samples_per_framework": args.samples,
             "warmup": 20, "cpu_iterations": 200, "wait_iterations": 20, "simulated_wait_ms": 5}}

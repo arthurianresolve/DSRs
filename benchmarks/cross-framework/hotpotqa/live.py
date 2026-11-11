@@ -255,6 +255,7 @@ def summarize(data):
                 ["total_duration", "load_duration", "prompt_eval_duration", "eval_duration"]},
             "tokens_mean": {k: statistics.mean(r[k] for r in records) for k in ["prompt_eval_count", "eval_count"]},
             "exact_matches": sum(s["exact_match"] for s in samples),
+            "supported_answer_matches": sum(s["supported_answer_match"] for s in samples),
             "process_interval": data["process_interval"]}
 
 
@@ -267,17 +268,25 @@ def quality_verdict(results):
         phases = {}
         for label, instrumented in (("timing", False), ("profile", True)):
             runs = [r for r in results if r["framework"] == framework and r["instrumented"] == instrumented]
-            if not runs or any(r["pipelines"] <= 0 or not 0 <= r["exact_matches"] <= r["pipelines"] for r in runs):
+            if not runs or any(r["pipelines"] <= 0
+                               or not 0 <= r["exact_matches"] <= r["pipelines"]
+                               or not 0 <= r["supported_answer_matches"] <= r["pipelines"]
+                               for r in runs):
                 raise ValueError(f"missing or invalid {framework} {label} quality measurements")
             phases[label] = {"exact_matches": sum(r["exact_matches"] for r in runs),
+                             "supported_answer_matches": sum(r["supported_answer_matches"] for r in runs),
                              "samples": sum(r["pipelines"] for r in runs)}
         by_framework[framework] = phases
     for phase in ("timing", "profile"):
         if by_framework["dsrs"][phase]["samples"] != by_framework["dspy"][phase]["samples"]:
             raise ValueError(f"frameworks have different {phase} sample counts")
     passed = all(p["exact_matches"] == p["samples"] for phases in by_framework.values() for p in phases.values())
+    supported_passed = all(p["supported_answer_matches"] == p["samples"]
+                           for phases in by_framework.values() for p in phases.values())
     return {"quality_status": "passed" if passed else "failed",
             "metric": "normalized final-answer exact match", "required_exact_match_rate": 1.0,
+            "supported_answer_quality_status": "passed" if supported_passed else "failed",
+            "supported_metric": "context-supported normalized exact match (diagnostic only)",
             "by_framework": by_framework, "equal_quality_comparison_eligible": passed}
 
 
@@ -313,12 +322,16 @@ def main():
                 "binary_sha256": sha(args.rust), "model": args.model,
                 "ollama_version": request_json(args.ollama + "/api/version"),
                 "models": request_json(args.ollama + "/api/tags"),
-                "files": {str(p.relative_to(repo)): sha(p) for p in [here / "live.py", here / "bench_dspy.py", here / "fixture.json", repo / "crates/dspy-rs/examples/bench-hotpotqa-reflection.rs", repo / "Cargo.lock"]},
+                "files": {str(p.relative_to(repo)): sha(p) for p in [here / "live.py", here / "bench_dspy.py",
+                    here / "scoring.py", here / "fixture.json", here / "supported-answer-annotations.json",
+                    repo / "crates/dspy-rs/examples/bench-hotpotqa-reflection.rs",
+                    repo / "crates/dspy-rs/examples/support/hotpotqa_retrieval.rs",
+                    repo / "crates/dspy-rs/examples/support/hotpotqa_scoring.rs", repo / "Cargo.lock"]},
                 "packages": dict(sorted((d.metadata["Name"], d.version) for d in importlib.metadata.distributions())),
                 "policy": {"cache": False, "history": False, "retries": 0, "temperature": 0, "max_tokens": 128, "output_format": "json_schema",
                            "seed": 0, "num_thread": 4, "num_ctx": 2048, "keep_alive": "30m", "warmup_passes": 1, "timed_passes": 1,
                            "samples_per_framework": args.samples, "interference_retries": args.interference_retries,
-                           "quality": "normalized final-answer exact match; all samples must match; failures retained without retry"}}
+                           "quality": "official normalized final-answer exact match remains the gate; context-supported match is diagnostic only; failures retained without retry"}}
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     Proxy.ollama = args.ollama
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Proxy)

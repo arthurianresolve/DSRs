@@ -10,12 +10,14 @@ from types import SimpleNamespace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import live
+import scoring
 
 
 class ProfilingTests(unittest.TestCase):
     def quality_runs(self):
         return [{"framework": framework, "instrumented": instrumented,
-                 "pipelines": 3, "exact_matches": 3} for framework, instrumented in
+                 "pipelines": 3, "exact_matches": 3, "supported_answer_matches": 3}
+                for framework, instrumented in
                 [("dsrs", False), ("dspy", False), ("dspy", False), ("dsrs", False),
                  ("dsrs", True), ("dspy", True)]]
 
@@ -25,8 +27,10 @@ class ProfilingTests(unittest.TestCase):
             run["exact_matches"] = 0
         outcome = live.quality_verdict(runs)
         self.assertEqual(outcome["quality_status"], "failed")
+        self.assertEqual(outcome["supported_answer_quality_status"], "passed")
         self.assertFalse(outcome["equal_quality_comparison_eligible"])
-        self.assertEqual(outcome["by_framework"]["dsrs"]["timing"], {"exact_matches": 0, "samples": 6})
+        self.assertEqual(outcome["by_framework"]["dsrs"]["timing"],
+                         {"exact_matches": 0, "supported_answer_matches": 6, "samples": 6})
         self.assertTrue(all(r["exact_matches"] == 0 for r in runs))
 
     def test_quality_failure_in_either_framework_or_profile_is_retained(self):
@@ -42,7 +46,16 @@ class ProfilingTests(unittest.TestCase):
     def test_quality_gate_accepts_correct_answers_from_both_frameworks(self):
         outcome = live.quality_verdict(self.quality_runs())
         self.assertEqual(outcome["quality_status"], "passed")
+        self.assertEqual(outcome["supported_answer_quality_status"], "passed")
         self.assertTrue(outcome["equal_quality_comparison_eligible"])
+
+    def test_supported_match_never_replaces_the_strict_quality_gate(self):
+        runs = self.quality_runs()
+        runs[0]["exact_matches"] = 2
+        outcome = live.quality_verdict(runs)
+        self.assertEqual(outcome["quality_status"], "failed")
+        self.assertEqual(outcome["supported_answer_quality_status"], "passed")
+        self.assertFalse(outcome["equal_quality_comparison_eligible"])
 
     def test_missing_or_mismatched_quality_evidence_cannot_pass(self):
         for runs in ([], self.quality_runs()[:1], self.quality_runs()[:-1], self.quality_runs()[1:]):
@@ -58,6 +71,46 @@ class ProfilingTests(unittest.TestCase):
                   if isinstance(node, ast.ClassDef) and node.name in {"Answer", "Reflect", "Revise"}}
         self.assertEqual(set(rust), {"Answer", "Reflect", "Revise"})
         self.assertEqual(rust, python)
+
+    def test_supported_annotations_are_frozen_to_the_reviewed_inputs(self):
+        here = Path(__file__).resolve().parent
+        annotations = scoring.load_annotations()
+        self.assertEqual(annotations.annotation_set_id,
+                         "hotpotqa-supported-answers-2026-11-11-v1")
+        original = json.loads((here / "fixture.json").read_text(encoding="utf-8"))["examples"][1]
+        score = scoring.score_answer(annotations, original, "ambassador")
+        self.assertFalse(score["exact_match"])
+        self.assertTrue(score["supported_answer_match"])
+        self.assertTrue(score["supported_answer_annotation"])
+        prospective = json.loads(
+            (here / "prospective-fixture.json").read_text(encoding="utf-8")
+        )["examples"][0]
+        prospective_score = scoring.score_answer(annotations, prospective, "ambassador")
+        self.assertFalse(prospective_score["exact_match"])
+        self.assertTrue(prospective_score["supported_answer_match"])
+        changed = dict(original, question=original["question"] + " changed")
+        with self.assertRaisesRegex(ValueError, "does not match the frozen"):
+            scoring.score_answer(annotations, changed, "ambassador")
+        with tempfile.TemporaryDirectory() as directory:
+            incomplete = Path(directory) / "annotations.json"
+            incomplete.write_text(json.dumps({
+                "schema_version": 1,
+                "annotation_set_id": "incomplete-v1",
+                "metric": scoring.SUPPORTED_METRIC,
+                "description": "missing examples",
+            }), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "examples must be a list"):
+                scoring.load_annotations(incomplete)
+
+    def test_clarified_office_fixture_changes_only_the_question_contract(self):
+        here = Path(__file__).resolve().parent
+        original = json.loads((here / "fixture.json").read_text(encoding="utf-8"))["examples"][1]
+        clarified = json.loads((here / "clarified-office-fixture.json").read_text(encoding="utf-8"))["examples"][0]
+        self.assertEqual(clarified["context"], original["context"])
+        self.assertEqual(clarified["answer"], original["answer"])
+        self.assertNotEqual(clarified["id"], original["id"])
+        self.assertNotEqual(clarified["question"], original["question"])
+        self.assertIn("other than ambassador", clarified["question"])
 
     def test_interference_retries_preserve_attempts_and_incorrect_answers(self):
         data = {"samples": [{"exact_match": False}]}
@@ -109,6 +162,7 @@ class ProfilingTests(unittest.TestCase):
         result = live.summarize({"framework": "dsrs", "instrumented": True,
             "samples": [{"pipeline_ns": 100, "stage_ns": [30, 30, 30],
                 "provider_ns": [10, 15, 20], "exact_match": False,
+                "supported_answer_match": True,
                 "adapter_events": [("dsrs.adapter.format_system", 12),
                     ("dsrs.adapter.format_input", 3), ("dsrs.adapter.parse", 6)]}],
             "provider_records": [record] * 3, "process_interval": {}})
@@ -116,6 +170,7 @@ class ProfilingTests(unittest.TestCase):
         self.assertEqual(result["adapter_parse_ns_mean"], 2)
         self.assertEqual(result["client_other_wall_ns_per_pipeline"], 55)
         self.assertEqual(result["exact_matches"], 0)
+        self.assertEqual(result["supported_answer_matches"], 1)
 
     def test_proxy_translates_text_parts_and_preserves_model_timings(self):
         received = []

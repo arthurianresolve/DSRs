@@ -9,6 +9,8 @@ import dspy
 from dspy.utils.dummies import DummyLM
 from dspy.adapters.json_adapter import _get_structured_outputs_response_format
 
+from scoring import SUPPORTED_METRIC, load_annotations, score_answer
+
 
 class Answer(dspy.Signature):
     """Answer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields."""
@@ -80,11 +82,6 @@ def barrier(label):
         if input().strip() != "continue":
             raise RuntimeError("controller barrier closed")
 
-def normalized(text):
-    text = "".join(c for c in text.lower() if c.isalnum() or c.isspace())
-    return " ".join(w for w in text.split() if w not in {"a", "an", "the"})
-
-
 def adapter_profile(signature, inputs, field, value, iterations):
     adapter = dspy.ChatAdapter()
     raw = f"[[ ## {field} ## ]]\n{value}\n\n[[ ## completed ## ]]\n"
@@ -114,6 +111,9 @@ def main():
     parser.add_argument("--smoke", action="store_true", help="One fixture, no warmup; protocol checking only")
     parser.add_argument("--check-protocol", action="store_true", help="All fixtures, no warmup; correctness diagnostics, not timing evidence")
     parser.add_argument("--json-output", action="store_true", help="Use the declared provider-native JSON Schema endpoint")
+    parser.add_argument("--fixture", type=Path, help="Diagnostic fixture; requires --check-protocol")
+    parser.add_argument("--supported-answers", type=Path,
+                        help="Diagnostic supported-answer annotations; requires --check-protocol")
     args = parser.parse_args()
     if args.json_output and not args.live:
         parser.error("JSON output mode requires a live provider")
@@ -121,6 +121,8 @@ def main():
         parser.error("choose smoke or a full protocol check")
     if args.smoke and not args.live:
         parser.error("smoke mode requires a live provider")
+    if (args.fixture or args.supported_answers) and not args.check_protocol:
+        parser.error("custom fixtures and supported-answer annotations require --check-protocol")
     warmup = 0 if args.smoke or args.check_protocol else 1 if args.live else WARMUP
     if args.live and args.wait_ms:
         parser.error("live profiling must not inject simulated waiting")
@@ -128,7 +130,9 @@ def main():
         parser.error("iterations must be positive and wait_ms nonnegative")
     if dspy.__version__ != "3.2.1":
         raise RuntimeError("Install the pinned DSPy 3.2.1 benchmark environment")
-    examples = json.loads(Path(__file__).with_name("fixture.json").read_text(encoding="utf-8"))["examples"]
+    fixture_path = args.fixture or Path(__file__).with_name("fixture.json")
+    examples = json.loads(fixture_path.read_text(encoding="utf-8"))["examples"]
+    supported_answers = load_annotations(args.supported_answers)
     if args.smoke:
         examples = examples[:1]
     if args.profile_adapter:
@@ -188,15 +192,25 @@ def main():
             final = call(revise, **inputs, draft=first.answer, critique=feedback.critique)
             assert args.live or final.answer == e["answer"]
             if iteration >= warmup:
+                pipeline_ns = time.perf_counter_ns() - pipeline_start
+                score = score_answer(supported_answers, e, final.answer)
                 samples.append({"id": e["id"], "answer": final.answer,
-                    "pipeline_ns": time.perf_counter_ns() - pipeline_start,
+                    "pipeline_ns": pipeline_ns,
                     "stage_ns": stage_ns, "simulated_wait_ns": wait_ns,
                     "provider_ns": PROVIDER_NS[provider_start:], "adapter_events": ADAPTER_EVENTS[adapter_start:],
-                    "expected_answer": e["answer"], "exact_match": normalized(final.answer) == normalized(e["answer"]),
+                    "expected_answer": e["answer"], **score,
                     "draft": first.answer, "critique": feedback.critique})
+    strict_quality_passed = all(sample["exact_match"] for sample in samples)
+    supported_quality_passed = all(sample["supported_answer_match"] for sample in samples)
     print(json.dumps({"framework": "dspy", "kind": "protocol_check" if args.check_protocol else "pipeline_timing", "output_format": "json_schema" if args.json_output else "delimiter", "iterations": args.iterations,
         "warmup": warmup, "live": args.live, "smoke": args.smoke, "instrumented": args.profile_runtime, "simulated_wait_ms_per_stage": args.wait_ms,
-        "cache": False, "history": False, "samples": samples}))
+        "cache": False, "history": False, "samples": samples,
+        "scoring": {"strict_metric": "hotpotqa_normalized_exact_match", "quality_status_uses": "strict_metric",
+                    "supported_metric": SUPPORTED_METRIC,
+                    "supported_annotations": "custom" if args.supported_answers else "default",
+                    "supported_annotation_set": supported_answers.annotation_set_id},
+        "quality_status": "passed" if strict_quality_passed else "failed",
+        "supported_answer_quality_status": "passed" if supported_quality_passed else "failed"}))
     if args.live:
         barrier("DONE")
 

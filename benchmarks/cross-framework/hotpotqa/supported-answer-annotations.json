@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "annotation_set_id": "hotpotqa-supported-answers-2026-11-11-v1",
+  "metric": "context_supported_normalized_exact_match",
+  "description": "Human-reviewed diagnostic alternatives introduced after the retained 2026-11-11 run identified questions whose context supports more than one answer. They are versioned for future runs and do not change the official single-reference HotpotQA exact-match score.",
+  "examples": [
+    {
+      "id": "5a8c7595554299585d9e36b6",
+      "question": "What government position was held by the woman who portrayed Corliss Archer in the film Kiss and Tell?",
+      "context": "Kiss and Tell (1945 film): Kiss and Tell is a 1945 American comedy film starring then 17-year-old Shirley Temple as Corliss Archer.\nShirley Temple: Shirley Temple Black (April 23, 1928 – February 10, 2014) was an American actress, singer, dancer, businesswoman, and diplomat who was Hollywood's number one box-office draw as a child actress from 1935 to 1938.\nShirley Temple:  As an adult, she was named United States ambassador to Ghana and to Czechoslovakia and also served as Chief of Protocol of the United States.",
+      "reference_answer": "Chief of Protocol",
+      "accepted_answers": [
+        "Chief of Protocol",
+        "ambassador",
+        "United States ambassador",
+        "United States ambassador to Ghana and to Czechoslovakia"
+      ],
+      "rationale": "The retained supporting sentence states both that Shirley Temple was named United States ambassador and that she served as Chief of Protocol."
+    },
+    {
+      "id": "position-title-counterfactual",
+      "question": "What government position was held by the woman who portrayed Iona in the film Harbour Lights?",
+      "context": "Harbour Lights: The film starred Elena Brook as Iona.\nElena Brook: Elena was an actress, singer and diplomat.\nElena Brook: She was named ambassador to Velora and also served as Consul General.",
+      "reference_answer": "Consul General",
+      "accepted_answers": [
+        "Consul General",
+        "ambassador",
+        "ambassador to Velora"
+      ],
+      "rationale": "The frozen counterfactual context states both that Elena Brook was named ambassador and that she served as Consul General."
+    }
+  ]
+}

@@ -123,6 +123,27 @@ Office answers also lose recognized trailing territory qualifiers, using pinned
 `answer` contains the application's canonical title. The exact-match scorer and
 evaluation references are unchanged. These mechanical rules do not prove entailment.
 
+Every prediction now reports two deliberately separate scores:
+
+* `exact_match` is the unchanged, single-reference HotpotQA normalized exact
+  match. `quality_status` and `--check-quality` continue to use only this score.
+* `supported_answer_match` is a diagnostic normalized match against the
+  human-reviewed alternatives in `supported-answer-annotations.json`. Those
+  annotations were introduced retrospectively after reviewing the retained
+  2026-11-11 outputs, then versioned for prospective use. They freeze the exact
+  question, context and strict reference; scoring fails if any of them drift.
+  This metric is not official HotpotQA accuracy and cannot make a strict
+  mismatch pass the quality gate.
+
+Use `--supported-answers PATH` only in protocol/quality mode to audit another
+versioned annotation set. Every set has a required `annotation_set_id`, which
+is recorded in the report; controlled-run manifests also hash the default file.
+`verify-scoring-isolation.py` runs the native binary with two annotation sets
+and checks that the parsed request payloads and prediction fields are
+structurally identical while only the diagnostic score changes. Both scores are
+computed after the per-pipeline timer; whole-process intervals still include
+result scoring and serialization as documented above.
+
 ```powershell
 $env:DSRS_PROFILE_BASE_URL = "http://your-local-provider/v1"
 $env:DSRS_PROFILE_MODEL = "Qwen3-0.6B-Tasks"
@@ -136,15 +157,36 @@ the four separate synthetic validation cases, which are absent from the training
 demonstrations. Custom fixtures and this recipe require diagnostic mode; they
 cannot silently change the timing workload.
 
+The separately versioned `clarified-office-fixture.json` keeps the original
+context and reference but explicitly excludes ambassador in its question. It is
+the strict regression gate for the office-selection behavior:
+
+```powershell
+cargo run -p dspy-rs --release --no-default-features --example bench-hotpotqa-reflection -- 1 0 --live --json-output --check-quality --retrieval-recipe --fixture benchmarks/cross-framework/hotpotqa/clarified-office-fixture.json
+```
+
+This is a changed workload with its own hash and must not be compared directly
+with the original HotpotQA score. Its parsed ID, question, context and answer are
+identical to the retained live fixture, which passed 1/1 using three provider
+requests. The repository fixture SHA-256 is
+`2b846974c3e6b0f101660d112035da26c2713c1b4db38ad1297db05cce6d063a`;
+the retained artifact SHA-256 is
+`00d9ba5832175834423778f594863439f7d740b90374aba7d778db05deb4051c`.
+They differ only by the repository file's trailing newline.
+
 The follow-up native Qwen3-0.6B-Tasks run scores **2/3 original strict
 references**, **4/4 earlier synthetic cases**, **1/1 clarified office question**,
 and **7/8 prospective boundary cases** in `prospective-fixture.json`. The two
 distinct mismatches are broad office questions for which the context supports
 both `ambassador` and the reference office. The model chooses `ambassador` when
-that evidence remains visible. A repeat of the original and clarified questions
-scores 3/4. A question whose only stated office is explicitly excluded fails
-after three final attempts and five total requests. The unmodified baseline
-still scores 1/3. See the [follow-up evidence](evidence/2026-11-11-live/model-comparison/repair/completion/followup/RESULTS.md)
+that evidence remains visible. A retrospective application of the new,
+post-run supported-answer annotations classifies the retained predictions as
+**3/3 original** and **8/8 prospective**; their official strict scores remain
+2/3 and 7/8. Future uses of annotation set
+`hotpotqa-supported-answers-2026-11-11-v1` are prospective. A repeat of the
+original and clarified questions scores 3/4 strict. A question whose only
+stated office is explicitly excluded fails after three final attempts and five
+total requests. The unmodified baseline still scores 1/3 strict. See the [follow-up evidence](evidence/2026-11-11-live/model-comparison/repair/completion/followup/RESULTS.md)
 for all 74 real native requests, source/binary hashes and limits. The earlier
 [3/3 report](evidence/2026-11-11-live/model-comparison/repair/completion/RESULTS.md)
 is preserved as historical evidence for its previous executable. These small
@@ -220,5 +262,7 @@ revision `1908d6afbbead072334abe2965f91bd2709910ab`.
 The fixture records source IDs and retains only question, answer and supporting
 sentences; other passages and metadata were removed. This adapted dataset
 fixture is licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/),
-as stated by the dataset card. That license applies to `fixture.json`; benchmark
-code remains under the repository's Apache-2.0 license.
+as stated by the dataset card. That license applies to `fixture.json`,
+`clarified-office-fixture.json` and `supported-answer-annotations.json`, which
+reproduce adapted HotpotQA text. Benchmark code remains under the repository's
+Apache-2.0 license.

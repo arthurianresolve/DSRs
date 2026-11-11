@@ -260,7 +260,7 @@
   "model-comparison/repair/completion/followup/rust-tests.exit.txt": "13bf7b3039c63bf5a50491fa3cfd8eb4e699d1ba1436315aef9cbe5711530354",
   "model-comparison/repair/completion/followup/rust-tests.stderr.txt": "052f0e10caa884982f1256484de68da230ad7437cdccae907fa3a8b4d7ed258a",
   "model-comparison/repair/completion/followup/rust-tests.stdout.txt": "707a2bffb714c19cac5186dc933f68b52fdc0e6542f134785246b6c0d517c60b",
-  "model-comparison/repair/completion/followup/verify.py": "d66bcc3f17c1af270541893c4a2ef920a803b357aefd11b36249b1c234e8ab18",
+  "model-comparison/repair/completion/followup/verify.py": "80d28b27c5b99dfe05ba7fdb73ae5b405e41e5d58f342e65010170f47d650038",
   "model-comparison/repair/completion/grounded-choices/references.json": "bfbd9d752916b1e66421603cf62eb1422ba6fc73e19072b470f7c5603d642d16",
   "model-comparison/repair/completion/grounded-choices/results.json": "9707eb9c2283dd52ec5e887f1910836c8b92dd908e2a99324fa82268a13291d5",
   "model-comparison/repair/completion/grounded-choices/runner.py": "30049b6f89dbfacea0c419ac8a70ed2323080d091e5c468e2f0d2f7f24b05bf9",

@@ -22,6 +22,8 @@ use serde_json::{Value, json};
 
 #[path = "support/hotpotqa_retrieval.rs"]
 mod retrieval;
+#[path = "support/hotpotqa_scoring.rs"]
+mod scoring;
 
 #[derive(Signature, Clone, Debug)]
 /// Answer the question using the supplied context. Put a short answer without explanation in the answer output field. Do not copy input fields.
@@ -66,6 +68,8 @@ const CRITIQUE: &str = "The answer agrees with the supporting context.";
 const FIXTURE: &str = include_str!("../../../benchmarks/cross-framework/hotpotqa/fixture.json");
 const DEMONSTRATIONS: &str =
     include_str!("../../../benchmarks/cross-framework/hotpotqa/demonstrations.json");
+const SUPPORTED_ANSWERS: &str =
+    include_str!("../../../benchmarks/cross-framework/hotpotqa/supported-answer-annotations.json");
 
 fn predictors(
     lm: &LM,
@@ -183,17 +187,6 @@ fn barrier(label: &str) -> Result<()> {
     Ok(())
 }
 
-fn normalized(text: &str) -> String {
-    text.to_lowercase()
-        .chars()
-        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
-        .collect::<String>()
-        .split_whitespace()
-        .filter(|w| !["a", "an", "the"].contains(w))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 #[derive(Deserialize)]
 struct Fixture {
     examples: Vec<Example>,
@@ -262,9 +255,21 @@ async fn main() -> Result<ExitCode> {
                 .context("--fixture requires a JSON file path")
         })
         .transpose()?;
+    let supported_answers_path = args
+        .iter()
+        .position(|s| s == "--supported-answers")
+        .map(|index| {
+            args.get(index + 1)
+                .context("--supported-answers requires a JSON file path")
+        })
+        .transpose()?;
     ensure!(
         !(retrieval_recipe || fixture_path.is_some()) || protocol_check,
         "retrieval recipes and custom fixtures require --check-protocol or --check-quality; they change the workload"
+    );
+    ensure!(
+        supported_answers_path.is_none() || protocol_check,
+        "custom supported-answer annotations require --check-protocol or --check-quality"
     );
     ensure!(
         !retrieval_recipe || !args.iter().any(|s| s == "--profile-adapter"),
@@ -303,6 +308,14 @@ async fn main() -> Result<ExitCode> {
     }
     ensure!(iterations > 0, "iterations must be positive");
     let fixture_text = fixture_path.map(std::fs::read_to_string).transpose()?;
+    let supported_answers_text = supported_answers_path
+        .map(std::fs::read_to_string)
+        .transpose()?;
+    let supported_answers = scoring::SupportedAnswerAnnotations::from_json(
+        supported_answers_text
+            .as_deref()
+            .unwrap_or(SUPPORTED_ANSWERS),
+    )?;
     let mut fixture: Fixture = serde_json::from_str(fixture_text.as_deref().unwrap_or(FIXTURE))?;
     ensure!(
         !fixture.examples.is_empty(),
@@ -479,32 +492,45 @@ async fn main() -> Result<ExitCode> {
                 e.id
             );
             if iteration >= warmup {
+                let pipeline_ns = pipeline_start.elapsed().as_nanos() as u64;
+                let score =
+                    supported_answers.score(&e.id, &e.question, &e.context, &e.answer, answer)?;
                 let provider_ns = waits.lock().unwrap()[provider_start..].to_vec();
                 let adapter_events =
                     adapter_timings.adapter.lock().unwrap()[adapter_start..].to_vec();
-                samples.push(json!({"id":e.id,"answer":answer,"pipeline_ns":pipeline_start.elapsed().as_nanos() as u64,
+                samples.push(json!({"id":e.id,"answer":answer,"pipeline_ns":pipeline_ns,
                     "stage_ns":stage_ns.map(|n|n as u64),"simulated_wait_ns":wait_ns as u64,
                     "provider_ns":provider_ns,"adapter_events":adapter_events,"expected_answer":e.answer,
-                    "exact_match":normalized(answer)==normalized(&e.answer),"draft":first.answer,"critique":feedback.critique,
+                    "exact_match":score.exact_match,"supported_answer_match":score.supported_answer_match,
+                    "supported_answer_annotation":score.annotation_applied,"accepted_answers":score.accepted_answers,
+                    "draft":first.answer,"critique":feedback.critique,
                     "revised_answer":final_answer.answer,
                     "context":context}));
             }
         }
     }
-    let quality_passed = samples
+    let strict_quality_passed = samples
         .iter()
         .all(|sample| sample["exact_match"].as_bool() == Some(true));
+    let supported_quality_passed = samples
+        .iter()
+        .all(|sample| sample["supported_answer_match"].as_bool() == Some(true));
     println!(
         "{}",
         json!({"framework":"dsrs","kind":if protocol_check {"protocol_check"} else {"pipeline_timing"},"output_format":if json_output {"json_schema"} else {"delimiter"},"iterations":iterations,"warmup":warmup,"live":live,"smoke":smoke,"instrumented":instrumented,
         "simulated_wait_ms_per_stage":wait_ms,"cache":false,"history":false,"samples":samples,
         "recipe":if retrieval_recipe { "retrieved_context_and_demonstrations" } else { "baseline_reflection" },
-        "quality_status":if quality_passed { "passed" } else { "failed" }})
+        "scoring":{"strict_metric":"hotpotqa_normalized_exact_match","quality_status_uses":"strict_metric",
+            "supported_metric":scoring::SUPPORTED_METRIC,
+            "supported_annotations":if supported_answers_path.is_some() {"custom"} else {"default"},
+            "supported_annotation_set":supported_answers.id()},
+        "quality_status":if strict_quality_passed { "passed" } else { "failed" },
+        "supported_answer_quality_status":if supported_quality_passed { "passed" } else { "failed" }})
     );
     if live {
         barrier("DONE")?;
     }
-    Ok(if quality_check && !quality_passed {
+    Ok(if quality_check && !strict_quality_passed {
         ExitCode::from(2)
     } else {
         ExitCode::SUCCESS
