@@ -1,0 +1,55 @@
+name: Rust compatibility
+
+on:
+  pull_request:
+    branches: [integration]
+    paths:
+      - rust-toolchain.toml
+      - .github/workflows/rust-compatibility.yaml
+  push:
+    branches: ['integration-rust-*']
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: ${{ matrix.os }} / Rust ${{ matrix.toolchain }} / ${{ matrix.features }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        toolchain: ['1.98.1', '1.99.1', '1.100.0']
+        features: [default, minimal, cache]
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/compat-${{ matrix.toolchain }}-${{ matrix.features }}
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: rustfmt, clippy
+      - run: rustc -vV
+      - run: cargo -V
+      - if: matrix.features == 'default'
+        run: cargo fmt --all -- --check
+      - if: matrix.features == 'default'
+        run: cargo build --locked --workspace
+      - if: matrix.features == 'default'
+        run: cargo check --locked --workspace --all-targets --all-features --future-incompat-report
+      - if: matrix.features == 'default'
+        run: cargo clippy --locked --workspace --all-targets --all-features
+      - if: matrix.features == 'default'
+        run: cargo test --locked --workspace
+      - if: matrix.features == 'minimal'
+        run: cargo test --locked -p dspy-rs --no-default-features
+      - if: matrix.features == 'cache'
+        run: cargo test --locked -p dspy-rs --no-default-features --features cache
+      - if: matrix.features == 'cache'
+        run: cargo test --locked -p dspy-rs --no-default-features --features inflight-dedup --lib inflight
