@@ -2060,7 +2060,7 @@ pub(crate) mod tests {
     async fn cached_test_lm(model: TestCompletionModel) -> LM {
         let mut lm = test_lm_with_model(model);
         lm.config.cache = true;
-        lm.cache_handler = Some(Arc::new(ResponseCache::new().await));
+        lm.cache_handler = Some(Arc::new(ResponseCache::memory_only_for_test().await));
         lm
     }
 
