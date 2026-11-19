@@ -79,12 +79,14 @@ fn chat_adapter_formats_user_and_assistant_messages() {
     let adapter = ChatAdapter;
     let def = SignatureDef::of::<BasicSignature>();
 
-    let user = adapter.format_input_def(
-        def,
-        &json_map(&BasicSignatureInput {
-            problem: "What is the capital of France?".to_string(),
-        }),
-    );
+    let user = adapter
+        .try_format_input_def(
+            def,
+            &json_map(&BasicSignatureInput {
+                problem: "What is the capital of France?".to_string(),
+            }),
+        )
+        .unwrap();
     let assistant = adapter.format_output_def(
         def,
         &json_map(&BasicSignatureOutput {
@@ -140,17 +142,19 @@ fn chat_adapter_formats_user_messages_with_multi_level_flatten_paths() {
     let adapter = ChatAdapter;
     // Multi-level `#[flatten]` inputs serialize flat, keyed by leaf name —
     // exactly the canonical `FieldDef::name` keys the def lane renders from.
-    let user = adapter.format_input_def(
-        SignatureDef::of::<DeepFlattenSig>(),
-        &json_map(&DeepFlattenSigInput {
-            question: "What should we answer?".to_string(),
-            middle: FlattenMiddleSigInput {
-                inner: FlattenLeafSigInput {
-                    leaf: "flattened-value".to_string(),
+    let user = adapter
+        .try_format_input_def(
+            SignatureDef::of::<DeepFlattenSig>(),
+            &json_map(&DeepFlattenSigInput {
+                question: "What should we answer?".to_string(),
+                middle: FlattenMiddleSigInput {
+                    inner: FlattenLeafSigInput {
+                        leaf: "flattened-value".to_string(),
+                    },
                 },
-            },
-        }),
-    );
+            }),
+        )
+        .unwrap();
 
     assert!(
         user.contains("[[ ## question ## ]]"),

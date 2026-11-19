@@ -38,9 +38,10 @@ use cranelift_entity::{EntityRef, PrimaryMap};
 use crate::LMConfig;
 use crate::core::Signature;
 use crate::ir::graph::{
-    AgentLoopNode, Binding, CapSet, ForkJoinNode, HoleImpl, HoleNode, Interner, LoopNode, ModelDef,
-    ModelId, Node, NodeBudget, NodeId, PortRef, PredictNode, Program, ProgramMeta, RefineNode,
-    RetryNode, RouteNode, SeqNode, SigId, StopSpec, ToolDef, ToolId, ToolKind,
+    AgentLoopNode, Binding, CapSet, ForkJoinNode, HoleImpl, HoleNode, Interner, LoopNode,
+    MAX_NODE_DEPTH, ModelDef, ModelId, Node, NodeBudget, NodeId, PortRef, PredictNode, Program,
+    ProgramMeta, RefineNode, RetryNode, RouteNode, SeqNode, SigId, StopSpec, ToolDef, ToolId,
+    ToolKind,
 };
 use crate::ir::params::{
     CodeLang, ContextPolicy, DemoRow, ParamId, ParamKind, ParamOwner, ParamSlot, ParamValue,
@@ -204,6 +205,65 @@ enum SpecKind {
         carry: Vec<(String, Port)>,
         out: Vec<(String, Port)>,
     },
+}
+
+fn check_spec_depth(root: &NodeSpec) -> Result<(), BuildError> {
+    let mut pending = vec![(root, 1usize)];
+    while let Some((spec, depth)) = pending.pop() {
+        if depth > MAX_NODE_DEPTH {
+            return Err(BuildError::Invalid(ValidateError::NodeNestingExceeded {
+                at: spec.step_name().unwrap_or("main").to_string(),
+                limit: MAX_NODE_DEPTH,
+            }));
+        }
+        match &spec.kind {
+            SpecKind::Seq { body, .. } => {
+                pending.extend(body.iter().map(|child| (child, depth + 1)))
+            }
+            SpecKind::Fork { branches, .. } => {
+                pending.extend(branches.iter().map(|child| (child, depth + 1)))
+            }
+            SpecKind::Route { arms, default, .. } => {
+                pending.extend(arms.iter().map(|(_, child)| (child, depth + 1)));
+                if let Some(child) = default {
+                    pending.push((child, depth + 1));
+                }
+            }
+            SpecKind::Retry { child, .. } | SpecKind::Loop { body: child, .. } => {
+                pending.push((child, depth + 1))
+            }
+            SpecKind::Refine { child, judge, .. } => {
+                pending.push((child, depth + 1));
+                pending.push((judge, depth + 1));
+            }
+            SpecKind::Predict { .. } | SpecKind::Agent { .. } | SpecKind::Hole { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+fn discard_spec(root: NodeSpec) {
+    let mut pending = vec![root];
+    while let Some(spec) = pending.pop() {
+        match spec.kind {
+            SpecKind::Seq { body, .. } => pending.extend(body),
+            SpecKind::Fork { branches, .. } => pending.extend(branches),
+            SpecKind::Route { arms, default, .. } => {
+                pending.extend(arms.into_iter().map(|(_, child)| child));
+                if let Some(child) = default {
+                    pending.push(*child);
+                }
+            }
+            SpecKind::Retry { child, .. } | SpecKind::Loop { body: child, .. } => {
+                pending.push(*child)
+            }
+            SpecKind::Refine { child, judge, .. } => {
+                pending.push(*child);
+                pending.push(*judge);
+            }
+            SpecKind::Predict { .. } | SpecKind::Agent { .. } | SpecKind::Hole { .. } => {}
+        }
+    }
 }
 
 impl NodeSpec {
@@ -729,6 +789,10 @@ impl ProgramBuilder {
     /// ports, type mismatches, cap violations, and structural errors are
     /// [`BuildError`]s.
     pub fn main(self, sig: SigId, root: NodeSpec) -> Result<Program, BuildError> {
+        if let Err(err) = check_spec_depth(&root) {
+            discard_spec(root);
+            return Err(err);
+        }
         // Root is always a Seq in v1 ("main").
         let root = match root.kind {
             SpecKind::Seq { .. } => root,
