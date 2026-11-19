@@ -13,10 +13,12 @@ struct SmokeSig {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Smoke Label: Slice 1 Typed Predict
-    configure(LM::builder()
+    configure(
+        LM::builder()
             .model("openai:gpt-5.2".to_string())
             .build()
-            .await?);
+            .await?,
+    );
 
     let module = Predict::<SmokeSig>::new();
     let input = SmokeSigInput {

@@ -439,10 +439,14 @@ async fn capabilities_work_on_a_current_thread_runtime() {
     // Capability calls are bridged via spawn + channel (not
     // `Handle::block_on`), so a current-thread runtime must work too.
     let executor = QuickJsExecutor::builder()
-        .capability(Capability::new("double", "double a number", |args| async move {
-            let n = args["n"].as_f64().ok_or("expected {n: number}")?;
-            Ok(json!(n * 2.0))
-        }))
+        .capability(Capability::new(
+            "double",
+            "double a number",
+            |args| async move {
+                let n = args["n"].as_f64().ok_or("expected {n: number}")?;
+                Ok(json!(n * 2.0))
+            },
+        ))
         .build()
         .expect("build");
     executor

@@ -141,7 +141,11 @@ fn compact_type(schema: &Value, depth: usize) -> String {
     if let Some(values) = obj.get("enum").and_then(Value::as_array) {
         return values
             .iter()
-            .map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string()))
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| v.to_string())
+            })
             .collect::<Vec<_>>()
             .join("|");
     }
@@ -279,10 +283,11 @@ impl ToolDyn for CodeModeTool {
 
     fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            let invalid = |message: String| {
-                Ok(json!({"kind": "invalid_args", "name": RUN_JS_TOOL_NAME, "reason": message})
+            let invalid =
+                |message: String| {
+                    Ok(json!({"kind": "invalid_args", "name": RUN_JS_TOOL_NAME, "reason": message})
                     .to_string())
-            };
+                };
             let args: Value = match serde_json::from_str(&args) {
                 Ok(value) => value,
                 Err(err) => return invalid(format!("arguments must be a JSON object: {err}")),

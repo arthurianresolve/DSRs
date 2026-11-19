@@ -21,5 +21,8 @@ fn parity_accepts_everything_the_full_parser_accepts() {
             .unwrap_or_else(|e| panic!("syntax checker rejected {}: {e}", path.display()));
         seen += 1;
     }
-    assert!(seen >= 3, "expected the golden .dsrs fixtures, found {seen}");
+    assert!(
+        seen >= 3,
+        "expected the golden .dsrs fixtures, found {seen}"
+    );
 }

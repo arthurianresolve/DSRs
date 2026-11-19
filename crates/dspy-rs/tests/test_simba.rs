@@ -4,8 +4,8 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    Eval, LM, LMClient, Module, ModuleState, Predict, PredictError, Predicted, SIMBA,
-    Signature, SimbaMove, TestCompletionModel, TypedMetric,
+    Eval, LM, LMClient, Module, ModuleState, Predict, PredictError, Predicted, SIMBA, Signature,
+    SimbaMove, TestCompletionModel, TypedMetric,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -67,7 +67,9 @@ fn rule_response(text: &str) -> AssistantContent {
 async fn make_test_lm(client: TestCompletionModel) -> LM {
     temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await
     .unwrap()
@@ -152,7 +154,10 @@ async fn append_demo_move_is_harvested_gated_and_installed() {
     assert_eq!(predictor.demos.len(), 1);
     assert_eq!(predictor.demos[0]["prompt"].as_str(), Some("0"));
     assert_eq!(predictor.demos[0]["answer"].as_str(), Some("0"));
-    assert_eq!(predictor.instruction_override, None, "demo moves leave instructions alone");
+    assert_eq!(
+        predictor.instruction_override, None,
+        "demo moves leave instructions alone"
+    );
 }
 
 #[tokio::test]
@@ -200,7 +205,10 @@ async fn append_rule_move_uses_the_reflection_lm() {
         .as_deref()
         .expect("rule moves install an instruction override");
     assert!(instruction.contains("[SIMBA rule] Always echo the prompt digits exactly."));
-    assert!(state.predictors["predictor"].demos.is_empty(), "rule moves leave demos alone");
+    assert!(
+        state.predictors["predictor"].demos.is_empty(),
+        "rule moves leave demos alone"
+    );
 }
 
 #[tokio::test]
@@ -267,13 +275,19 @@ async fn gate_rejection_leaves_the_module_untouched() {
         .unwrap();
 
     assert!((report.baseline_score - 0.5).abs() < 1e-9);
-    assert!((report.final_score - 0.5).abs() < 1e-9, "rejected moves never change the score");
+    assert!(
+        (report.final_score - 0.5).abs() < 1e-9,
+        "rejected moves never change the score"
+    );
     assert_eq!(report.accepted, 0);
     assert_eq!(report.rejected, 1);
     let step = &report.steps[0];
     assert_eq!(step.move_kind, SimbaMove::AppendDemo);
     assert!(!step.accepted);
-    assert_eq!(step.full_score, None, "rejected moves never run the full set");
+    assert_eq!(
+        step.full_score, None,
+        "rejected moves never run the full set"
+    );
     assert_eq!(step.child_minibatch_score, 0.0);
 
     // Rejection ran only baseline (2) + gate minibatch (2).

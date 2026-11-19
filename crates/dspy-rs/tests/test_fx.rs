@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    LM, LMClient, Eval, Module, Predicted, Signature, TestCompletionModel, TypedMetric, configure,
+    Eval, LM, LMClient, Module, Predicted, Signature, TestCompletionModel, TypedMetric, configure,
     fx,
 };
 use rig::completion::AssistantContent;
@@ -31,7 +31,9 @@ async fn make_test_lm(responses: Vec<String>) -> (LM, TestCompletionModel) {
     let client = TestCompletionModel::new(responses.into_iter().map(text_response));
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await
     .unwrap()
@@ -286,12 +288,15 @@ fn params_round_trip_through_module_state() {
 
     let state = params.to_module_state();
     let json = state.to_json().expect("serialize");
-    let restored = fx::Params::from_module_state(
-        dspy_rs::ModuleState::from_json(&json).expect("deserialize"),
-    );
+    let restored =
+        fx::Params::from_module_state(dspy_rs::ModuleState::from_json(&json).expect("deserialize"));
 
     assert_eq!(
-        restored.get("stage_a").unwrap().instruction_override.as_deref(),
+        restored
+            .get("stage_a")
+            .unwrap()
+            .instruction_override
+            .as_deref(),
         Some("tuned instruction")
     );
 }

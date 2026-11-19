@@ -14,7 +14,7 @@
 use dspy_rs::ChatAdapter;
 use dspy_rs::ir::{ConstraintDef, FieldDef, FieldType, RenderSpec, SignatureDef, TypeTable};
 use dspy_rs::typesys::{ClassDef, EnumDef, EnumValueDef, FieldDef as TypeFieldDef};
-use dspy_rs::{Schema, Message, ParseError, Signature};
+use dspy_rs::{Message, ParseError, Schema, Signature};
 
 #[derive(Signature, Clone, Debug)]
 /// Grade an answer against a question.
@@ -160,8 +160,7 @@ fn derive_bridged_parse_assembles_typed_output_and_checks() {
         .unwrap();
 
     // Canonical field-name keying assembles straight into the typed output.
-    let typed: GradedOutput =
-        serde_json::from_value(serde_json::Value::Object(value_map)).unwrap();
+    let typed: GradedOutput = serde_json::from_value(serde_json::Value::Object(value_map)).unwrap();
     assert_eq!(typed.confidence, 0.9);
     assert_eq!(typed.verdict, "Supported");
 

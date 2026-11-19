@@ -1,6 +1,6 @@
 use dspy_rs::{
-    ChainOfThought, LM, LMClient, Module, Predict, Reasoning, Signature,
-    TestCompletionModel, WithReasoning, configure,
+    ChainOfThought, LM, LMClient, Module, Predict, Reasoning, Signature, TestCompletionModel,
+    WithReasoning, configure,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;

@@ -12,8 +12,8 @@
 //! counterfactual composition.
 
 use dspy_rs::{
-    LM, LMClient, PredictError, Predicted, ReplayError, ReplayMode, Signature,
-    TestCompletionModel, capture, configure, fx, replay,
+    LM, LMClient, PredictError, Predicted, ReplayError, ReplayMode, Signature, TestCompletionModel,
+    capture, configure, fx, replay,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -42,7 +42,9 @@ async fn make_test_lm(responses: Vec<AssistantContent>) -> (LM, TestCompletionMo
     let client = TestCompletionModel::new(responses);
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await
     .unwrap()
@@ -67,11 +69,7 @@ async fn pipeline(
     prefix: &'static str,
     question: String,
 ) -> Result<Predicted<CfQAOutput>, PredictError> {
-    let draft = fx::predict::<CfQA>(
-        &format!("{prefix}_drafter"),
-        CfQAInput { question },
-    )
-    .await?;
+    let draft = fx::predict::<CfQA>(&format!("{prefix}_drafter"), CfQAInput { question }).await?;
     let mid = fx::predict::<CfQA>(
         &format!("{prefix}_middle"),
         CfQAInput {
@@ -92,8 +90,7 @@ async fn pipeline(
 #[tokio::test]
 async fn until_divergence_serves_prefix_and_goes_live_from_the_mutated_component() {
     let _lock = SETTINGS_LOCK.lock().await;
-    let (lm, client) =
-        make_test_lm(vec![answer("draft0"), answer("mid0"), answer("final0")]).await;
+    let (lm, client) = make_test_lm(vec![answer("draft0"), answer("mid0"), answer("final0")]).await;
     configure(lm);
 
     // Record the baseline rollout.
@@ -114,11 +111,10 @@ async fn until_divergence_serves_prefix_and_goes_live_from_the_mutated_component
     client.push_response(answer("mid0"));
     client.push_response(answer("final1"));
 
-    let ((result, new_trace), report) =
-        replay(&base_trace, ReplayMode::UntilDivergence, || {
-            capture(|| fx::with_params(candidate, pipeline("cf", "q".to_string())))
-        })
-        .await;
+    let ((result, new_trace), report) = replay(&base_trace, ReplayMode::UntilDivergence, || {
+        capture(|| fx::with_params(candidate, pipeline("cf", "q".to_string())))
+    })
+    .await;
 
     let out = result.expect("counterfactual run should succeed");
     assert_eq!(
@@ -150,7 +146,9 @@ async fn until_divergence_serves_prefix_and_goes_live_from_the_mutated_component
 
     // The mutated instruction actually reached the live middle call; the last
     // live request (the refiner's) saw the middle's output.
-    let last = client.last_request().expect("live calls hit the test model");
+    let last = client
+        .last_request()
+        .expect("live calls hit the test model");
     assert!(
         format!("{:?}", last.chat_history).contains("polish:"),
         "the final live request is the refiner's"
@@ -173,8 +171,7 @@ async fn until_divergence_serves_prefix_and_goes_live_from_the_mutated_component
         base_trace.spans[1].request_hash
     );
     assert_eq!(
-        new_trace.spans[2].request_hash,
-        base_trace.spans[2].request_hash,
+        new_trace.spans[2].request_hash, base_trace.spans[2].request_hash,
         "post-divergence prompt re-matched the recording — and still went live"
     );
 }
@@ -183,8 +180,7 @@ async fn until_divergence_serves_prefix_and_goes_live_from_the_mutated_component
 #[tokio::test]
 async fn until_divergence_without_mutation_serves_everything() {
     let _lock = SETTINGS_LOCK.lock().await;
-    let (lm, _client) =
-        make_test_lm(vec![answer("d"), answer("m"), answer("r")]).await;
+    let (lm, _client) = make_test_lm(vec![answer("d"), answer("m"), answer("r")]).await;
     configure(lm);
 
     let (result, base_trace) = capture(|| pipeline("cfv", "q".to_string())).await;

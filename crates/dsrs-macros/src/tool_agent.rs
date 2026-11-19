@@ -253,7 +253,10 @@ fn int_value<T: std::str::FromStr>(value: &Expr) -> syn::Result<T> {
     {
         return Ok(parsed);
     }
-    Err(syn::Error::new_spanned(value, "expected an integer literal"))
+    Err(syn::Error::new_spanned(
+        value,
+        "expected an integer literal",
+    ))
 }
 
 fn parse_agent_attr(attr: TokenStream2) -> syn::Result<AgentAttrs> {

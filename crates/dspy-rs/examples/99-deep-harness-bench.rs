@@ -9,8 +9,8 @@ use std::time::Instant;
 
 use anyhow::Result;
 use dspy_rs::{
-    Demo, LM, LMClient, Eval, Module, Predict, PredictError, Predicted,
-    Signature, TestCompletionModel, TypedMetric, evaluate_trainset_with_concurrency,
+    Demo, Eval, LM, LMClient, Module, Predict, PredictError, Predicted, Signature,
+    TestCompletionModel, TypedMetric, evaluate_trainset_with_concurrency,
 };
 use rig::completion::{AssistantContent, ToolDefinition};
 use rig::message::Text;
@@ -204,9 +204,7 @@ impl TypedMetric<(StepInput, StepOutput), Chain> for Exact {
         prediction: &Predicted<StepOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
-        Ok(Eval::score(
-            (!prediction.result.is_empty()) as u8 as f64,
-        ))
+        Ok(Eval::score((!prediction.result.is_empty()) as u8 as f64))
     }
 }
 
@@ -282,7 +280,9 @@ async fn main() -> Result<()> {
     // --- 1-2. Sequential chains ------------------------------------------
     for (depth, iters) in [(10usize, 2000u64), (50, 400)] {
         let lm = test_lm(
-            (0..iters * depth as u64).map(|_| text_content(&step_response())).collect(),
+            (0..iters * depth as u64)
+                .map(|_| text_content(&step_response()))
+                .collect(),
             10,
         )
         .await;
@@ -297,7 +297,9 @@ async fn main() -> Result<()> {
     // --- 3. Fan-out 16 + aggregate ----------------------------------------
     let iters = 1000u64;
     let lm = test_lm(
-        (0..iters * 17).map(|_| text_content(&step_response())).collect(),
+        (0..iters * 17)
+            .map(|_| text_content(&step_response()))
+            .collect(),
         10,
     )
     .await;
@@ -311,7 +313,9 @@ async fn main() -> Result<()> {
     // --- 4. Layered DAG 4x8 ------------------------------------------------
     let iters = 500u64;
     let lm = test_lm(
-        (0..iters * 36).map(|_| text_content(&step_response())).collect(),
+        (0..iters * 36)
+            .map(|_| text_content(&step_response()))
+            .collect(),
         10,
     )
     .await;
@@ -394,7 +398,10 @@ async fn main() -> Result<()> {
         responses.push(text_content(&step_response()));
     }
     let lm = test_lm(responses, 32).await;
-    let predict = Predict::<Step>::builder().lm(lm.clone()).add_tool(NoopTool).build();
+    let predict = Predict::<Step>::builder()
+        .lm(lm.clone())
+        .add_tool(NoopTool)
+        .build();
     let start = Instant::now();
     for _ in 0..iters {
         std::hint::black_box(predict.forward(input("use the tool repeatedly")).await?);
@@ -415,7 +422,9 @@ async fn main() -> Result<()> {
         })
         .collect();
     let lm = test_lm(
-        (0..64 * 10 * 2).map(|_| text_content(&step_response())).collect(),
+        (0..64 * 10 * 2)
+            .map(|_| text_content(&step_response()))
+            .collect(),
         10,
     )
     .await;

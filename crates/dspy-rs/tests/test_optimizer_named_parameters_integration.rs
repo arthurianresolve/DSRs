@@ -1,7 +1,6 @@
 use anyhow::Result;
 use dspy_rs::{
-    COPRO, CallMetadata, Eval, Module, Predict, PredictError, Predicted, Signature,
-    TypedMetric,
+    COPRO, CallMetadata, Eval, Module, Predict, PredictError, Predicted, Signature, TypedMetric,
 };
 
 #[derive(Signature, Clone, Debug)]

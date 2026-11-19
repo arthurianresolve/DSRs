@@ -5,7 +5,7 @@
 <em>A high-performance DSPy rewrite in Rust for building LM-powered applications</em>
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.98.1-orange.svg)](rust-toolchain.toml)
 [![Crates.io](https://img.shields.io/crates/v/dspy-rs)](https://crates.io/crates/dspy-rs)
 [![Documentation](https://docs.rs/dspy-rs/badge.svg)](https://docs.rs/dspy-rs)
 [![Build Status](https://img.shields.io/badge/build-passing-green.svg)](#)
@@ -431,26 +431,40 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ### Development Setup
 
+The checkout pins Rust 1.98.1 in `rust-toolchain.toml`, matching native CI.
+The locked Cranelift dependencies require at least Rust 1.94; the previous
+CI pin of 1.90 cannot build them.
+
 ```bash
 # Clone the repository
 git clone https://github.com/krypticmouse/dsrs.git
 cd dsrs
 
 # Build the project
-cargo build
+cargo build --locked --workspace
 
 # Run tests
-cargo test
+cargo test --locked --workspace --all-features
 
 # Run with examples
 cargo run --example 01-simple
 
 # Check formatting
-cargo fmt -- --check
+cargo fmt --all -- --check
 
 # Run clippy
-cargo clippy -- -D warnings
+cargo clippy --locked --workspace --all-targets --all-features
 ```
+
+CI also runs Miri with `nightly-2026-11-09` on workspace library tests and
+selected adapter, chat, and syntax integration tests. The exact commands live
+in `.github/workflows/qol.yaml`. QuickJS C FFI and subprocess integration tests
+run in native CI because Miri cannot execute them; expensive end-to-end optimizer
+tests also remain in the native suite. The vendored `fastant` 0.1.10 patch uses
+its existing clock fallback under Miri, leaving native TSC behavior unchanged.
+
+Docs search sync runs only on upstream `main` and requires the Mixedbread store
+credential there; fork pushes do not update upstream search stores.
 
 ## 📄 License
 

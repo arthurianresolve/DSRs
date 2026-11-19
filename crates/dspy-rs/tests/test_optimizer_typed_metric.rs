@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use dspy_rs::{
-    COPRO, CallMetadata, MIPROv2, Eval, Module, Predict, PredictError, Predicted,
-    Signature, TypedMetric,
+    COPRO, CallMetadata, Eval, MIPROv2, Module, Predict, PredictError, Predicted, Signature,
+    TypedMetric,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -64,9 +64,7 @@ impl TypedMetric<(OptimizerSigInput, OptimizerSigOutput), InstructionEchoModule>
 
 struct FailingMetric;
 
-impl TypedMetric<(OptimizerSigInput, OptimizerSigOutput), InstructionEchoModule>
-    for FailingMetric
-{
+impl TypedMetric<(OptimizerSigInput, OptimizerSigOutput), InstructionEchoModule> for FailingMetric {
     async fn evaluate(
         &self,
         _example: &(OptimizerSigInput, OptimizerSigOutput),

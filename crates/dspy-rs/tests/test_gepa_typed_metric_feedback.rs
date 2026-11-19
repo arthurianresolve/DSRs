@@ -1,7 +1,6 @@
 use anyhow::Result;
 use dspy_rs::{
-    CallMetadata, Eval, GEPA, Module, Predict, PredictError, Predicted, Signature,
-    TypedMetric,
+    CallMetadata, Eval, GEPA, Module, Predict, PredictError, Predicted, Signature, TypedMetric,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -51,7 +50,10 @@ impl TypedMetric<(OptimizerSigInput, OptimizerSigOutput), InstructionEchoModule>
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
         let score = prediction.answer.len() as f64;
-        Ok(Eval::with_feedback(score, format!("answer={}", prediction.answer)))
+        Ok(Eval::with_feedback(
+            score,
+            format!("answer={}", prediction.answer),
+        ))
     }
 }
 
@@ -84,7 +86,10 @@ impl TypedMetric<(OptimizerSigInput, OptimizerSigOutput), InstructionEchoModule>
         let score = prediction.answer.len() as f64;
 
         if example.0.prompt == "one" {
-            Ok(Eval::with_feedback(score, "only first example has feedback"))
+            Ok(Eval::with_feedback(
+                score,
+                "only first example has feedback",
+            ))
         } else {
             Ok(Eval::score(score))
         }
@@ -117,7 +122,10 @@ impl TypedMetric<(OptimizerSigInput, OptimizerSigOutput), InstructionEchoModule>
         let call_index = self.calls.fetch_add(1, Ordering::SeqCst);
         let score = prediction.answer.len() as f64;
         if call_index < self.feedback_calls {
-            Ok(Eval::with_feedback(score, format!("call={call_index}: feedback")))
+            Ok(Eval::with_feedback(
+                score,
+                format!("call={call_index}: feedback"),
+            ))
         } else {
             Ok(Eval::score(score))
         }

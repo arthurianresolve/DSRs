@@ -87,11 +87,8 @@ pub trait Optimizer: Send + Sync {
 
     /// Runs the strategy: proposes candidates, evaluates them through
     /// `engine`, installs the winner on `target`, and reports what happened.
-    async fn compile(
-        &self,
-        target: &mut OptimizeTarget<'_>,
-        engine: &mut Engine,
-    ) -> Result<Report>;
+    async fn compile(&self, target: &mut OptimizeTarget<'_>, engine: &mut Engine)
+    -> Result<Report>;
 }
 
 /// What an optimization run produced. Strategy-specific payloads for the

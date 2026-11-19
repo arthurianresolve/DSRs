@@ -198,7 +198,10 @@ async fn tool_error_is_catchable_in_js_with_attribution() {
         .await
         .expect("execute");
     let text = result.as_str().expect("string result");
-    assert!(text.starts_with("caught: "), "exception was catchable: {text}");
+    assert!(
+        text.starts_with("caught: "),
+        "exception was catchable: {text}"
+    );
     assert!(
         text.contains("tool `fail-tool` failed"),
         "attributed to the original tool name: {text}"
@@ -318,7 +321,8 @@ async fn json_named_tool_is_mangled_and_does_not_break_other_capabilities() {
     // A tool named `JSON` must not shadow `globalThis.JSON` (every capability
     // shim depends on it); it is installed as `JSON_tool` instead, and other
     // capabilities keep working.
-    let tools: Vec<Arc<dyn ToolDyn>> = vec![Arc::new(NamedTool("JSON")), Arc::new(NamedTool("beta"))];
+    let tools: Vec<Arc<dyn ToolDyn>> =
+        vec![Arc::new(NamedTool("JSON")), Arc::new(NamedTool("beta"))];
     let tool = CodeModeTool::new(tools, SandboxConfig::default())
         .await
         .expect("build");
@@ -406,8 +410,7 @@ async fn code_mode_tool_chains_two_tools_in_one_call() {
 
 #[tokio::test]
 async fn code_mode_tool_rejects_colliding_names() {
-    let tools: Vec<Arc<dyn ToolDyn>> =
-        vec![Arc::new(NamedTool("a-b")), Arc::new(NamedTool("a.b"))];
+    let tools: Vec<Arc<dyn ToolDyn>> = vec![Arc::new(NamedTool("a-b")), Arc::new(NamedTool("a.b"))];
     let err = CodeModeTool::new(tools, SandboxConfig::default())
         .await
         .expect_err("collision");
@@ -461,9 +464,12 @@ impl rig::tool::Tool for StallTool {
 async fn code_mode_deadline_bounds_capability_calls() {
     // In Code Mode every tool call is a capability call; the wall-clock
     // deadline must bound the host future too, not just JS execution.
-    let tool = CodeModeTool::new(vec![Arc::new(StallTool) as Arc<dyn ToolDyn>], tight_config())
-        .await
-        .expect("build");
+    let tool = CodeModeTool::new(
+        vec![Arc::new(StallTool) as Arc<dyn ToolDyn>],
+        tight_config(),
+    )
+    .await
+    .expect("build");
     let started = Instant::now();
     let result = tool
         .call(json!({"code": "return stall({});"}).to_string())
@@ -494,7 +500,10 @@ async fn code_mode_script_error_is_repairable_result() {
     assert_eq!(parsed["capability"], "fail_tool");
 
     // Missing `code` argument: also repairable.
-    let result = tool.call(json!({"script": "x"}).to_string()).await.expect("repairable");
+    let result = tool
+        .call(json!({"script": "x"}).to_string())
+        .await
+        .expect("repairable");
     let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
     assert_eq!(parsed["kind"], "invalid_args");
 }
@@ -546,9 +555,11 @@ fn description_generation_is_token_compact() {
         },
     ];
     let description = code_mode_description(&apis);
-    assert!(description.contains(
-        "- get_weather(args): Get current weather. args: {city: string, units?: c|f}"
-    ));
+    assert!(
+        description.contains(
+            "- get_weather(args): Get current weather. args: {city: string, units?: c|f}"
+        )
+    );
     assert!(description.contains(
         "- search(args): Search the web. args: {query: string, limit?: integer, tags?: string[]}"
     ));
@@ -569,7 +580,9 @@ fn description_with_no_apis_is_contract_only() {
 async fn from_toolset_wraps_all_and_detects_collisions() {
     let tools: Vec<Arc<dyn ToolDyn>> =
         vec![Arc::new(NamedTool("alpha-x")), Arc::new(NamedTool("beta"))];
-    let capabilities = Capability::from_toolset(&tools).await.expect("no collision");
+    let capabilities = Capability::from_toolset(&tools)
+        .await
+        .expect("no collision");
     let names: Vec<&str> = capabilities.iter().map(|c| c.name()).collect();
     assert_eq!(names, vec!["alpha_x", "beta"]);
 

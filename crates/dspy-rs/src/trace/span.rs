@@ -194,10 +194,7 @@ fn url_origin(url: &str) -> String {
         Some((scheme, rest)) => (scheme, rest),
         None => ("", url),
     };
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     // Strip userinfo (`user:pass@host`).
     let host = authority.rsplit('@').next().unwrap_or(authority);
     if scheme.is_empty() {
@@ -360,7 +357,6 @@ impl Trace {
             .map(|name| by_leaf.get(name.as_str()).cloned())
             .collect();
     }
-
 }
 
 impl Span {

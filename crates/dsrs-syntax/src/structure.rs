@@ -401,7 +401,11 @@ main: Main = seq {
     #[test]
     fn rejects_mismatched_delimiters() {
         let err = check_err("dsrs 1\nprogram x\nsig Main { in q: (string] }\nmain: Main = seq { }");
-        assert!(err.message.contains("mismatched delimiter"), "{}", err.message);
+        assert!(
+            err.message.contains("mismatched delimiter"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]
