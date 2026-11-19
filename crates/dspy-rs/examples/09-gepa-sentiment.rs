@@ -14,10 +14,9 @@ use dspy_rs::{
     TypedMetric, average_score, configure, evaluate_trainset, init_tracing,
 };
 
+/// Analyze the sentiment and classify as positive, negative, or neutral.
 #[derive(Signature, Clone, Debug)]
 struct SentimentSignature {
-    /// Analyze the sentiment and classify as positive, negative, or neutral.
-
     #[input]
     text: String,
 

@@ -9,10 +9,12 @@ use tracing::{debug, trace};
 
 use crate::ir::{RenderSpec, SignatureDef};
 use crate::trace::JsonMap;
-use crate::typesys::coerce::coerce_with_checks;
+use crate::typesys::coerce::{coerce_value_with_checks, coerce_with_checks};
 use crate::typesys::constraint::evaluate_expression;
 use crate::typesys::render::{schema_block, type_name};
-use crate::typesys::{FieldType, TypeTable};
+use crate::typesys::{
+    FieldType, TypeTable, alias_output_fields, canonicalize_output_aliases, json_schema_for_outputs,
+};
 use crate::{ConstraintKind, ConstraintResult, FieldMeta, JsonishError, Message, ParseError};
 
 /// Builds prompts and parses responses using the `[[ ## field ## ]]` delimiter protocol.
@@ -282,6 +284,131 @@ fn build_system_view(
 }
 
 impl ChatAdapter {
+    /// Read typed declarations from signature input fields. Invalid schemas
+    /// fail before a provider is called.
+    pub fn signature_tools(
+        &self,
+        def: &SignatureDef,
+        input: &JsonMap,
+    ) -> Result<Vec<rig::completion::ToolDefinition>> {
+        let mut definitions = Vec::new();
+        for field in def
+            .inputs
+            .iter()
+            .filter(|f| f.special_kind() == Some(crate::SpecialField::Tools))
+        {
+            let Some(value) = input.get(&*field.name) else {
+                anyhow::ensure!(field.ty.is_optional(), "missing tool declarations");
+                continue;
+            };
+            if value.is_null() && field.ty.is_optional() {
+                continue;
+            }
+            let tools: Vec<crate::Tool> = if value.is_array() {
+                serde_json::from_value(value.clone())?
+            } else {
+                vec![serde_json::from_value(value.clone())?]
+            };
+            for tool in tools {
+                let definition = tool.definition()?;
+                anyhow::ensure!(!definition.name.is_empty(), "tool name is empty");
+                anyhow::ensure!(
+                    definition.parameters.get("type").and_then(Value::as_str) == Some("object"),
+                    "tool arguments schema must be an object"
+                );
+                anyhow::ensure!(
+                    !definitions
+                        .iter()
+                        .any(|d: &rig::completion::ToolDefinition| d.name == definition.name),
+                    "duplicate tool declaration {}",
+                    definition.name
+                );
+                definitions.push(definition);
+            }
+        }
+        Ok(definitions)
+    }
+
+    pub fn signature_history(&self, def: &SignatureDef, input: &JsonMap) -> Result<Vec<Message>> {
+        let mut messages = Vec::new();
+        for field in def
+            .inputs
+            .iter()
+            .filter(|f| f.special_kind() == Some(crate::SpecialField::History))
+        {
+            let Some(value) = input.get(&*field.name) else {
+                anyhow::ensure!(field.ty.is_optional(), "missing history");
+                continue;
+            };
+            if value.is_null() && field.ty.is_optional() {
+                continue;
+            }
+            let history: crate::History = serde_json::from_value(value.clone())?;
+            for message in history.messages {
+                messages.push(match message.role.as_str() {
+                    "user" => Message::user(message.content),
+                    "assistant" => Message::assistant(message.content),
+                    _ => anyhow::bail!("history role must be user or assistant"),
+                });
+            }
+        }
+        Ok(messages)
+    }
+
+    pub fn signature_tools_from_messages(
+        &self,
+        def: &SignatureDef,
+        messages: &[Message],
+    ) -> Result<Vec<rig::completion::ToolDefinition>> {
+        let mut input = JsonMap::new();
+        for field in def
+            .inputs
+            .iter()
+            .filter(|f| f.special_kind() == Some(crate::SpecialField::Tools))
+        {
+            let value = messages
+                .iter()
+                .rev()
+                .filter(|m| m.role == crate::Role::User)
+                .find_map(|message| {
+                    Self::parse_sections(&message.content()).shift_remove(&*field.lm_name)
+                });
+            let Some(value) = value else {
+                anyhow::ensure!(
+                    field.ty.is_optional(),
+                    "conversation has no tool declarations"
+                );
+                continue;
+            };
+            let value = serde_json::Deserializer::from_str(&value)
+                .into_iter::<Value>()
+                .next()
+                .context("missing tool declaration value")??;
+            input.insert(field.name.to_string(), value);
+        }
+        self.signature_tools(def, &input)
+    }
+
+    pub fn signature_tool_output(
+        &self,
+        def: &SignatureDef,
+        calls: &[rig::message::ToolCall],
+    ) -> Option<JsonMap> {
+        if def.outputs.len() != 1
+            || def.outputs[0].special_kind() != Some(crate::SpecialField::ToolCalls)
+        {
+            return None;
+        }
+        Some(
+            [(
+                def.outputs[0].name.to_string(),
+                serde_json::to_value(crate::ToolCalls::from_native(calls))
+                    .expect("serializable typed tool calls"),
+            )]
+            .into_iter()
+            .collect(),
+        )
+    }
     /// Builds a system message from an owned [`SignatureDef`] — no `'static`
     /// requirement anywhere. `types` resolves the def's class/enum references
     /// (for derive-bridged defs, [`SignatureDef::types_of`]).
@@ -297,6 +424,15 @@ impl ChatAdapter {
         types: &TypeTable,
         instruction_override: Option<&str>,
     ) -> String {
+        if def.outputs.len() == 1
+            && def.outputs[0].special_kind() == Some(crate::SpecialField::ToolCalls)
+        {
+            return format!(
+                "{}\n\nSelect tools for the user's request. Use the supplied tool-calling protocol for requests; do not describe a tool request as a signature output field. If no tool is needed, return `[[ ## {} ## ]]` followed by {{\"calls\":[]}} and `[[ ## completed ## ]]`.",
+                instruction_override.unwrap_or(&def.instruction),
+                def.outputs[0].lm_name
+            );
+        }
         build_system_view(
             &def_views(&def.inputs),
             &def_views(&def.outputs),
@@ -304,6 +440,38 @@ impl ChatAdapter {
             &def.instruction,
             instruction_override,
         )
+    }
+
+    /// System prompt for a provider-native JSON response.
+    pub fn build_system_json_def(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        instruction_override: Option<&str>,
+        schema_mode: bool,
+    ) -> String {
+        let inputs = def_views(&def.inputs);
+        let outputs = def_views(&def.outputs);
+        let mut parts = vec![format_field_descriptions_view(&inputs, &outputs, types)];
+        parts.push("Return one JSON object containing every output field, using the field names shown above. Do not include markdown or text outside the JSON object.".to_string());
+        parts.push(format!(
+            "Effective output format: {}.",
+            if schema_mode {
+                "provider JSON Schema"
+            } else {
+                "provider JSON mode"
+            }
+        ));
+        let schema =
+            serde_json::to_string(&json_schema_for_outputs(def, types)).unwrap_or_default();
+        parts.push(format!("The exact output schema is: {schema}"));
+        parts.push(format_task_description_view(
+            &inputs,
+            &outputs,
+            &def.instruction,
+            instruction_override,
+        ));
+        parts.join("\n\n")
     }
 
     /// Formats a value-level input from an owned [`SignatureDef`] as a user
@@ -325,9 +493,30 @@ impl ChatAdapter {
 
     /// Fallible input formatting for runtime callers that must reject bad templates.
     pub fn try_format_input_def(&self, def: &SignatureDef, input: &JsonMap) -> Result<String> {
+        if def.outputs.len() == 1
+            && def.outputs[0].special_kind() == Some(crate::SpecialField::ToolCalls)
+        {
+            return self.try_format_input_with_response(def, input, "Use the supplied tool-calling protocol to request the appropriate tools. Do not copy input fields into the response.");
+        }
+        self.try_format_input_with_response(
+            def,
+            input,
+            &format_response_instructions_view(&def_views(&def.outputs)),
+        )
+    }
+
+    fn try_format_input_with_response(
+        &self,
+        def: &SignatureDef,
+        input: &JsonMap,
+        response_instruction: &str,
+    ) -> Result<String> {
         let mut result = String::new();
         let mut input_context = None;
         for field in def.inputs.iter() {
+            if field.special_kind() == Some(crate::SpecialField::History) {
+                continue;
+            }
             let Some(value) = input.get(&*field.name) else {
                 continue;
             };
@@ -345,8 +534,23 @@ impl ChatAdapter {
             result.push_str("\n\n");
         }
 
-        result.push_str(&format_response_instructions_view(&def_views(&def.outputs)));
+        result.push_str(response_instruction);
         Ok(result)
+    }
+
+    /// Delimited inputs with a JSON-object response instruction.
+    pub fn format_input_json_def(&self, def: &SignatureDef, input: &JsonMap) -> String {
+        self.try_format_input_json_def(def, input)
+            .unwrap_or_else(|_| "[[ ## input_render_error ## ]]".to_string())
+    }
+
+    /// Fallible JSON-response input formatting, sharing the alias-aware render path.
+    pub fn try_format_input_json_def(&self, def: &SignatureDef, input: &JsonMap) -> Result<String> {
+        self.try_format_input_with_response(
+            def,
+            input,
+            "Return a JSON object with every output field.",
+        )
     }
 
     /// Formats a value-level output map as an assistant message for few-shot
@@ -369,6 +573,16 @@ impl ChatAdapter {
         let mut result = sections.join("\n\n");
         result.push_str("\n\n[[ ## completed ## ]]\n");
         result
+    }
+
+    pub fn format_output_json_def(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        output: &JsonMap,
+    ) -> String {
+        let value = alias_output_fields(Value::Object(output.clone()), def, types);
+        serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
     }
 
     #[allow(clippy::result_large_err)]
@@ -433,29 +647,11 @@ impl ChatAdapter {
                     passed: check.passed,
                 })
                 .collect::<Vec<_>>();
-            for constraint in field.constraints.iter() {
-                let passed = evaluate_expression(&constraint.expr, &coerced.value);
-                match constraint.kind {
-                    ConstraintKind::Assert => {
-                        if !passed {
-                            debug!(field = %field.name, label = %constraint.label, "value-level assert constraint failed");
-                            errors.push(ParseError::AssertFailed {
-                                field: field.name.to_string(),
-                                label: constraint.label.to_string(),
-                                expression: constraint.expr.to_string(),
-                                value: coerced.value.clone(),
-                            });
-                        }
-                    }
-                    ConstraintKind::Check => {
-                        checks.push(ConstraintResult {
-                            label: constraint.label.to_string(),
-                            expression: constraint.expr.to_string(),
-                            passed,
-                        });
-                    }
-                }
-            }
+            checks.extend(evaluate_field_constraints(
+                field,
+                &coerced.value,
+                &mut errors,
+            ));
 
             metas.insert(
                 field.name.to_string(),
@@ -481,6 +677,85 @@ impl ChatAdapter {
         Ok((output, metas))
     }
 
+    /// Parses provider-native JSON output through the same coercion and constraint stage
+    /// as delimiter responses. JSON object keys may use LM-facing aliases.
+    pub fn parse_output_json_def(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        response: &Message,
+    ) -> std::result::Result<(JsonMap, IndexMap<String, FieldMeta>), ParseError> {
+        let content = response.text_content_cow();
+        let parsed: Value =
+            serde_json::from_str(&content).map_err(|err| ParseError::CoercionFailed {
+                field: "<response>".into(),
+                expected_type: "JSON object".into(),
+                raw_text: content.to_string(),
+                source: JsonishError::from(anyhow::anyhow!(err)),
+            })?;
+        let normalized = canonicalize_output_aliases(parsed, def, types);
+        let Some(values) = normalized.as_object() else {
+            return Err(ParseError::CoercionFailed {
+                field: "<response>".into(),
+                expected_type: "JSON object".into(),
+                raw_text: content.to_string(),
+                source: JsonishError::from(anyhow::anyhow!("expected JSON object")),
+            });
+        };
+        let mut output = JsonMap::new();
+        let mut metas = IndexMap::new();
+        let mut errors = Vec::new();
+        for field in def.outputs.iter() {
+            let Some(value) = values.get(field.name.as_ref()).cloned() else {
+                errors.push(ParseError::MissingField {
+                    field: field.name.to_string(),
+                    raw_response: content.to_string(),
+                });
+                continue;
+            };
+            let value_text = value.to_string();
+            let (coerced, nested_checks) = match coerce_value_with_checks(value, &field.ty, types) {
+                Ok(value) => value,
+                Err(err) => {
+                    errors.push(ParseError::CoercionFailed {
+                        field: field.name.to_string(),
+                        expected_type: type_name(&field.ty, Some(types)),
+                        raw_text: value_text,
+                        source: JsonishError::from(err),
+                    });
+                    continue;
+                }
+            };
+            let mut checks: Vec<ConstraintResult> = nested_checks
+                .into_iter()
+                .map(|check| ConstraintResult {
+                    label: check.label,
+                    expression: check.expression,
+                    passed: check.passed,
+                })
+                .collect();
+            checks.extend(evaluate_field_constraints(
+                field,
+                &coerced.value,
+                &mut errors,
+            ));
+            metas.insert(
+                field.name.to_string(),
+                FieldMeta {
+                    raw_text: value_text,
+                    flags: coerced.flags,
+                    checks,
+                },
+            );
+            output.insert(field.name.to_string(), coerced.value);
+        }
+        if !errors.is_empty() {
+            let partial = (!output.is_empty()).then(|| Value::Object(output));
+            return Err(ParseError::Multiple { errors, partial });
+        }
+        Ok((output, metas))
+    }
+
     /// Splits raw LM response text into named sections by `[[ ## field ## ]]` delimiters.
     ///
     /// Returns an ordered map of field_name → section_content. The `completed` marker
@@ -489,6 +764,35 @@ impl ChatAdapter {
     pub fn parse_sections(content: &str) -> IndexMap<String, String> {
         crate::adapter::chat::parse_sections(content)
     }
+}
+
+fn evaluate_field_constraints(
+    field: &crate::ir::FieldDef,
+    value: &Value,
+    errors: &mut Vec<ParseError>,
+) -> Vec<ConstraintResult> {
+    let mut checks = Vec::new();
+    for constraint in field.constraints.iter() {
+        let passed = evaluate_expression(&constraint.expr, value);
+        match constraint.kind {
+            ConstraintKind::Assert if !passed => {
+                debug!(field = %field.name, label = %constraint.label, "value-level assert constraint failed");
+                errors.push(ParseError::AssertFailed {
+                    field: field.name.to_string(),
+                    label: constraint.label.to_string(),
+                    expression: constraint.expr.to_string(),
+                    value: value.clone(),
+                });
+            }
+            ConstraintKind::Check => checks.push(ConstraintResult {
+                label: constraint.label.to_string(),
+                expression: constraint.expr.to_string(),
+                passed,
+            }),
+            ConstraintKind::Assert => {}
+        }
+    }
+    checks
 }
 
 fn parse_sections(content: &str) -> IndexMap<String, String> {
