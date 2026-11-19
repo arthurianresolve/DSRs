@@ -274,6 +274,32 @@ impl LM {
         })
     }
 
+    /// Copies this LM, applying changes over its existing configuration.
+    ///
+    /// Generation-only changes retain the provider client (including injected
+    /// clients). Model, endpoint, or credential changes initialize a new client.
+    /// Copies always start with a fresh cache when caching is enabled.
+    pub async fn copy_with(&self, overrides: impl FnOnce(&mut LMConfig)) -> Result<Self> {
+        let mut config = self.config.clone();
+        overrides(&mut config);
+        if config.model != self.config.model
+            || config.base_url != self.config.base_url
+            || config.api_key != self.config.api_key
+        {
+            return Self::from_config(config).await;
+        }
+        let cache_handler = if config.cache {
+            Some(Arc::new(ResponseCache::new().await))
+        } else {
+            None
+        };
+        Ok(Self {
+            config,
+            cache_handler,
+            ..self.clone()
+        })
+    }
+
     /// Replaces the provider client and starts a fresh response cache and history
     /// when caching is enabled. Existing clones retain their client and cache.
     pub async fn with_client(self, client: LMClient) -> Result<Self> {
@@ -407,7 +433,7 @@ fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
 }
 
 /// Keep provider URLs, credentials, and response bodies out of logs and run errors.
-fn safe_completion_error_kind(err: &CompletionError) -> &'static str {
+pub(crate) fn safe_completion_error_kind(err: &CompletionError) -> &'static str {
     match err {
         CompletionError::HttpError(_) => "HTTP transport error",
         CompletionError::JsonError(_) => "provider JSON error",
@@ -420,11 +446,22 @@ fn safe_completion_error_kind(err: &CompletionError) -> &'static str {
 
 /// Whether a rig completion error is worth retrying.
 ///
-/// HTTP-layer failures (connect, timeout) always are. Provider errors are string-typed
-/// in rig, so transient markers (429/5xx/overload) are matched textually.
-fn is_retryable_completion_error(err: &CompletionError) -> bool {
+/// Retry transport failures and HTTP 429/5xx. Permanent HTTP errors and
+/// request-construction errors fail immediately. Provider errors are string-typed
+/// in rig, so transient markers are matched textually only for that variant.
+pub(crate) fn is_retryable_completion_error(err: &CompletionError) -> bool {
     match err {
-        CompletionError::HttpError(_) => true,
+        CompletionError::HttpError(error) => match error {
+            rig::http_client::Error::InvalidStatusCode(status)
+            | rig::http_client::Error::InvalidStatusCodeWithMessage(status, _) => {
+                status.as_u16() == 429 || status.is_server_error()
+            }
+            rig::http_client::Error::Instance(source) => source
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(|error| error.is_connect() || error.is_timeout() || error.is_body()),
+            rig::http_client::Error::StreamEnded => true,
+            _ => false,
+        },
         CompletionError::ProviderError(message) => {
             let message = message.to_ascii_lowercase();
             [
@@ -520,9 +557,10 @@ impl LM {
     where
         F: Fn() -> CompletionRequest,
     {
-        let client = self.client.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder.")
-        })?;
+        let client = self
+            .client
+            .as_ref()
+            .ok_or(crate::LmCallError::NotInitialized)?;
 
         let mut attempt = 0u32;
         loop {
@@ -551,12 +589,7 @@ impl LM {
                     tokio::time::sleep(delay).await;
                     attempt += 1;
                 }
-                Err(err) => {
-                    return Err(anyhow::anyhow!(
-                        "LM completion failed: {}",
-                        safe_completion_error_kind(&err)
-                    ));
-                }
+                Err(err) => return Err(crate::LmCallError::from(err).into()),
             }
         }
     }
