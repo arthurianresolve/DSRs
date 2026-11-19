@@ -17,6 +17,10 @@ use tracing_subscriber::{
 };
 
 type Records = Arc<Mutex<Vec<(String, BTreeMap<String, String>)>>>;
+
+// Scoped dispatchers share tracing's process-wide callsite interest cache.
+static TRACING_TESTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[derive(Clone)]
 struct Recorder(Records);
 #[derive(Default)]
@@ -120,6 +124,7 @@ impl TypedMetric<(QAInput, QAOutput), Echo> for Exact {
 
 #[tokio::test]
 async fn optimizer_emits_candidate_progress_scores_and_budget_outcomes() {
+    let _guard = TRACING_TESTS.lock().await;
     let records = Records::default();
     let subscriber = tracing_subscriber::registry().with(Recorder(records.clone()));
     async {
@@ -188,6 +193,7 @@ async fn optimizer_emits_candidate_progress_scores_and_budget_outcomes() {
 
 #[tokio::test]
 async fn optimizer_keeps_typed_error_and_candidate_example_context() {
+    let _guard = TRACING_TESTS.lock().await;
     let mut module = Echo {
         leaf: Predict::new(),
         fail: true,
@@ -213,6 +219,8 @@ async fn optimizer_keeps_typed_error_and_candidate_example_context() {
 async fn full_prompt_and_response_logs_require_the_content_target() {
     use dspy_rs::{LM, LMClient, TestCompletionModel};
     use rig::completion::AssistantContent;
+
+    let _guard = TRACING_TESTS.lock().await;
     let client = TestCompletionModel::new((0..2).map(|_| {
         AssistantContent::text("[[ ## answer ## ]]\nunique-response\n\n[[ ## completed ## ]]")
     }));
