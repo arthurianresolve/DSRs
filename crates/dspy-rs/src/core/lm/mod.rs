@@ -1496,7 +1496,7 @@ impl LM {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -1992,7 +1992,7 @@ mod tests {
         }
     }
 
-    fn test_lm_with_model(model: TestCompletionModel) -> LM {
+    pub(crate) fn test_lm_with_model(model: TestCompletionModel) -> LM {
         LM {
             history: crate::HistoryBuffer::default(),
             config: LMConfig {
