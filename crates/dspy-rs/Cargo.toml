@@ -63,6 +63,8 @@ default = ["data", "cache"]
 data = ["dep:arrow", "dep:parquet", "dep:hf-hub", "dep:csv"]
 # Optional response-cache storage; execution history is always available.
 cache = ["dep:foyer", "dep:tempfile"]
+# Share concurrent cache misses when response caching is enabled for an LM.
+inflight-dedup = ["cache"]
 
 [[example]]
 name = "03-evaluate-hotpotqa"

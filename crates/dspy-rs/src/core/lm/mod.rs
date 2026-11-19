@@ -26,6 +26,8 @@ use crate::ResponseCache;
 use crate::trace::SpanEvent;
 #[cfg(feature = "cache")]
 use crate::utils::cache::CacheEntry;
+#[cfg(feature = "inflight-dedup")]
+use crate::utils::cache::InflightResponse;
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
@@ -1283,23 +1285,28 @@ impl LM {
             && let Some(raw_output) = cache.get_response(key).await?
         {
             debug!("lm response served from cache");
-            let output = Message::assistant(&raw_output);
-            let mut chat = messages;
-            chat.push_message(output.clone());
-            return Ok(LMResponse {
-                cache_hit: true,
-                history: None,
-                output: output.clone(),
-                usage: LmUsage::default(),
-                chat,
-                tool_calls: Vec::new(),
-                tool_executions: Vec::new(),
-                events: vec![SpanEvent::Exchange {
-                    message: output,
-                    usage: LmUsage::default(),
-                }],
-            });
+            return Ok(Self::response_from_cache(messages, raw_output));
         }
+
+        #[cfg(feature = "inflight-dedup")]
+        let pending = if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref()) {
+            let pending = match cache.register_inflight(key) {
+                InflightResponse::Leader(pending) => Some(pending),
+                InflightResponse::Follower(mut finished) => {
+                    let _ = finished.changed().await;
+                    None
+                }
+            };
+
+            // The first caller can fill the cache between the miss and registration.
+            if let Some(raw_output) = cache.get_response(key).await? {
+                debug!("lm response shared with an in-flight identical call");
+                return Ok(Self::response_from_cache(messages, raw_output));
+            }
+            pending
+        } else {
+            None
+        };
 
         let system_prompt = messages.system_prompt();
         let chat_history = messages.to_rig_chat_history();
@@ -1431,6 +1438,8 @@ impl LM {
             cache.insert_entry(key, entry);
             trace!("lm response cached");
         }
+        #[cfg(feature = "inflight-dedup")]
+        drop(pending);
 
         let mut full_chat = if let Some(result) = tool_loop_result.as_ref() {
             Self::chat_from_rig_history(&system_prompt, &result.chat_history)
@@ -1481,6 +1490,26 @@ impl LM {
                 .map(|result| result.events)
                 .unwrap_or(events),
         })
+    }
+
+    #[cfg(feature = "cache")]
+    fn response_from_cache(mut chat: Chat, raw_output: String) -> LMResponse {
+        let output = Message::assistant(&raw_output);
+        let usage = LmUsage::default();
+        chat.push_message(output.clone());
+        LMResponse {
+            cache_hit: true,
+            history: None,
+            output: output.clone(),
+            usage,
+            chat,
+            tool_calls: Vec::new(),
+            tool_executions: Vec::new(),
+            events: vec![SpanEvent::Exchange {
+                message: output,
+                usage,
+            }],
+        }
     }
 
     /// Returns up to `n` LM invocations, newest first, independent of caching.
@@ -2013,6 +2042,132 @@ pub(crate) mod tests {
             custom_output_schema: false,
             scalar_output_schema: false,
         }
+    }
+
+    #[cfg(feature = "inflight-dedup")]
+    async fn cached_test_lm(model: TestCompletionModel) -> LM {
+        let mut lm = test_lm_with_model(model);
+        lm.config.cache = true;
+        lm.cache_handler = Some(Arc::new(ResponseCache::memory_only_for_test().await));
+        lm
+    }
+
+    #[cfg(feature = "inflight-dedup")]
+    #[tokio::test]
+    async fn identical_call_reuses_inflight_response_with_zero_usage() {
+        let model = TestCompletionModel::new([]);
+        let lm = cached_test_lm(model.clone()).await;
+        let chat = Chat::new(vec![Message::user("hi")]);
+        let key = lm.cache_key_for(&chat, &LMCallOptions::default());
+        let cache = lm.cache_handler.as_ref().unwrap();
+        let InflightResponse::Leader(pending) = cache.register_inflight(key) else {
+            panic!("expected to own the in-flight slot");
+        };
+        let mut waiter = tokio::spawn({
+            let lm = lm.clone();
+            let chat = chat.clone();
+            async move { lm.call(chat, vec![]).await }
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut waiter)
+                .await
+                .is_err()
+        );
+
+        cache.insert_entry(
+            key,
+            CacheEntry {
+                prompt: chat.to_json().to_string(),
+                usage: LmUsage::default(),
+                raw_output: Some("shared".into()),
+            },
+        );
+        drop(pending);
+
+        let response = tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("waiter did not finish")
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.output.content(), "shared");
+        assert!(response.cache_hit);
+        assert_eq!(response.usage.total_tokens, 0);
+        assert!(model.last_request().is_none());
+    }
+
+    #[cfg(feature = "inflight-dedup")]
+    struct DelayedFirstFailure {
+        calls: AtomicUsize,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        model: TestCompletionModel,
+    }
+
+    #[cfg(feature = "inflight-dedup")]
+    impl CompletionProvider for DelayedFirstFailure {
+        async fn completion(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse<()>, CompletionError> {
+            if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                self.started.notify_one();
+                self.release.notified().await;
+                return Err(CompletionError::ResponseError(
+                    "in-flight leader failed".into(),
+                ));
+            }
+            self.model.completion(request).await
+        }
+    }
+
+    #[cfg(feature = "inflight-dedup")]
+    #[rstest::rstest]
+    #[case::failure(false)]
+    #[case::cancellation(true)]
+    #[tokio::test]
+    async fn identical_call_falls_back_when_inflight_produces_no_response(#[case] cancel: bool) {
+        let model = TestCompletionModel::new([make_text("fresh")]);
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut lm = cached_test_lm(model.clone()).await;
+        lm.client = Some(Arc::new(LMClient::custom(DelayedFirstFailure {
+            calls: AtomicUsize::new(0),
+            started: started.clone(),
+            release: release.clone(),
+            model: model.clone(),
+        })));
+        let chat = Chat::new(vec![Message::user("hi")]);
+        let leader = tokio::spawn({
+            let lm = lm.clone();
+            let chat = chat.clone();
+            async move { lm.call(chat, vec![]).await }
+        });
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .expect("leader did not reach the provider");
+        let mut waiter = tokio::spawn(async move { lm.call(chat, vec![]).await });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut waiter)
+                .await
+                .is_err()
+        );
+
+        if cancel {
+            leader.abort();
+            assert!(leader.await.unwrap_err().is_cancelled());
+        } else {
+            release.notify_one();
+            assert!(leader.await.unwrap().is_err());
+        }
+
+        let response = tokio::time::timeout(Duration::from_secs(5), waiter)
+            .await
+            .expect("waiter did not finish")
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.output.content(), "fresh");
+        assert!(!response.cache_hit);
+        assert_eq!(model.call_count(), 1);
     }
 
     #[tokio::test]
