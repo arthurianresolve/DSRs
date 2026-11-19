@@ -225,10 +225,23 @@ pub trait Module: Send + Sync {
 
     /// Runs the module. This is what you call.
     ///
-    /// Delegates to [`forward`](Module::forward). The split exists for future
-    /// hooks/tracing/middleware.
+    /// Delegates to [`forward`](Module::forward), inside a module tracing span.
+    #[tracing::instrument(name = "dsrs.module.call", level = "debug", skip_all,
+        fields(module = std::any::type_name::<Self>()))]
     async fn call(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
         self.forward(input).await
+    }
+
+    /// Collects this module's nested LM calls in a bounded, independent history.
+    fn with_history(self, name: impl Into<String>, capacity: usize) -> HistoryModule<Self>
+    where
+        Self: Sized,
+    {
+        HistoryModule {
+            module: self,
+            name: name.into(),
+            history: crate::HistoryBuffer::new(capacity),
+        }
     }
 
     /// Overrides the LM for this call and its predictor leaves.
@@ -249,6 +262,37 @@ pub trait Module: Send + Sync {
             module: self,
             lm: lm.into(),
         }
+    }
+}
+
+pub struct HistoryModule<M> {
+    pub module: M,
+    pub history: crate::HistoryBuffer,
+    name: String,
+}
+
+impl<M> HistoryModule<M> {
+    pub async fn inspect_history(&self, n: usize) -> Vec<crate::HistoryEntry> {
+        self.history.inspect(n)
+    }
+}
+
+impl<M: Module> Module for HistoryModule<M> {
+    type Input = M::Input;
+    type Output = M::Output;
+    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
+        self.history
+            .scope(self.name.clone(), self.module.call(input))
+            .await
+    }
+}
+
+impl<M: Predictors> Predictors for HistoryModule<M> {
+    fn predictors(&self) -> Vec<(String, &dyn PredictorInfo)> {
+        self.module.predictors()
+    }
+    fn predictors_mut(&mut self) -> Vec<(String, &mut dyn PredictorInfo)> {
+        self.module.predictors_mut()
     }
 }
 

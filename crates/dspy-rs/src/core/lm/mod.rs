@@ -19,12 +19,18 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tracing::{debug, trace, warn};
 
+#[cfg(feature = "cache")]
 use crate::ResponseCache;
 use crate::trace::SpanEvent;
+#[cfg(feature = "cache")]
 use crate::utils::cache::CacheEntry;
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
+    /// True when this response was served from the response cache.
+    pub cache_hit: bool,
+    /// Shared history record, enriched with parsed output by the interpreter.
+    pub history: Option<crate::HistoryRecord>,
     /// Assistant message chosen by the provider.
     pub output: Message,
     /// Token usage reported by the provider for this call (aggregate).
@@ -214,7 +220,10 @@ fn native_tools_enabled(enabled: &bool) -> bool {
 /// response cache. Constructed via [`LM::builder()`] or [`LM::from_config`].
 #[derive(Clone)]
 pub struct LM {
+    pub history: crate::HistoryBuffer,
     pub config: LMConfig,
+    /// Response cache storage, available only with the `cache` Cargo feature.
+    #[cfg(feature = "cache")]
     pub cache_handler: Option<Arc<ResponseCache>>,
     client: Option<Arc<LMClient>>,
     custom_output_schema: bool,
@@ -294,6 +303,7 @@ impl LM {
         )
     )]
     pub async fn from_config(config: LMConfig) -> Result<Self> {
+        validate_cache_setting(config.cache)?;
         // Determine which build case based on what's provided
         let client = match (&config.base_url, &config.api_key, &config.model) {
             // Case 1: OpenAI-compatible with authentication (base_url + api_key)
@@ -330,6 +340,7 @@ impl LM {
             }
         };
 
+        #[cfg(feature = "cache")]
         let cache_handler = if config.cache {
             debug!("initializing response cache");
             Some(Arc::new(ResponseCache::new().await))
@@ -339,7 +350,9 @@ impl LM {
 
         debug!("lm client initialized");
         Ok(LM {
+            history: crate::HistoryBuffer::default(),
             config,
+            #[cfg(feature = "cache")]
             cache_handler,
             client: Some(client),
             custom_output_schema: false,
@@ -350,39 +363,47 @@ impl LM {
     ///
     /// Generation-only changes retain the provider client (including injected
     /// clients). Model, endpoint, or credential changes initialize a new client.
-    /// Copies always start with a fresh cache when caching is enabled.
+    /// Copies always start with fresh history and a fresh cache when enabled.
     pub async fn copy_with(&self, overrides: impl FnOnce(&mut LMConfig)) -> Result<Self> {
         let mut config = self.config.clone();
         overrides(&mut config);
+        validate_cache_setting(config.cache)?;
         if config.model != self.config.model
             || config.base_url != self.config.base_url
             || config.api_key != self.config.api_key
         {
             return Self::from_config(config).await;
         }
+        #[cfg(feature = "cache")]
         let cache_handler = if config.cache {
             Some(Arc::new(ResponseCache::new().await))
         } else {
             None
         };
         Ok(Self {
+            history: crate::HistoryBuffer::default(),
             config,
+            #[cfg(feature = "cache")]
             cache_handler,
             ..self.clone()
         })
     }
 
-    /// Replaces the provider client and starts a fresh response cache and history
-    /// when caching is enabled. Existing clones retain their client and cache.
+    /// Replaces the provider client and starts fresh history and cache state.
+    /// Existing clones retain their client, cache, and history.
     pub async fn with_client(self, client: LMClient) -> Result<Self> {
+        validate_cache_setting(self.config.cache)?;
+        #[cfg(feature = "cache")]
         let cache_handler = if self.config.cache {
             Some(Arc::new(ResponseCache::new().await))
         } else {
             None
         };
         Ok(LM {
-            client: Some(Arc::new(client)),
+            history: crate::HistoryBuffer::default(),
+            #[cfg(feature = "cache")]
             cache_handler,
+            client: Some(Arc::new(client)),
             ..self
         })
     }
@@ -458,6 +479,13 @@ enum ChoiceAction {
         full_content: Box<rig::OneOrMany<AssistantContent>>,
         assistant_text: Option<String>,
     },
+}
+
+fn validate_cache_setting(enabled: bool) -> Result<()> {
+    if enabled && !cfg!(feature = "cache") {
+        return Err(crate::LmCallError::FeatureDisabled { feature: "cache" }.into());
+    }
+    Ok(())
 }
 
 /// Scan all content blocks in a response to find actionable items.
@@ -734,6 +762,7 @@ impl LM {
     /// automatically. Hashing streams through the `Debug` representation — no
     /// intermediate JSON tree or string is materialized. Uses the same stable
     /// hasher as the trace format's `request_hash`.
+    #[cfg(feature = "cache")]
     fn cache_key_for(&self, messages: &Chat, options: &LMCallOptions) -> u64 {
         use crate::utils::hash::{HashWriter, StableHasher};
         use std::hash::Hasher;
@@ -852,6 +881,7 @@ impl LM {
                     if prompt_tools {
                         decode_prompt_tools(&mut response, tool_required)?;
                     }
+                    debug!(target: "dsrs::content", choice = ?response.choice, "provider response");
                     return Ok(response);
                 }
                 Err(err)
@@ -1183,6 +1213,27 @@ impl LM {
         tool_loop_mode: ToolLoopMode,
         options: LMCallOptions,
     ) -> Result<LMResponse> {
+        let history =
+            crate::core::history::HistoryCall::begin(&self.config, &messages, &self.history);
+        debug!(target: "dsrs::content", prompt = %messages.to_json(), "formatted LM prompt");
+        let mut result = self
+            .call_with_toolset_inner(messages, tools, tool_loop_mode, options)
+            .await;
+        history.finish(&mut result);
+        if let Ok(response) = &result {
+            debug!(target: "dsrs::content", response = %response.output.to_json(), "raw LM response");
+        }
+        result
+    }
+
+    async fn call_with_toolset_inner(
+        &self,
+        messages: Chat,
+        tools: &ToolSet,
+        tool_loop_mode: ToolLoopMode,
+        options: LMCallOptions,
+    ) -> Result<LMResponse> {
+        validate_cache_setting(self.config.cache)?;
         if (self.supports_output_schema() || options.force_output_schema)
             && let Some(schema) = options.output_schema.clone()
         {
@@ -1200,11 +1251,13 @@ impl LM {
 
         // Response cache: only tool-free calls are cached — tool loops execute
         // side-effectful user code and must not be replayed from cache.
+        #[cfg(feature = "cache")]
         let cache_key = if self.config.cache && self.cache_handler.is_some() && tools.is_empty() {
             Some(self.cache_key_for(&messages, &options))
         } else {
             None
         };
+        #[cfg(feature = "cache")]
         if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref())
             && let Some(entry) = cache.get_entry(key).await?
             && let Some(raw_output) = entry.raw_output
@@ -1214,6 +1267,8 @@ impl LM {
             let mut chat = messages;
             chat.push_message(output.clone());
             return Ok(LMResponse {
+                cache_hit: true,
+                history: None,
                 output: output.clone(),
                 usage: LmUsage::default(),
                 chat,
@@ -1341,6 +1396,7 @@ impl LM {
         // covers the tool-loop and "no tools available" fallbacks, and
         // `returned_tool_calls` covers caller-managed tool responses. This runs
         // before `messages` is moved into the returned chat below.
+        #[cfg(feature = "cache")]
         if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref())
             && returned_tool_calls.is_empty()
             && !append_output_after_history
@@ -1386,6 +1442,8 @@ impl LM {
         );
 
         Ok(LMResponse {
+            cache_hit: false,
+            history: None,
             output: first_choice,
             usage: accumulated_usage,
             chat: full_chat,
@@ -1403,21 +1461,15 @@ impl LM {
         })
     }
 
-    /// Returns up to `n` recent cache insertions, newest first.
-    ///
-    /// Returns an empty vector when caching is disabled or no entries have been
-    /// recorded. Cache hits and calls with tools do not add history entries.
+    /// Returns up to `n` LM invocations, newest first, independent of caching.
     #[tracing::instrument(
         name = "dsrs.lm.inspect_history",
         level = "trace",
         skip(self),
         fields(n)
     )]
-    pub async fn inspect_history(&self, n: usize) -> Vec<CacheEntry> {
-        self.cache_handler
-            .as_ref()
-            .map(|cache| cache.get_history(n))
-            .unwrap_or_default()
+    pub async fn inspect_history(&self, n: usize) -> Vec<crate::HistoryEntry> {
+        self.history.inspect(n)
     }
 }
 
@@ -1517,6 +1569,7 @@ mod tests {
             "json_object"
         );
         assert!(request.output_schema.is_none());
+        #[cfg(feature = "cache")]
         assert_ne!(
             lm.cache_key_for(&chat, &LMCallOptions::default()),
             lm.cache_key_for(&chat, &options)
@@ -1584,9 +1637,11 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "cache")]
     #[tokio::test]
     async fn cache_key_uses_sample_identity_and_effective_temperature() {
         let lm = LM {
+            history: crate::HistoryBuffer::default(),
             config: LMConfig::default(),
             cache_handler: None,
             client: None,
@@ -1630,10 +1685,12 @@ mod tests {
         assert_ne!(first, temperature);
     }
 
+    #[cfg(feature = "cache")]
     #[tokio::test]
     async fn cache_hit_reports_zero_usage_and_keeps_original_entry() {
         let cache = Arc::new(ResponseCache::new().await);
         let lm = LM {
+            history: crate::HistoryBuffer::default(),
             config: LMConfig {
                 cache: true,
                 ..LMConfig::default()
@@ -1670,6 +1727,7 @@ mod tests {
         assert_eq!(entry.usage.total_tokens, original.total_tokens);
     }
 
+    #[cfg(feature = "cache")]
     #[tokio::test]
     async fn equal_sample_identity_reuses_cache_but_distinct_identity_reaches_provider() {
         let model =
@@ -1912,6 +1970,7 @@ mod tests {
 
     fn test_lm_with_model(model: TestCompletionModel) -> LM {
         LM {
+            history: crate::HistoryBuffer::default(),
             config: LMConfig {
                 native_tools: true,
                 base_url: None,
@@ -1924,6 +1983,7 @@ mod tests {
                 retry_base_delay_ms: 1,
                 cache: false,
             },
+            #[cfg(feature = "cache")]
             cache_handler: None,
             client: Some(Arc::new(LMClient::Test(model))),
             custom_output_schema: false,

@@ -57,7 +57,8 @@ async fn main() -> anyhow::Result<()> {
 
 The live `LM` adds:
   - `client` - Internal provider client (initialized during build)
-  - `cache_handler` - Optional response cache (initialized during build if enabled)
+  - `cache_handler` - Optional response cache (available with the `cache` Cargo feature, initialized during build if enabled)
+  - `history` - Bounded invocation history, available with every feature configuration
 
 Cloning an `LM` is cheap - clones share the same HTTP client and cache via `Arc`, making them ideal for concurrent use.
 
@@ -241,7 +242,7 @@ let result = predictor.call_with_config(input, |config| {
 }).await?;
 ```
 
-This starts from the predictor's resolved LM, applies the closure, and uses the variant as an explicit override. To reuse a variant's cache across calls, construct it once with `copy_with` and pass its `Arc<LM>` to subsequent calls.
+This starts from the predictor's resolved LM, applies the closure, and uses the variant as an explicit override. Copies start with independent history, even when retaining the same provider client. Global, predictor and tracked-module history still collect calls made through the variant. To reuse a variant's cache across calls, construct it once with `copy_with` and pass its `Arc<LM>` to subsequent calls. Enabling caching in a copy requires the `cache` Cargo feature.
 
 ## Retry behavior
 
@@ -256,12 +257,33 @@ let history = lm.inspect_history(3).await;
 for entry in history {
     println!("Prompt: {}", entry.prompt);
     println!("Raw output: {:?}", entry.raw_output);
+    println!("Parsed output: {:?}", entry.output);
+    println!("Error: {:?}", entry.error);
 }
 ```
 
-> Enable caching with `.cache(true)` before making calls to record history. `inspect_history` returns an empty vector when caching is disabled or no entries have been recorded. It returns up to `n` recent cache insertions, newest first, from a window of 100 entries. Cache hits do not add history entries. Entries are `CacheEntry` values served by `ResponseCache`; see [Utils](/docs/components/utils). Only tool-free calls are cached, since tool loops execute side-effectful user code.
+History is independent of response caching. Each logical LM invocation records a `HistoryEntry`, including cache hits, calls with tools, provider failures, and cancelled calls. The interpreter attaches parsed output or a parse error to that same record after the LM returns. Direct `LM::call` calls have no signature parser, so their `output` stays `None`.
 
-Replacing the provider with `lm.with_client(client).await?` starts a fresh cache and history when caching is enabled. Existing LM clones keep their original client, cached responses, and history.
+LMs and predictors retain the 100 most recently completed calls by default, newest first. Use `lm.history.set_capacity(n)`, `predictor.set_history_capacity(n)`, or `dspy_rs::set_history_capacity(n)` to configure their independent limits. Zero disables retention in that store. Clear stores with `lm.history.clear()`, `predictor.clear_history()`, or `dspy_rs::clear_history()`. LM clones share their history; constructing an LM or replacing its client starts a new store.
+
+```rust
+let global = dspy_rs::inspect_history(3);
+let predictor_calls = predictor.inspect_history(3).await;
+
+// Collect a parent module's calls while retaining optimizer leaf discovery.
+use dspy_rs::Module;
+let tracked = module.with_history("pipeline", 100);
+let result = tracked.call(input).await?;
+let module_calls = tracked.inspect_history(3).await;
+```
+
+Each entry contains a call ID, timestamp and duration in microseconds, model and redacted configuration, input messages, raw assistant response, optional parsed output, token usage, cache-hit flag, caller path, trace-format events, and an optional typed error. API keys are removed and endpoint URLs are reduced to their origin. Pricing is unavailable at this layer, so `cost` is `None`. Usage is `None` when a failed or cancelled call cannot report it; cache hits record zero newly consumed tokens.
+
+Nested module scopes collect their descendant LM calls; each predictor also keeps its own history. For manual scopes, use `HistoryBuffer::scope(name, future)`. Spawned tasks do not inherit the caller stack; establish a history scope inside each spawned task when needed. History records logical LM calls rather than individual retry attempts. Pure trace replay bypasses the LM and does not add execution-history entries.
+
+The trace system remains the source of full rollout graphs and replay. History reuses its event and error types and shares the interpreter's parsed results without requiring an active trace capture.
+
+Migration: `LM::inspect_history` now returns `Vec<HistoryEntry>` rather than `Vec<CacheEntry>`. The cache's `get_history` API has been removed; use the LM, predictor, tracked module, or global history APIs instead.
 
 ### Inspecting a prompt before sending
 
@@ -289,7 +311,7 @@ All `LM` builder parameters have sensible defaults, so you only need to override
 | `max_tool_iterations` | `u32`  | `10`                 | Maximum automatic tool-execution rounds, including the initial round; `0` disables automatic tool execution |
 | `max_retries`| `u32`           | `2`                  | Additional attempts after a transient failure (429/5xx/network/timeout); `0` disables retries |
 | `retry_base_delay_ms` | `u64`  | `250`                | Base delay for exponential backoff between retries, plus up to 50% jitter      |
-| `cache`      | `bool`          | `false`              | Enables response caching and `inspect_history` support                         |
+| `cache`      | `bool`          | `false`              | Enables response caching; history is recorded independently                    |
 
 ### Automatic tool-loop limits
 
@@ -390,6 +412,13 @@ for the distinction between the two parameters.
 With `ToolSet::code_mode`, instead of emitting one JSON tool call per step, the model writes JavaScript against the tools as a JS API and composes their results in one execution. The returned set drops into any tool loop (`LM::call_with_toolset`, `Predict`) exactly like a normal `ToolSet`. It errors if two tool names mangle to the same JS identifier. See [Code Mode](/docs/components/code-mode) for the full sandbox surface.
 
 ## See also
+
+Persistent interaction storage is available through `JsonlInteractionStore` and
+`with_interaction_store(store, future)`. It records calls independently of cache
+and bounded history, including failures, cache hits, cancellations and parsed
+results. Typed predictions expose `metadata().call_ids` for subsequent lookup.
+See the repository's `docs/interaction-storage.md` for the scope/error contract,
+reopening and recovery behavior, and an example.
 
 - [Predict](/docs/components/predict)
 - [Code Mode](/docs/components/code-mode)
