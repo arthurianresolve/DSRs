@@ -3,6 +3,7 @@
 //! bootstrapping, ordered concurrent evaluation, and the LM response cache.
 
 use anyhow::Result;
+mod support;
 use dspy_rs::{
     CallMetadata, Chat, Demo, Eval, GEPA, LM, LMClient, MIPROv2, Message, Module, ModuleState,
     Predict, PredictError, Predicted, Signature, TestCompletionModel, TypedMetric,
@@ -597,7 +598,7 @@ impl Module for OneStepPredict {
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
-async fn mipro_bootstraps_demos_from_successful_traces() {
+async fn mipro_preserves_baseline_when_candidates_only_tie() {
     // 1 traced call + 2 candidate evaluations x 1 minibatch example = 3 LM calls.
     let responses = vec![response_with_fields(&[("answer", "4")]); 3];
     let mut module = OneStepPredict {
@@ -607,6 +608,7 @@ async fn mipro_bootstraps_demos_from_successful_traces() {
     };
 
     let optimizer = MIPROv2::builder()
+        .prompt_model(support::proposal_lm().await)
         .num_candidates(2)
         .num_trials(2)
         .minibatch_size(1)
@@ -632,14 +634,12 @@ async fn mipro_bootstraps_demos_from_successful_traces() {
     let predictor_state = &state.predictors["predictor"];
     assert_eq!(
         predictor_state.demos.len(),
-        1,
-        "the successful trace should be installed as a demo"
+        0,
+        "equal-scoring candidates must not replace the baseline"
     );
-    assert_eq!(predictor_state.demos[0]["question"], "What is 2+2?");
-    assert_eq!(predictor_state.demos[0]["answer"], "4");
     assert!(
-        predictor_state.instruction_override.is_some(),
-        "instruction search should install a candidate"
+        predictor_state.instruction_override.is_none(),
+        "instruction search should preserve the incumbent on a tie"
     );
 }
 

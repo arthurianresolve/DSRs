@@ -3,6 +3,7 @@
 #![cfg(feature = "data")]
 
 use anyhow::{Result, anyhow};
+mod support;
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
@@ -509,7 +510,11 @@ async fn typed_loader_outputs_feed_evaluator_and_optimizer_paths() -> Result<()>
     assert_eq!(outcomes.len(), 2);
     assert_eq!(average_score(&outcomes), 1.0);
 
-    let optimizer = COPRO::builder().breadth(2).depth(1).build();
+    let optimizer = COPRO::builder()
+        .breadth(2)
+        .depth(1)
+        .prompt_model(support::proposal_lm().await)
+        .build();
     optimizer
         .compile_module(&mut module, &trainset, &metric)
         .await?;
