@@ -716,6 +716,8 @@ impl Interpreter {
         let def = &self.program.sigs[sig];
         let prompt = if format == OutputFormat::Delimited {
             ChatAdapter.build_system_def(def, &self.program.types, Some(instruction))
+        } else if format == OutputFormat::JsonScalar {
+            ChatAdapter.build_system_scalar_def(def, &self.program.types, instruction)
         } else {
             ChatAdapter.build_system_json_def(
                 def,
@@ -983,6 +985,11 @@ impl Interpreter {
             .to_string();
         let def = self.leaf_sig(node);
         let cx = self.conversation_cx(overlay.clone(), Arc::new(BudgetMeter::new(budget)));
+        let lm = match &p.nodes[node] {
+            Node::Predict(n) => self.p_model(&at, &cx, n.model)?,
+            Node::AgentLoop(n) => self.p_model(&at, &cx, n.model)?,
+            _ => unreachable!("conversation_leaf returns only leaves"),
+        };
 
         // This turn's messages, plus the rendered prefix when we own it (an
         // opening turn interns system+demos; a caller-owned continuation has
@@ -997,9 +1004,14 @@ impl Interpreter {
         } else {
             if let Some(input_map) = input.as_ref() {
                 self.validate_input(&at, def, input_map)?;
-                let rendered = ChatAdapter
-                    .try_format_input_def(def, input_map)
-                    .map_err(|err| RunError::Input {
+                let format = output_format(&output_schema_options(
+                    &lm,
+                    def,
+                    &p.types,
+                    matches!(&p.nodes[node], Node::Predict(_)),
+                ));
+                let rendered =
+                    render_input(def, input_map, format).map_err(|err| RunError::Input {
                         at: at.clone().into(),
                         message: format!("{err:#}"),
                     })?;
@@ -1016,12 +1028,6 @@ impl Interpreter {
                 .count()
         } else {
             prefix.len()
-        };
-
-        let lm = match &p.nodes[node] {
-            Node::Predict(n) => self.p_model(&at, &cx, n.model)?,
-            Node::AgentLoop(n) => self.p_model(&at, &cx, n.model)?,
-            _ => unreachable!("conversation_leaf returns only leaves"),
         };
 
         let guard = begin_span(SpanRequest {
@@ -1137,8 +1143,8 @@ impl Interpreter {
             return Err(RunError::Budget { at: at.into() });
         }
 
-        let options = output_schema_options(lm, def, &self.program.types);
-        let structured = options.is_json();
+        let options = output_schema_options(lm, def, &self.program.types, true);
+        let format = output_format(&options);
         let declarations = ChatAdapter
             .signature_tools_from_messages(def, &messages)
             .map_err(|error| RunError::Input {
@@ -1194,10 +1200,8 @@ impl Interpreter {
                     serde_json::to_string(&output).expect("serializable typed tool output"),
                 ),
             )
-        } else if structured {
-            ChatAdapter.parse_output_json_def(def, &self.program.types, &response.output)
         } else {
-            ChatAdapter.parse_output_def(def, &self.program.types, &response.output)
+            parse_response(def, &self.program.types, &response.output, format)
         };
         if let Some(history) = &response.history {
             history.parsed(&parsed);
@@ -1455,7 +1459,8 @@ impl Interpreter {
                 let instruction = self.p_text(cx, n.instruction);
                 let demos = self.p_demos(cx, n.demos);
                 let lm = self.p_model(p.syms.get(n.name), cx, n.model)?;
-                let format = output_format(&output_schema_options(&lm, &p.sigs[n.sig], &p.types));
+                let format =
+                    output_format(&output_schema_options(&lm, &p.sigs[n.sig], &p.types, true));
                 render_prompt(
                     &p.sigs[n.sig],
                     &p.types,
@@ -1471,7 +1476,8 @@ impl Interpreter {
                 let demos = self.p_demos(cx, n.demos);
                 let policy = self.p_context(cx, n.context_policy);
                 let lm = self.p_model(p.syms.get(n.name), cx, n.model)?;
-                let format = output_format(&output_schema_options(&lm, &p.sigs[n.sig], &p.types));
+                let format =
+                    output_format(&output_schema_options(&lm, &p.sigs[n.sig], &p.types, false));
                 render_prompt(
                     &p.sigs[n.sig],
                     &p.types,
@@ -1814,7 +1820,7 @@ impl Interpreter {
         let instruction = self.p_text(cx, n.instruction);
         let demos = self.p_demos(cx, n.demos);
         let lm = self.p_model(&at, cx, n.model)?;
-        let format = output_format(&output_schema_options(&lm, def, &p.types));
+        let format = output_format(&output_schema_options(&lm, def, &p.types, true));
         let (prefix, mut suffix) = render_prompt(
             def,
             &p.types,
@@ -1918,8 +1924,8 @@ impl Interpreter {
             });
         }
 
-        let options = output_schema_options(&lm, def, &p.types);
-        let structured = options.is_json();
+        let options = output_schema_options(&lm, def, &p.types, true);
+        let format = output_format(&options);
         let declarations =
             ChatAdapter
                 .signature_tools(def, &input)
@@ -1976,10 +1982,8 @@ impl Interpreter {
                     serde_json::to_string(&output).expect("serializable typed tool output"),
                 ),
             )
-        } else if structured {
-            ChatAdapter.parse_output_json_def(def, &p.types, &response.output)
         } else {
-            ChatAdapter.parse_output_def(def, &p.types, &response.output)
+            parse_response(def, &p.types, &response.output, format)
         };
         if let Some(history) = &response.history {
             history.parsed(&parsed);
@@ -2235,7 +2239,7 @@ impl Interpreter {
         let demos = self.p_demos(cx, n.demos);
         let policy = self.p_context(cx, n.context_policy);
         let lm = self.p_model(&at, cx, n.model)?;
-        let format = output_format(&output_schema_options(&lm, def, &p.types));
+        let format = output_format(&output_schema_options(&lm, def, &p.types, false));
         let (prefix, mut suffix) = render_prompt(
             def,
             &p.types,
@@ -2439,8 +2443,8 @@ impl Interpreter {
             }
 
             chat = truncate_history(chat, lc.prefix_len, lc.policy);
-            let options = output_schema_options(lc.lm, lc.def, types);
-            let structured = options.is_json();
+            let options = output_schema_options(lc.lm, lc.def, types, false);
+            let format = output_format(&options);
             let response = lm_call_toolset(lc.lm, chat, lc.toolset, lc.at, options).await?;
             lc.meter.record_usage(&response.usage);
             run.usage = run.usage + response.usage;
@@ -2498,11 +2502,7 @@ impl Interpreter {
             // Text turn.
             if lc.n.stop.until_parse {
                 let raw = response.output.content();
-                let parsed = if structured {
-                    ChatAdapter.parse_output_json_def(lc.def, types, &response.output)
-                } else {
-                    ChatAdapter.parse_output_def(lc.def, types, &response.output)
-                };
+                let parsed = parse_response(lc.def, types, &response.output, format);
                 if let Some(history) = &response.history {
                     history.parsed(&parsed);
                 }
@@ -2552,8 +2552,8 @@ impl Interpreter {
         lc.run_meter
             .try_reserve_call()
             .map_err(|_| RunError::Budget { at: lc.at.into() })?;
-        let options = output_schema_options(lc.lm, lc.def, &self.program.types);
-        let structured = options.is_json();
+        let options = output_schema_options(lc.lm, lc.def, &self.program.types, false);
+        let format = output_format(&options);
         chat.push_message(Message::user(
             "Budget exhausted — wrap up now. Produce the final output fields in the required \
              required output format, without calling any tools.",
@@ -2576,11 +2576,7 @@ impl Interpreter {
         run.call_ids
             .extend(response.history.iter().map(|h| h.snapshot().id));
         let raw = response.output.content();
-        let parsed = if structured {
-            ChatAdapter.parse_output_json_def(lc.def, &self.program.types, &response.output)
-        } else {
-            ChatAdapter.parse_output_def(lc.def, &self.program.types, &response.output)
-        };
+        let parsed = parse_response(lc.def, &self.program.types, &response.output, format);
         if let Some(history) = &response.history {
             history.parsed(&parsed);
         }
@@ -3127,12 +3123,17 @@ async fn lm_call_toolset(
 enum OutputFormat {
     Delimited,
     JsonSchema,
+    JsonScalar,
     JsonMode,
 }
 
 fn output_format(options: &LMCallOptions) -> OutputFormat {
-    if options.output_schema.is_some() {
-        OutputFormat::JsonSchema
+    if let Some(schema) = &options.output_schema {
+        if schema.get("type").and_then(Value::as_str) == Some("string") {
+            OutputFormat::JsonScalar
+        } else {
+            OutputFormat::JsonSchema
+        }
     } else if options.json_mode {
         OutputFormat::JsonMode
     } else {
@@ -3150,7 +3151,6 @@ fn render_prompt(
     format: OutputFormat,
 ) -> anyhow::Result<(Vec<Message>, Vec<Message>)> {
     let adapter = ChatAdapter;
-    let structured = format != OutputFormat::Delimited;
     if let Some(playbook) = playbook {
         system.push_str("\n\n");
         system.push_str(playbook);
@@ -3158,27 +3158,57 @@ fn render_prompt(
     let mut prefix = Vec::with_capacity(1 + demos.len() * 2);
     prefix.push(Message::system(system));
     for row in demos {
-        prefix.push(Message::user(if structured {
-            adapter.try_format_input_json_def(def, &row.input)?
-        } else {
-            adapter.try_format_input_def(def, &row.input)?
-        }));
-        prefix.push(Message::assistant(if structured {
+        prefix.push(Message::user(render_input(def, &row.input, format)?));
+        prefix.push(Message::assistant(if format == OutputFormat::JsonScalar {
+            let field = &def.outputs[0];
+            row.output
+                .get(field.name.as_ref())
+                .ok_or_else(|| anyhow::anyhow!("demo missing output field `{}`", field.name))?
+                .to_string()
+        } else if format == OutputFormat::JsonSchema {
+            adapter.format_output_json_schema_def(def, types, &row.output)
+        } else if format != OutputFormat::Delimited {
             adapter.format_output_json_def(def, types, &row.output)
         } else {
             adapter.format_output_def(def, &row.output)
         }));
     }
     let mut suffix = adapter.signature_history(def, input)?;
-    suffix.push(Message::user(if structured {
-        adapter.try_format_input_json_def(def, input)?
-    } else {
-        adapter.try_format_input_def(def, input)?
-    }));
+    suffix.push(Message::user(render_input(def, input, format)?));
     Ok((prefix, suffix))
 }
 
-fn output_schema_options(lm: &LM, def: &SignatureDef, types: &TypeTable) -> LMCallOptions {
+fn render_input(
+    def: &SignatureDef,
+    input: &JsonMap,
+    format: OutputFormat,
+) -> anyhow::Result<String> {
+    match format {
+        OutputFormat::Delimited => ChatAdapter.try_format_input_def(def, input),
+        OutputFormat::JsonScalar => ChatAdapter.try_format_input_scalar_def(def, input),
+        _ => ChatAdapter.try_format_input_json_def(def, input),
+    }
+}
+
+fn parse_response(
+    def: &SignatureDef,
+    types: &TypeTable,
+    response: &Message,
+    format: OutputFormat,
+) -> Result<(JsonMap, IndexMap<String, FieldMeta>), crate::core::ParseError> {
+    match format {
+        OutputFormat::Delimited => ChatAdapter.parse_output_def(def, types, response),
+        OutputFormat::JsonScalar => ChatAdapter.parse_output_scalar_def(def, types, response),
+        _ => ChatAdapter.parse_output_json_def(def, types, response),
+    }
+}
+
+fn output_schema_options(
+    lm: &LM,
+    def: &SignatureDef,
+    types: &TypeTable,
+    allow_scalar: bool,
+) -> LMCallOptions {
     if def
         .outputs
         .iter()
@@ -3187,8 +3217,17 @@ fn output_schema_options(lm: &LM, def: &SignatureDef, types: &TypeTable) -> LMCa
         return LMCallOptions::default();
     }
     if lm.supports_output_schema() && json_schema_compatible(def, types) {
+        let schema = json_schema_for_outputs(def, types);
+        let scalar = allow_scalar
+            && lm.supports_scalar_output_schema()
+            && def.outputs.len() == 1
+            && matches!(def.outputs[0].ty, FieldType::String | FieldType::Literal(_));
         LMCallOptions {
-            output_schema: Some(json_schema_for_outputs(def, types)),
+            output_schema: Some(if scalar {
+                schema["properties"][&*def.outputs[0].lm_name].clone()
+            } else {
+                schema
+            }),
             ..LMCallOptions::default()
         }
     } else if lm.supports_json_mode() {

@@ -116,6 +116,10 @@ impl HistoryBuffer {
             .clear();
     }
 
+    fn is_enabled(&self) -> bool {
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).capacity != 0
+    }
+
     pub fn inspect(&self, n: usize) -> Vec<HistoryEntry> {
         let records = self
             .0
@@ -183,7 +187,20 @@ pub(crate) struct HistoryCall {
 }
 
 impl HistoryCall {
-    pub(crate) fn begin(config: &LMConfig, chat: &Chat, lm_history: &HistoryBuffer) -> Self {
+    pub(crate) fn begin(
+        config: &LMConfig,
+        chat: &Chat,
+        lm_history: &HistoryBuffer,
+    ) -> Option<Self> {
+        let enabled = !super::storage::current_stores().is_empty()
+            || lm_history.is_enabled()
+            || GLOBAL.is_enabled()
+            || CALLERS
+                .try_with(|callers| callers.iter().any(|caller| caller.buffer.is_enabled()))
+                .unwrap_or(false);
+        if !enabled {
+            return None;
+        }
         let callers = CALLERS.try_with(Clone::clone).unwrap_or_default();
         let record = HistoryRecord {
             entry: Arc::new(Mutex::new(HistoryEntry {
@@ -216,12 +233,12 @@ impl HistoryCall {
                 sinks.push(caller.buffer);
             }
         }
-        Self {
+        Some(Self {
             record,
             sinks,
             started: Instant::now(),
             finished: false,
-        }
+        })
     }
 
     pub(crate) fn finish(mut self, result: &mut anyhow::Result<LMResponse>) {
