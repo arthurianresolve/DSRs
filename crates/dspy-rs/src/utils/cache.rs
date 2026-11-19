@@ -117,6 +117,16 @@ impl ResponseCache {
             .expect("memory-only foyer cache construction cannot fail")
     }
 
+    #[cfg(test)]
+    pub(crate) async fn memory_only_for_test() -> Self {
+        Self {
+            handler: Self::build_memory_only().await,
+            window_size: 100,
+            history_window: Arc::new(Mutex::new(VecDeque::new())),
+            _disk_dir: None,
+        }
+    }
+
     fn lock_history(&self) -> MutexGuard<'_, VecDeque<CacheEntry>> {
         // The ring is debug bookkeeping: recover from a poisoned lock rather
         // than propagating a panic into unrelated LM calls.
