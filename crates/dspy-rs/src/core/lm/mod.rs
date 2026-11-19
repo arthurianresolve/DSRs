@@ -229,6 +229,7 @@ pub struct LM {
     pub cache_handler: Option<Arc<ResponseCache>>,
     client: Option<Arc<LMClient>>,
     custom_output_schema: bool,
+    scalar_output_schema: bool,
 }
 
 impl Default for LM {
@@ -246,6 +247,19 @@ impl LM {
     pub fn with_custom_output_schema(mut self, enabled: bool) -> Self {
         self.custom_output_schema = enabled;
         self
+    }
+
+    /// Opts into root JSON scalars on a verified schema-capable endpoint.
+    /// Tool-free signatures with one string output may omit its object wrapper.
+    /// Leave disabled for providers whose schema subset requires an object root.
+    pub fn with_scalar_output_schema(mut self, enabled: bool) -> Self {
+        self.scalar_output_schema = enabled;
+        self
+    }
+
+    /// Reports an explicitly enabled scalar capability on a schema-capable client.
+    pub fn supports_scalar_output_schema(&self) -> bool {
+        self.scalar_output_schema && self.supports_output_schema()
     }
     /// Reports schema support based on the initialized provider client.
     pub fn supports_output_schema(&self) -> bool {
@@ -358,6 +372,7 @@ impl LM {
             cache_handler,
             client: Some(client),
             custom_output_schema: false,
+            scalar_output_schema: false,
         })
     }
 
@@ -1226,7 +1241,9 @@ impl LM {
         let mut result = self
             .call_with_toolset_inner(messages, tools, tool_loop_mode, options)
             .await;
-        history.finish(&mut result);
+        if let Some(history) = history {
+            history.finish(&mut result);
+        }
         if let Ok(response) = &result {
             debug!(target: "dsrs::content", response = %response.output.to_json(), "raw LM response");
         }
@@ -1253,9 +1270,6 @@ impl LM {
             }
             .into());
         }
-        let system_prompt = messages.system_prompt();
-        let chat_history = messages.to_rig_chat_history();
-
         // Response cache: only tool-free calls are cached — tool loops execute
         // side-effectful user code and must not be replayed from cache.
         #[cfg(feature = "cache")]
@@ -1266,8 +1280,7 @@ impl LM {
         };
         #[cfg(feature = "cache")]
         if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref())
-            && let Some(entry) = cache.get_entry(key).await?
-            && let Some(raw_output) = entry.raw_output
+            && let Some(raw_output) = cache.get_response(key).await?
         {
             debug!("lm response served from cache");
             let output = Message::assistant(&raw_output);
@@ -1288,6 +1301,8 @@ impl LM {
             });
         }
 
+        let system_prompt = messages.system_prompt();
+        let chat_history = messages.to_rig_chat_history();
         let tool_definitions = tools.definitions();
         trace!(
             conversation_messages = chat_history.len(),
@@ -1653,6 +1668,7 @@ pub(crate) mod tests {
             cache_handler: None,
             client: None,
             custom_output_schema: false,
+            scalar_output_schema: false,
         };
         let chat = Chat::new(vec![Message::user("same prompt")]);
         let first = crate::with_sampling_options(
@@ -1705,6 +1721,7 @@ pub(crate) mod tests {
             cache_handler: Some(cache.clone()),
             client: None,
             custom_output_schema: false,
+            scalar_output_schema: false,
         };
         let messages = Chat::new(vec![Message::user("cached prompt")]);
         let key = lm.cache_key_for(&messages, &LMCallOptions::default());
@@ -1994,6 +2011,7 @@ pub(crate) mod tests {
             cache_handler: None,
             client: Some(Arc::new(LMClient::Test(model))),
             custom_output_schema: false,
+            scalar_output_schema: false,
         }
     }
 
