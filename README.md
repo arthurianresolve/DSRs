@@ -5,7 +5,7 @@
 <em>A high-performance DSPy rewrite in Rust for building LM-powered applications</em>
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.98.1-orange.svg)](rust-toolchain.toml)
+[![Rust](https://img.shields.io/badge/rust-1.100.0-orange.svg)](rust-toolchain.toml)
 [![Crates.io](https://img.shields.io/crates/v/dspy-rs)](https://crates.io/crates/dspy-rs)
 [![Documentation](https://docs.rs/dspy-rs/badge.svg)](https://docs.rs/dspy-rs)
 
@@ -482,7 +482,9 @@ We welcome contributions! Check existing issues and pull requests before startin
 
 ### Development Setup
 
-The checkout pins Rust 1.98.1 in `rust-toolchain.toml`, matching native CI.
+The checkout pins Rust 1.100.0 in `rust-toolchain.toml`, matching native CI.
+Toolchain changes targeting `integration` run the compatibility matrix on Linux
+and Windows with default features, no default features, and cache only.
 The locked Cranelift dependencies require at least Rust 1.94; the previous
 CI pin of 1.90 cannot build them.
 
