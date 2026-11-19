@@ -342,6 +342,15 @@ impl LmCallError {
 
 impl From<rig::completion::CompletionError> for LmCallError {
     fn from(source: rig::completion::CompletionError) -> Self {
+        Self::from_provider_error(source, false)
+    }
+}
+
+impl LmCallError {
+    pub(crate) fn from_provider_error(
+        source: rig::completion::CompletionError,
+        redact_details: bool,
+    ) -> Self {
         use rig::completion::CompletionError;
         use rig::http_client::Error as HttpError;
         let status = match &source {
@@ -373,7 +382,11 @@ impl From<rig::completion::CompletionError> for LmCallError {
         Self::Completion {
             kind,
             status,
-            source: redact_completion_source(source),
+            source: if redact_details {
+                redact_completion_source(source)
+            } else {
+                source
+            },
         }
     }
 }
