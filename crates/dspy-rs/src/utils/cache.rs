@@ -4,6 +4,8 @@ use anyhow::Result;
 use foyer::{BlockEngineBuilder, DeviceBuilder, FsDeviceBuilder, HybridCache, HybridCacheBuilder};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
+#[cfg(feature = "inflight-dedup")]
+use tokio_prompt_orchestrator::enhanced::Deduplicator;
 use tracing::{debug, trace, warn};
 
 use crate::LmUsage;
@@ -67,6 +69,8 @@ pub struct CacheEntry {
 #[derive(Clone)]
 pub struct ResponseCache {
     handler: HybridCache<CacheKey, CacheEntry>,
+    #[cfg(feature = "inflight-dedup")]
+    pub(crate) inflight: Deduplicator,
     /// Keeps the disk tier's temp directory alive: `TempDir` deletes the
     /// directory on drop, so it must outlive every clone of the cache.
     /// `None` when running memory-only.
@@ -89,6 +93,8 @@ impl ResponseCache {
 
         let cache = Self {
             handler,
+            #[cfg(feature = "inflight-dedup")]
+            inflight: Deduplicator::new(std::time::Duration::ZERO),
             _disk_dir: disk_dir,
         };
         debug!(
