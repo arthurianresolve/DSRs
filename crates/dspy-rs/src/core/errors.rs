@@ -298,8 +298,17 @@ pub enum LmCallError {
     },
     #[error("LM client not initialized; construct the LM with its builder")]
     NotInitialized,
-    #[error("provider response contains no supported text or tool content")]
+    #[error("Image responses without text or tool calls are not supported")]
     UnsupportedContent,
+    #[error("invalid output schema: {source}")]
+    InvalidOutputSchema {
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("{option} is unsupported by this LM client")]
+    UnsupportedOption { option: &'static str },
+    #[error("{feature} requires the `{feature}` Cargo feature")]
+    FeatureDisabled { feature: &'static str },
 }
 
 impl LmCallError {
@@ -308,6 +317,10 @@ impl LmCallError {
             Self::Completion { kind, .. } => *kind,
             Self::NotInitialized => LmFailureKind::Configuration,
             Self::UnsupportedContent => LmFailureKind::UnsupportedContent,
+            Self::InvalidOutputSchema { .. } => LmFailureKind::BadRequest,
+            Self::UnsupportedOption { .. } | Self::FeatureDisabled { .. } => {
+                LmFailureKind::Configuration
+            }
         }
     }
 

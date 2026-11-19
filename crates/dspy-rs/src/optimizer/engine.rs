@@ -576,6 +576,16 @@ pub struct RolloutOutcome {
     pub trace: Option<Trace>,
 }
 
+/// An uncached sampled rollout with its minibatch position and sample ordinal.
+#[derive(Clone, Debug)]
+pub struct SampledRolloutOutcome {
+    pub example_position: usize,
+    pub example: usize,
+    pub sample: usize,
+    pub eval: Eval,
+    pub trace: Trace,
+}
+
 /// A candidate's results over one evaluation batch, in request order.
 #[derive(Clone, Debug)]
 pub struct CandidateEval {
@@ -841,7 +851,12 @@ impl Engine {
         }
 
         let baseline = target.baseline();
-        let salt = self.config.cache_salt;
+        let incoming = crate::current_sampling_options();
+        let salt = canonical_hash(&(
+            self.config.cache_salt,
+            incoming.id.as_deref(),
+            incoming.temperature.map(f32::to_bits),
+        ));
 
         // Partition the (candidate × example) grid into cached and pending.
         let mut cached: HashMap<(usize, usize), Eval> = HashMap::new();
@@ -956,6 +971,136 @@ impl Engine {
         }
     }
 
+    /// Runs independent trajectories for one candidate and example. Every
+    /// sample is returned, bypasses the normal rollout cache and score matrix,
+    /// and is metered as one rollout.
+    pub async fn evaluate_samples(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidate: usize,
+        example: usize,
+        sample_count: usize,
+        identity: &str,
+    ) -> Result<Vec<RolloutOutcome>> {
+        if candidate >= self.candidates.len() {
+            return Err(anyhow!("candidate index {candidate} is not registered"));
+        }
+        if example >= target.num_examples() {
+            return Err(anyhow!("example index {example} out of range"));
+        }
+        if sample_count == 0 {
+            return Ok(Vec::new());
+        }
+        if !self.budget_allows(sample_count) {
+            return Err(anyhow!(
+                "sampling budget exhausted ({sample_count} rollouts needed)"
+            ));
+        }
+        let bound = target.bind(&self.candidates[candidate].1)?;
+        let candidate_hash = self.candidates[candidate].0;
+        let example_uid = target.example_uid(example);
+        let incoming = crate::current_sampling_options();
+        let concurrency = self.config.concurrency.max(1);
+        let sampled = stream::iter(0..sample_count)
+            .map(|sample| {
+                let bound = bound.clone();
+                let incoming = incoming.clone();
+                async move {
+                    let options = crate::SamplingOptions {
+                        id: Some(format!(
+                            "{}/{identity}/{candidate_hash:016x}/{example_uid:016x}/{sample}",
+                            incoming.id.as_deref().unwrap_or("")
+                        )),
+                        temperature: incoming.temperature,
+                    };
+                    let (eval, trace) = crate::with_sampling_options(
+                        options,
+                        target.run(example, bound.clone(), candidate_hash),
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>((sample, eval, trace))
+                }
+            })
+            .buffer_unordered(concurrency)
+            .collect::<Vec<_>>()
+            .await;
+        let mut successful = Vec::with_capacity(sampled.len());
+        let mut first_error = None;
+        for result in sampled {
+            match result {
+                Ok(item) => successful.push(item),
+                Err(err) if first_error.is_none() => first_error = Some(err),
+                Err(_) => {}
+            }
+        }
+        self.spend.metric_calls = self.spend.metric_calls.saturating_add(sample_count);
+        self.spend.lm_calls = self.spend.lm_calls.saturating_add(sample_count);
+        for (_, _, trace) in &successful {
+            self.spend.lm_spans += trace.spans.len();
+            for span in &trace.spans {
+                self.spend.tokens = self.spend.tokens + span.usage;
+            }
+        }
+        if let Some(err) = first_error {
+            return Err(err);
+        }
+        let mut sampled = successful;
+        sampled.sort_by_key(|(sample, _, _)| *sample);
+        Ok(sampled
+            .into_iter()
+            .map(|(_, eval, trace)| RolloutOutcome {
+                example,
+                eval,
+                trace: Some(trace),
+            })
+            .collect())
+    }
+
+    /// Evaluates every `(example, sample)` pair in request order. Work is
+    /// bounded by the Engine concurrency, bypasses normal rollout-cache and
+    /// score-matrix bookkeeping, and is budgeted before any probe runs.
+    pub async fn evaluate_sampled(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidate: usize,
+        examples: &[usize],
+        samples_per_example: usize,
+        identity: &str,
+    ) -> Result<Vec<SampledRolloutOutcome>> {
+        let total = examples
+            .len()
+            .checked_mul(samples_per_example)
+            .ok_or_else(|| anyhow!("sample count overflow"))?;
+        if !self.budget_allows(total) {
+            return Err(anyhow!(
+                "sampling budget exhausted ({total} rollouts needed)"
+            ));
+        }
+        let incoming = crate::current_sampling_options();
+        let mut rollouts = Vec::with_capacity(total);
+        for (example_position, &example) in examples.iter().enumerate() {
+            let identity = format!("{identity}/{example_position}");
+            let samples = self
+                .evaluate_samples(target, candidate, example, samples_per_example, &identity)
+                .await?;
+            rollouts.extend(samples.into_iter().enumerate().map(|(sample, rollout)| {
+                SampledRolloutOutcome {
+                    example_position,
+                    example,
+                    sample,
+                    eval: rollout.eval,
+                    trace: rollout
+                        .trace
+                        .expect("sampled rollouts always include traces"),
+                }
+            }));
+        }
+        // Restore the caller's task-local settings after the internal sample
+        // scopes have completed.
+        debug_assert_eq!(crate::current_sampling_options(), incoming);
+        Ok(rollouts)
+    }
+
     /// Minibatch gating (the GEPA acceptance pattern): evaluates the candidate
     /// on `minibatch`; only if the minibatch mean strictly beats `threshold`
     /// does it promote to a full-set evaluation.
@@ -1004,10 +1149,24 @@ impl Engine {
             stream::iter(pending.iter().map(|&(candidate, idx)| {
                 let bound = bound[&candidate].clone();
                 let candidate_hash = self.candidates[candidate].0;
+                let incoming = crate::current_sampling_options();
+                let identity = format!(
+                    "{}/engine/{candidate_hash:016x}/{:016x}/{:016x}",
+                    incoming.id.as_deref().unwrap_or(""),
+                    target.example_uid(idx),
+                    self.config.cache_salt
+                );
                 let gauge = &gauge;
                 async move {
                     let _in_flight = gauge.enter(candidate);
-                    let (eval, trace) = target.run(idx, bound, candidate_hash).await?;
+                    let (eval, trace) = crate::with_sampling_options(
+                        crate::SamplingOptions {
+                            id: Some(identity),
+                            temperature: incoming.temperature,
+                        },
+                        target.run(idx, bound, candidate_hash),
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>((candidate, idx, eval, trace))
                 }
             }))

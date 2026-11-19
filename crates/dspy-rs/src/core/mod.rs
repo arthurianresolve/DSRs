@@ -24,10 +24,13 @@ pub mod example;
 pub mod lm;
 pub mod module;
 mod predicted;
+pub mod sampling;
 mod schema;
 pub mod settings;
 pub mod signature;
+pub mod specials;
 mod state;
+pub use specials::{History, HistoryMessage, SpecialField, Tool, ToolCalls, ToolInvocation};
 
 pub use errors::{
     ConversionError, ErrorClass, JsonishError, LmCallError, LmError, LmFailureKind, ParseError,
@@ -37,6 +40,7 @@ pub use example::{ToInput, ToOutput};
 pub use lm::*;
 pub use module::*;
 pub use predicted::{CallMetadata, ConstraintResult, FieldMeta, Predicted};
+pub use sampling::{SamplingOptions, current_sampling_options, with_sampling_options};
 pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, InputRenderSpec, SignatureSchema};
 pub use settings::*;
 pub use signature::*;

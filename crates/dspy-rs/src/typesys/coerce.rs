@@ -53,6 +53,30 @@ pub fn coerce(raw: &str, field_type: &FieldType, schema: &TypeTable) -> Result<C
     coerce_with_checks(raw, field_type, schema).map(|(coerced, _)| coerced)
 }
 
+/// Coerces a native JSON value without round-tripping string values through quoted JSON text.
+pub fn coerce_value(value: Value, field_type: &FieldType, schema: &TypeTable) -> Result<Coerced> {
+    coerce_value_with_checks(value, field_type, schema).map(|(coerced, _)| coerced)
+}
+
+pub(crate) fn coerce_value_with_checks(
+    value: Value,
+    field_type: &FieldType,
+    schema: &TypeTable,
+) -> Result<(Coerced, Vec<NestedCheck>)> {
+    let mut flags = Vec::new();
+    let mut checks = Vec::new();
+    let mut constraints = ConstraintEvalCache::default();
+    let value = coerce_json_value(
+        value,
+        field_type,
+        schema,
+        &mut flags,
+        &mut checks,
+        &mut constraints,
+    )?;
+    Ok((Coerced { value, flags }, checks))
+}
+
 pub(crate) fn coerce_with_checks(
     raw: &str,
     field_type: &FieldType,
