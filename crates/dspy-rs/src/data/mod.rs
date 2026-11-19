@@ -13,5 +13,7 @@
 pub mod dataloader;
 pub mod utils;
 
-pub use dataloader::*;
-pub use utils::*;
+pub use dataloader::{
+    DataLoadError, DataLoader, RemoteLoadLimits, RowRecord, TypedLoadOptions, UnknownFieldPolicy,
+};
+pub use utils::is_url;

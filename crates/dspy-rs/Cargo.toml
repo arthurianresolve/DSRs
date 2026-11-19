@@ -76,6 +76,10 @@ required-features = ["data"]
 name = "08-optimize-mipro"
 required-features = ["data"]
 
+[[example]]
+name = "97-perf-microbench"
+required-features = ["cache"]
+
 [dev-dependencies]
 tempfile = { workspace = true }
 rstest = "0.25.0"
