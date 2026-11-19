@@ -51,3 +51,5 @@ jobs:
         run: cargo test --locked -p dspy-rs --no-default-features
       - if: matrix.features == 'cache'
         run: cargo test --locked -p dspy-rs --no-default-features --features cache
+      - if: matrix.features == 'cache'
+        run: cargo test --locked -p dspy-rs --no-default-features --features inflight-dedup --lib inflight
