@@ -322,11 +322,12 @@ mod tests {
     use anyhow::{Result, anyhow};
 
     use super::*;
+    use crate::core::lm::tests::test_lm_with_model;
     use crate::evaluate::{Eval, TypedMetric};
     use crate::trace::Trace;
     use crate::{
-        CallMetadata, LM, LMClient, LMConfig, Predict, PredictError, Predicted, PredictorInfo,
-        Signature, TestCompletionModel,
+        CallMetadata, Predict, PredictError, Predicted, PredictorInfo, Signature,
+        TestCompletionModel,
     };
     use rig::completion::AssistantContent;
 
@@ -428,15 +429,7 @@ mod tests {
             let proposal = TestCompletionModel::new([AssistantContent::text(
                 "[[ ## instructions ## ]]\n[\"one\",\"two\",\"three\",\"four\"]\n[[ ## completed ## ]]",
             )]);
-            let lm = LM::from_config(LMConfig {
-                base_url: Some("http://localhost/v1".into()),
-                ..LMConfig::default()
-            })
-            .await
-            .unwrap()
-            .with_client(LMClient::Test(proposal))
-            .await
-            .unwrap();
+            let lm = test_lm_with_model(proposal);
             let mut module = CoproStateModule {
                 predictor: Predict::<CoproStateSig>::builder()
                     .instruction("seed-instruction")
