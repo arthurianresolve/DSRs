@@ -1,6 +1,42 @@
 use dspy_rs::{Chat, LM, LMClient, LMConfig, LmUsage, Message, TestCompletionModel};
 use rstest::*;
 
+#[tokio::test]
+#[cfg(not(feature = "cache"))]
+async fn requesting_cache_without_feature_fails_before_provider_initialization() {
+    let error = LM::builder().cache(true).build().await.err().unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("requires the `cache` Cargo feature")
+    );
+}
+
+#[tokio::test]
+#[cfg(not(feature = "cache"))]
+async fn changing_cache_flag_after_build_does_not_silently_ignore_missing_feature() {
+    let mut lm = LM::builder()
+        .base_url("http://localhost:1/v1".into())
+        .model("test".into())
+        .build()
+        .await
+        .unwrap();
+    lm.config.cache = true;
+    let error = lm
+        .call(
+            dspy_rs::Chat::new(vec![dspy_rs::Message::user("hello")]),
+            vec![],
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("requires the `cache` Cargo feature")
+    );
+    assert!(lm.inspect_history(1).await[0].error.is_some());
+}
+
 #[rstest]
 fn lm_config_serializes_without_secrets() {
     let config = LMConfig {
@@ -22,6 +58,7 @@ fn lm_config_serializes_without_secrets() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn lm_from_config_builds_live_client() {
     let config = LMConfig {
         model: "openai:gpt-4o-mini".to_string(),
@@ -72,6 +109,7 @@ fn test_lm_usage_add() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn test_lm_with_cache_enabled() {
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
@@ -101,13 +139,15 @@ async fn test_lm_with_cache_disabled() {
     .unwrap();
 
     // Verify cache handler is NOT initialized when cache is disabled
+    #[cfg(feature = "cache")]
     assert!(lm.cache_handler.is_none());
+    assert!(lm.inspect_history(1).await.is_empty());
 }
 
 #[rstest]
 #[case::default(None)]
 #[case::disabled(Some(false))]
-#[case::enabled(Some(true))]
+#[cfg_attr(feature = "cache", case::enabled(Some(true)))]
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn inspect_history_after_completion(#[case] cache: Option<bool>) {
@@ -127,6 +167,7 @@ async fn inspect_history_after_completion(#[case] cache: Option<bool>) {
         .await
         .unwrap();
 
+    #[cfg(feature = "cache")]
     assert_eq!(lm.cache_handler.is_some(), cache == Some(true));
     assert!(lm.inspect_history(1).await.is_empty());
     let chat = Chat::new(vec![Message::user("What is the capital of France?")]);
@@ -136,17 +177,14 @@ async fn inspect_history_after_completion(#[case] cache: Option<bool>) {
 
     assert!(lm.inspect_history(0).await.is_empty());
     let history = lm.inspect_history(10).await;
-    if cache == Some(true) {
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].prompt, prompt);
-        assert_eq!(history[0].raw_output.as_deref(), Some("Paris"));
-    } else {
-        assert!(history.is_empty());
-    }
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].prompt, prompt);
+    assert_eq!(history[0].raw_output.as_deref(), Some("Paris"));
 }
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn replacing_client_isolates_cached_responses_and_history() {
     use rig::completion::AssistantContent;
 
@@ -185,8 +223,10 @@ async fn replacing_client_isolates_cached_responses_and_history() {
 
     let original_history = original.inspect_history(10).await;
     let replacement_history = replacement.inspect_history(10).await;
-    assert_eq!(original_history.len(), 1);
-    assert_eq!(replacement_history.len(), 1);
+    assert_eq!(original_history.len(), 2);
+    assert_eq!(replacement_history.len(), 2);
+    assert!(original_history[0].cache_hit);
+    assert!(replacement_history[0].cache_hit);
     assert_eq!(
         original_history[0].raw_output.as_deref(),
         Some("old backend")
@@ -199,6 +239,7 @@ async fn replacing_client_isolates_cached_responses_and_history() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn test_lm_cache_initialization_on_first_call() {
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
@@ -216,6 +257,7 @@ async fn test_lm_cache_initialization_on_first_call() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn test_lm_cache_direct_operations() {
     use dspy_rs::utils::cache::{CacheEntry, CacheKey};
 
@@ -265,6 +307,7 @@ async fn test_lm_cache_direct_operations() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn test_lm_cache_with_different_models() {
     // Test that cache works with different model configurations
     let models = vec!["openai:gpt-3.5-turbo", "anthropic:claude-3-haiku-20240307"];
@@ -291,6 +334,7 @@ async fn test_lm_cache_with_different_models() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn test_cache_preserves_usage_and_history() {
     use dspy_rs::utils::cache::{CacheEntry, CacheKey};
 
@@ -330,7 +374,7 @@ async fn test_cache_preserves_usage_and_history() {
     assert_eq!(cached.usage.completion_tokens, 30);
     assert_eq!(cached.usage.total_tokens, 80);
 
-    // Insertions land in the sliding history window, newest first.
+    // Storage bookkeeping must not become execution history.
     let later = CacheEntry {
         prompt: "second prompt".to_string(),
         usage: LmUsage::default(),
@@ -338,9 +382,6 @@ async fn test_cache_preserves_usage_and_history() {
     };
     cache.insert_entry(43, later.clone());
 
-    let history = lm.inspect_history(2).await;
-    assert_eq!(history.len(), 2);
-    assert_eq!(history[0].prompt, later.prompt);
-    assert_eq!(history[1].prompt, entry.prompt);
-    assert_eq!(lm.inspect_history(1).await[0].prompt, later.prompt);
+    // Cache insertion alone is not an LM invocation.
+    assert!(lm.inspect_history(2).await.is_empty());
 }

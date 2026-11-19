@@ -1,5 +1,7 @@
+#[cfg(feature = "cache")]
+use dspy_rs::Chat;
 use dspy_rs::{
-    Chat, LM, LMClient, Module, Predict, PredictError, Predicted, Predictors, Signature,
+    LM, LMClient, Module, Predict, PredictError, Predicted, Predictors, Signature,
     TestCompletionModel, configure, get_lm, try_get_lm, with_lm,
 };
 use futures::FutureExt;
@@ -240,6 +242,7 @@ async fn explicit_conversation_lm_and_call_config_do_not_mutate_predictor() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn copies_keep_injected_clients_and_isolate_cache_and_configuration() {
     let (original, client) = model("original", true).await;
     let chat = Chat::new(vec![dspy_rs::Message::user("hello")]);

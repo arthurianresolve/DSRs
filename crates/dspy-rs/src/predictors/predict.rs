@@ -114,6 +114,8 @@ impl<S: Signature> Demo<S> {
 #[facet(crate = facet, opaque)]
 pub struct Predict<S: Signature> {
     #[facet(skip, opaque)]
+    history: crate::HistoryBuffer,
+    #[facet(skip, opaque)]
     tools: Vec<Arc<dyn ToolDyn>>,
     /// Loop options applied to the 1-node `agent` program when tools are
     /// attached (stop spec, node budget, context policy). Settable only at
@@ -159,6 +161,7 @@ impl<S: Signature> Predict<S> {
     /// Creates a new `Predict` with no demos, no instruction override, and no tools.
     pub fn new() -> Self {
         Self {
+            history: crate::HistoryBuffer::default(),
             tools: Vec::new(),
             agent_spec: None,
             demos: Vec::new(),
@@ -238,6 +241,17 @@ impl<S: Signature> Predict<S> {
         S::Input: Schema,
         S::Output: Schema,
     {
+        self.history
+            .scope(
+                self.trace_name
+                    .as_deref()
+                    .unwrap_or(std::any::type_name::<S>()),
+                self.call_inner(input),
+            )
+            .await
+    }
+
+    async fn call_inner(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
         let program = self.program().await?;
         let overlay = self.effective_overlay(&program)?;
         let lm = self.resolve_lm();
@@ -249,6 +263,18 @@ impl<S: Signature> Predict<S> {
             .await
             .map_err(map_run_error::<S>)?;
         predicted_from_run::<S>(run)
+    }
+
+    pub async fn inspect_history(&self, n: usize) -> Vec<crate::HistoryEntry> {
+        self.history.inspect(n)
+    }
+
+    pub fn set_history_capacity(&self, capacity: usize) {
+        self.history.set_capacity(capacity);
+    }
+
+    pub fn clear_history(&self) {
+        self.history.clear();
     }
 
     /// Calls with an explicit LM, overriding the predictor, scoped, and global
@@ -643,6 +669,20 @@ impl<S: Signature> Predict<S> {
         S::Input: Schema,
         S::Output: Schema,
     {
+        self.history
+            .scope(
+                self.trace_name
+                    .as_deref()
+                    .unwrap_or(std::any::type_name::<S>()),
+                self.call_and_parse_inner(chat),
+            )
+            .await
+    }
+
+    async fn call_and_parse_inner(
+        &self,
+        chat: Chat,
+    ) -> Result<(Predicted<S::Output>, Chat), PredictError> {
         trace!(message_count = chat.len(), "chat-level call");
         let program = self.program().await?;
         let overlay = self.effective_overlay(&program)?;
@@ -771,6 +811,7 @@ impl<S: Signature> PredictBuilder<S> {
     /// uses.
     pub fn build(self) -> Predict<S> {
         let mut predict = Predict {
+            history: crate::HistoryBuffer::default(),
             tools: self.tools,
             agent_spec: self.agent_spec,
             demos: Vec::new(),
@@ -1170,6 +1211,11 @@ fn predicted_from_run<S: Signature>(run: RunOutput) -> Result<Predicted<S::Outpu
 where
     S::Output: Schema,
 {
+    let call_ids = run
+        .leaves
+        .iter()
+        .flat_map(|leaf| leaf.call_ids.clone())
+        .collect();
     let leaf = run.leaves.into_iter().next();
     let (raw_response, lm_usage, span_id, leaf_meta, tool_calls, tool_executions) = match leaf {
         Some(leaf) => (
@@ -1214,7 +1260,7 @@ where
         checks_total, checks_failed, "typed parse completed"
     );
 
-    let metadata = CallMetadata::new(
+    let mut metadata = CallMetadata::new(
         raw_response,
         lm_usage,
         tool_calls,
@@ -1222,6 +1268,7 @@ where
         span_id,
         field_meta,
     );
+    metadata.call_ids = call_ids;
     Ok(Predicted::new(typed, metadata))
 }
 
