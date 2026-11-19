@@ -130,6 +130,14 @@ impl ResponseCache {
             .expect("memory-only foyer cache construction cannot fail")
     }
 
+    #[cfg(test)]
+    pub(crate) async fn memory_only_for_test() -> Self {
+        Self {
+            handler: Self::build_memory_only().await,
+            _disk_dir: None,
+        }
+    }
+
     /// Fetches the full cached entry (including raw output) for a key.
     #[tracing::instrument(name = "dsrs.cache.get_entry", level = "trace", skip(self))]
     pub async fn get_entry(&self, key: CacheKey) -> Result<Option<CacheEntry>> {

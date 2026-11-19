@@ -1711,7 +1711,7 @@ pub(crate) mod tests {
     #[cfg(feature = "cache")]
     #[tokio::test]
     async fn cache_hit_reports_zero_usage_and_keeps_original_entry() {
-        let cache = Arc::new(ResponseCache::new().await);
+        let cache = Arc::new(ResponseCache::memory_only_for_test().await);
         let lm = LM {
             history: crate::HistoryBuffer::default(),
             config: LMConfig {
@@ -1758,7 +1758,7 @@ pub(crate) mod tests {
             TestCompletionModel::new([make_text("first answer"), make_text("second answer")]);
         let mut lm = test_lm_with_model(model.clone());
         lm.config.cache = true;
-        lm.cache_handler = Some(Arc::new(ResponseCache::new().await));
+        lm.cache_handler = Some(Arc::new(ResponseCache::memory_only_for_test().await));
         let messages = Chat::new(vec![Message::user("same prompt")]);
         for (id, expected) in [
             ("same", "first answer"),
