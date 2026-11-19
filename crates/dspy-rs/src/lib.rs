@@ -136,7 +136,7 @@ pub use core::{
     inspect_history, set_history_capacity, try_get_lm, with_lm, with_sampling_options,
 };
 pub use data::dataloader::{
-    DataLoadError, DataLoader, RowRecord, TypedLoadOptions, UnknownFieldPolicy,
+    DataLoadError, DataLoader, RemoteLoadLimits, RowRecord, TypedLoadOptions, UnknownFieldPolicy,
 };
 pub use evaluate::{
     TypedMetric, average_score, evaluate_trainset, evaluate_trainset_with_concurrency,
