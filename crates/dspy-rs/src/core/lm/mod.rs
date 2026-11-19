@@ -928,7 +928,8 @@ impl LM {
                 }
                 Err(err) => {
                     // Host-supplied providers own the diagnostics in their error sources.
-                    let redact_details = !matches!(client, LMClient::Custom(_) | LMClient::Test(_));
+                    let redact_details =
+                        !matches!(client.as_ref(), LMClient::Custom(_) | LMClient::Test(_));
                     return Err(crate::LmCallError::from_provider_error(err, redact_details).into());
                 }
             }
