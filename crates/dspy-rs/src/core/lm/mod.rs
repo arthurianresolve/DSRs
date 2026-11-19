@@ -19,8 +19,6 @@ use rig::{
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
-#[cfg(feature = "inflight-dedup")]
-use tokio_prompt_orchestrator::enhanced::DeduplicationResult;
 use tracing::{debug, trace, warn};
 
 #[cfg(feature = "cache")]
@@ -28,6 +26,8 @@ use crate::ResponseCache;
 use crate::trace::SpanEvent;
 #[cfg(feature = "cache")]
 use crate::utils::cache::CacheEntry;
+#[cfg(feature = "inflight-dedup")]
+use crate::utils::cache::InflightResponse;
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
@@ -1289,27 +1289,24 @@ impl LM {
         }
 
         #[cfg(feature = "inflight-dedup")]
-        let mut pending = None;
-        #[cfg(feature = "inflight-dedup")]
-        if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref()) {
-            let inflight_key = key.to_string();
-            match cache.inflight.check_and_register(&inflight_key).await {
-                DeduplicationResult::New(token) => pending = Some((&cache.inflight, token)),
-                DeduplicationResult::InProgress => {
-                    let _ = cache.inflight.wait_for_result(&inflight_key).await;
+        let pending = if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref()) {
+            let pending = match cache.register_inflight(key) {
+                InflightResponse::Leader(pending) => Some(pending),
+                InflightResponse::Follower(mut finished) => {
+                    let _ = finished.changed().await;
+                    None
                 }
-                DeduplicationResult::Cached(_) => {}
-            }
+            };
 
             // The first caller can fill the cache between the miss and registration.
             if let Some(raw_output) = cache.get_response(key).await? {
-                if let Some((inflight, token)) = pending {
-                    inflight.complete(token, String::new()).await;
-                }
                 debug!("lm response shared with an in-flight identical call");
                 return Ok(Self::response_from_cache(messages, raw_output));
             }
-        }
+            pending
+        } else {
+            None
+        };
 
         let system_prompt = messages.system_prompt();
         let chat_history = messages.to_rig_chat_history();
@@ -1338,14 +1335,7 @@ impl LM {
                     &options,
                 )
             })
-            .await;
-        #[cfg(feature = "inflight-dedup")]
-        if response.is_err()
-            && let Some((inflight, token)) = pending.take()
-        {
-            inflight.fail_with(token, String::new()).await;
-        }
-        let response = response?;
+            .await?;
         debug!(
             prompt_tokens = response.usage.input_tokens,
             completion_tokens = response.usage.output_tokens,
@@ -1449,9 +1439,7 @@ impl LM {
             trace!("lm response cached");
         }
         #[cfg(feature = "inflight-dedup")]
-        if let Some((inflight, token)) = pending {
-            inflight.complete(token, String::new()).await;
-        }
+        drop(pending);
 
         let mut full_chat = if let Some(result) = tool_loop_result.as_ref() {
             Self::chat_from_rig_history(&system_prompt, &result.chat_history)
@@ -2072,9 +2060,7 @@ pub(crate) mod tests {
         let chat = Chat::new(vec![Message::user("hi")]);
         let key = lm.cache_key_for(&chat, &LMCallOptions::default());
         let cache = lm.cache_handler.as_ref().unwrap();
-        let DeduplicationResult::New(token) =
-            cache.inflight.check_and_register(&key.to_string()).await
-        else {
+        let InflightResponse::Leader(pending) = cache.register_inflight(key) else {
             panic!("expected to own the in-flight slot");
         };
         let mut waiter = tokio::spawn({
@@ -2096,7 +2082,7 @@ pub(crate) mod tests {
                 raw_output: Some("shared".into()),
             },
         );
-        cache.inflight.complete(token, String::new()).await;
+        drop(pending);
 
         let response = tokio::time::timeout(Duration::from_secs(5), waiter)
             .await
@@ -2110,25 +2096,56 @@ pub(crate) mod tests {
     }
 
     #[cfg(feature = "inflight-dedup")]
+    struct DelayedFirstFailure {
+        calls: AtomicUsize,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        model: TestCompletionModel,
+    }
+
+    #[cfg(feature = "inflight-dedup")]
+    impl CompletionProvider for DelayedFirstFailure {
+        async fn completion(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse<()>, CompletionError> {
+            if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                self.started.notify_one();
+                self.release.notified().await;
+                return Err(CompletionError::ResponseError(
+                    "in-flight leader failed".into(),
+                ));
+            }
+            self.model.completion(request).await
+        }
+    }
+
+    #[cfg(feature = "inflight-dedup")]
     #[rstest::rstest]
     #[case::failure(false)]
     #[case::cancellation(true)]
     #[tokio::test]
     async fn identical_call_falls_back_when_inflight_produces_no_response(#[case] cancel: bool) {
         let model = TestCompletionModel::new([make_text("fresh")]);
-        let lm = cached_test_lm(model.clone()).await;
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let mut lm = cached_test_lm(model.clone()).await;
+        lm.client = Some(Arc::new(LMClient::custom(DelayedFirstFailure {
+            calls: AtomicUsize::new(0),
+            started: started.clone(),
+            release: release.clone(),
+            model: model.clone(),
+        })));
         let chat = Chat::new(vec![Message::user("hi")]);
-        let key = lm
-            .cache_key_for(&chat, &LMCallOptions::default())
-            .to_string();
-        let cache = lm.cache_handler.as_ref().unwrap();
-        let DeduplicationResult::New(token) = cache.inflight.check_and_register(&key).await else {
-            panic!("expected to own the in-flight slot");
-        };
-        let mut waiter = tokio::spawn({
+        let leader = tokio::spawn({
             let lm = lm.clone();
+            let chat = chat.clone();
             async move { lm.call(chat, vec![]).await }
         });
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .expect("leader did not reach the provider");
+        let mut waiter = tokio::spawn(async move { lm.call(chat, vec![]).await });
         assert!(
             tokio::time::timeout(Duration::from_millis(50), &mut waiter)
                 .await
@@ -2136,9 +2153,11 @@ pub(crate) mod tests {
         );
 
         if cancel {
-            drop(token);
+            leader.abort();
+            assert!(leader.await.unwrap_err().is_cancelled());
         } else {
-            cache.inflight.fail_with(token, String::new()).await;
+            release.notify_one();
+            assert!(leader.await.unwrap().is_err());
         }
 
         let response = tokio::time::timeout(Duration::from_secs(5), waiter)
@@ -2148,7 +2167,7 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(response.output.content(), "fresh");
         assert!(!response.cache_hit);
-        assert!(model.last_request().is_some());
+        assert_eq!(model.call_count(), 1);
     }
 
     #[tokio::test]

@@ -1,11 +1,17 @@
 use std::sync::Arc;
 
+#[cfg(feature = "inflight-dedup")]
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    sync::Mutex,
+};
+
 use anyhow::Result;
 use foyer::{BlockEngineBuilder, DeviceBuilder, FsDeviceBuilder, HybridCache, HybridCacheBuilder};
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 #[cfg(feature = "inflight-dedup")]
-use tokio_prompt_orchestrator::enhanced::Deduplicator;
+use tokio::sync::watch;
 use tracing::{debug, trace, warn};
 
 use crate::LmUsage;
@@ -37,6 +43,34 @@ impl CacheError {
 /// tier lives in a per-process temp directory). Keys are produced by
 /// [`LM`](crate::LM) from the rendered chat — callers never build them by hand.
 pub type CacheKey = u64;
+
+#[cfg(feature = "inflight-dedup")]
+type PendingResponses = Mutex<HashMap<CacheKey, watch::Sender<()>>>;
+
+#[cfg(feature = "inflight-dedup")]
+pub(crate) enum InflightResponse<'a> {
+    Leader(PendingResponse<'a>),
+    Follower(watch::Receiver<()>),
+}
+
+#[cfg(feature = "inflight-dedup")]
+pub(crate) struct PendingResponse<'a> {
+    key: CacheKey,
+    requests: &'a PendingResponses,
+}
+
+#[cfg(feature = "inflight-dedup")]
+impl Drop for PendingResponse<'_> {
+    fn drop(&mut self) {
+        let sender = self
+            .requests
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.key);
+        // Closing the channel wakes followers after the map has been unlocked.
+        drop(sender);
+    }
+}
 
 const MEMORY_CAPACITY: usize = 256 * 1024 * 1024;
 const DISK_CAPACITY: usize = 1024 * 1024 * 1024;
@@ -70,7 +104,7 @@ pub struct CacheEntry {
 pub struct ResponseCache {
     handler: HybridCache<CacheKey, CacheEntry>,
     #[cfg(feature = "inflight-dedup")]
-    pub(crate) inflight: Deduplicator,
+    inflight: Arc<PendingResponses>,
     /// Keeps the disk tier's temp directory alive: `TempDir` deletes the
     /// directory on drop, so it must outlive every clone of the cache.
     /// `None` when running memory-only.
@@ -94,7 +128,7 @@ impl ResponseCache {
         let cache = Self {
             handler,
             #[cfg(feature = "inflight-dedup")]
-            inflight: Deduplicator::new(std::time::Duration::ZERO),
+            inflight: Arc::default(),
             _disk_dir: disk_dir,
         };
         debug!(
@@ -141,8 +175,27 @@ impl ResponseCache {
         Self {
             handler: Self::build_memory_only().await,
             #[cfg(feature = "inflight-dedup")]
-            inflight: Deduplicator::new(std::time::Duration::ZERO),
+            inflight: Arc::default(),
             _disk_dir: None,
+        }
+    }
+
+    #[cfg(feature = "inflight-dedup")]
+    pub(crate) fn register_inflight(&self, key: CacheKey) -> InflightResponse<'_> {
+        let mut requests = self
+            .inflight
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match requests.entry(key) {
+            Entry::Occupied(entry) => InflightResponse::Follower(entry.get().subscribe()),
+            Entry::Vacant(entry) => {
+                let (sender, _) = watch::channel(());
+                entry.insert(sender);
+                InflightResponse::Leader(PendingResponse {
+                    key,
+                    requests: &self.inflight,
+                })
+            }
         }
     }
 
