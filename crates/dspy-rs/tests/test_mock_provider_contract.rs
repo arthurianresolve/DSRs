@@ -155,6 +155,7 @@ async fn public_errors_preserve_http_kind_retry_policy_and_nested_source() {
             .await
             .unwrap_err();
         assert_eq!(error.is_retryable(), retryable);
+        assert!(!error.to_string().contains("original provider detail"));
         if retryable {
             assert_eq!(error.class(), ErrorClass::Temporary);
         }
