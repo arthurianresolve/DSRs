@@ -1085,7 +1085,7 @@ impl LM {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use rig::OneOrMany;
     use rig::completion::AssistantContent;
@@ -1297,7 +1297,7 @@ mod tests {
         }
     }
 
-    fn test_lm_with_model(model: TestCompletionModel) -> LM {
+    pub(crate) fn test_lm_with_model(model: TestCompletionModel) -> LM {
         LM {
             config: LMConfig {
                 base_url: None,
