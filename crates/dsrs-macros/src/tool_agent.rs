@@ -509,7 +509,7 @@ fn expand_agent_inner(
     // `#[module]` program's model table, and silently falling back to the
     // globally configured LM would misreport which model ran — so with
     // `model = "…"` set, no standalone fn is generated at all and calling it
-    // is a compile error ("expected function, found module").
+    // is a compile error.
     let standalone = if attrs.model.is_some() {
         quote! {}
     } else {
