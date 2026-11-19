@@ -1,8 +1,8 @@
 #![cfg(feature = "data")]
 
 use dspy_rs::{DataLoadError, DataLoader, RemoteLoadLimits, TypedLoadOptions};
-use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::io::{BufRead, BufReader, Write};
+use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::time::Duration;
 
@@ -13,14 +13,26 @@ struct Row {
     answer: String,
 }
 
+fn read_request_headers(stream: &mut TcpStream) {
+    let mut reader = BufReader::new(stream);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let count = reader.read_until(b'\n', &mut line).unwrap();
+        assert_ne!(count, 0, "request ended before the headers");
+        if line == b"\r\n" {
+            return;
+        }
+    }
+}
+
 fn serve(body: &str, delay: Duration) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let body = body.to_owned();
     let handle = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0; 1024];
-        stream.read(&mut request).unwrap();
+        read_request_headers(&mut stream);
         thread::sleep(delay);
         let response = format!(
             "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:X}\r\n{body}\r\n0\r\n\r\n",
@@ -38,8 +50,7 @@ fn serve_bytes(body: Vec<u8>, content_type: &str) -> (String, thread::JoinHandle
     let content_type = content_type.to_owned();
     let handle = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0; 1024];
-        stream.read(&mut request).unwrap();
+        read_request_headers(&mut stream);
         let headers = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
@@ -247,8 +258,7 @@ fn remote_json_rejects_slow_trickle_after_total_deadline() {
     let port = listener.local_addr().unwrap().port();
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0; 1024];
-        stream.read(&mut request).unwrap();
+        read_request_headers(&mut stream);
         stream
             .write_all(
                 b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
