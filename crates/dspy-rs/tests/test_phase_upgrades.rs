@@ -28,7 +28,9 @@ async fn make_test_lm(responses: Vec<String>) -> LM {
     let client = TestCompletionModel::new(responses.into_iter().map(text_response));
     temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await
     .unwrap()
@@ -99,7 +101,10 @@ async fn capture_records_inputs_edges_and_component_names() {
     let second = &trace.spans[1];
 
     // Inputs are recorded for both spans.
-    assert_eq!(first.input.as_ref().expect("first input")["question"], "start");
+    assert_eq!(
+        first.input.as_ref().expect("first input")["question"],
+        "start"
+    );
     assert_eq!(
         second.input.as_ref().expect("second input")["question"],
         "intermediate"
@@ -324,8 +329,7 @@ async fn gepa_uses_reflection_lm_to_rewrite_instructions() {
 
     assert_eq!(report.all_candidates.len(), 1);
     assert_eq!(
-        report.all_candidates[0].instruction,
-        "Be concise and cite evidence.",
+        report.all_candidates[0].instruction, "Be concise and cite evidence.",
         "child instruction should come from the reflection LM, not concatenation"
     );
     // seed eval on valset (1) + parent minibatch on trainset (1)
@@ -370,7 +374,9 @@ async fn gepa_reflection_receives_component_subtrace() {
     )]))]);
     let reflection_lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await
     .unwrap()

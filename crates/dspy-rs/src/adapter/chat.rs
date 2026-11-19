@@ -13,9 +13,7 @@ use crate::typesys::coerce::coerce;
 use crate::typesys::constraint::evaluate_expression;
 use crate::typesys::render::{schema_block, type_name};
 use crate::typesys::{FieldType, TypeTable};
-use crate::{
-    ConstraintKind, ConstraintResult, FieldMeta, JsonishError, Message, ParseError,
-};
+use crate::{ConstraintKind, ConstraintResult, FieldMeta, JsonishError, Message, ParseError};
 
 /// Builds prompts and parses responses using the `[[ ## field ## ]]` delimiter protocol.
 ///
@@ -598,4 +596,3 @@ fn build_input_context_def(def: &SignatureDef, input: &JsonMap) -> Value {
     }
     Value::Object(root)
 }
-

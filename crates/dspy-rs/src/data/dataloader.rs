@@ -20,9 +20,9 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
+use crate::FieldType;
 use crate::data::utils::is_url;
 use crate::typesys::schema::field_type_from_shape;
-use crate::FieldType;
 use facet::{Facet, Type, UserType};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
@@ -189,11 +189,7 @@ impl DataLoader {
     /// # Errors
     /// Returns [`DataLoadError`] wrapped in `anyhow::Error` for parse, schema,
     /// mapping, and conversion failures.
-    pub fn load_json<E>(
-        path: &str,
-        lines: bool,
-        opts: TypedLoadOptions,
-    ) -> Result<Vec<E>>
+    pub fn load_json<E>(path: &str, lines: bool, opts: TypedLoadOptions) -> Result<Vec<E>>
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
@@ -317,10 +313,7 @@ impl DataLoader {
         )
     )]
     /// Load typed rows from a local Parquet file.
-    pub fn load_parquet<E>(
-        path: &str,
-        opts: TypedLoadOptions,
-    ) -> Result<Vec<E>>
+    pub fn load_parquet<E>(path: &str, opts: TypedLoadOptions) -> Result<Vec<E>>
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
@@ -344,11 +337,7 @@ impl DataLoader {
     ///
     /// This bypasses schema-driven conversion and gives full control to the caller.
     /// `opts` is accepted for API parity with non-mapper loaders.
-    pub fn load_parquet_with<E, F>(
-        path: &str,
-        opts: TypedLoadOptions,
-        mapper: F,
-    ) -> Result<Vec<E>>
+    pub fn load_parquet_with<E, F>(path: &str, opts: TypedLoadOptions, mapper: F) -> Result<Vec<E>>
     where
         F: Fn(&RowRecord) -> Result<E>,
     {

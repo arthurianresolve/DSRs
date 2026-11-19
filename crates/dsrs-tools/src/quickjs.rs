@@ -513,7 +513,9 @@ pub async fn run_script(
     let source = source.to_string();
     let cap_handle = handle.clone();
     handle
-        .spawn_blocking(move || run_script_blocking(&source, &capabilities, config, Some(cap_handle)))
+        .spawn_blocking(move || {
+            run_script_blocking(&source, &capabilities, config, Some(cap_handle))
+        })
         .await
         .map_err(|e| ExecError::Internal {
             message: format!("sandbox task failed: {e}"),

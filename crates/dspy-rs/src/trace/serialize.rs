@@ -14,7 +14,9 @@
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-use crate::trace::span::{ModelEntry, PrefixEntry, Span, SpanEvent, Trace, TraceMeta, TraceOutcome};
+use crate::trace::span::{
+    ModelEntry, PrefixEntry, Span, SpanEvent, Trace, TraceMeta, TraceOutcome,
+};
 use crate::utils::hash::stable_hash_debug;
 use crate::{ContentBlock, Message};
 

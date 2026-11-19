@@ -429,4 +429,3 @@ fn doc_to_description(doc: &'static [&'static str]) -> Option<String> {
         Some(joined)
     }
 }
-

@@ -238,7 +238,11 @@ impl SIMBA {
                 ),
                 (None, None) => "-".to_string(),
             };
-            let _ = writeln!(text, "  {name} call {}: input={input}; output={output}", span.seq);
+            let _ = writeln!(
+                text,
+                "  {name} call {}: input={input}; output={output}",
+                span.seq
+            );
         }
         text.trim_end().to_string()
     }
@@ -408,10 +412,11 @@ impl Optimizer for SIMBA {
         let num_examples = target.num_examples();
         let all_indices: Vec<usize> = (0..num_examples).collect();
 
-        let reflector = self
-            .prompt_model
-            .as_ref()
-            .map(|lm| Predict::<IntrospectRollouts>::builder().lm(lm.clone()).build());
+        let reflector = self.prompt_model.as_ref().map(|lm| {
+            Predict::<IntrospectRollouts>::builder()
+                .lm(lm.clone())
+                .build()
+        });
         let mut rng = self.common().rng();
 
         // Baseline: the empty candidate over the full trainset, traced. This

@@ -8,9 +8,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, CallMetadata, DataLoader, Eval, Example, Module, Predict, PredictError,
-    Predicted, Signature, TypedLoadOptions, TypedMetric, UnknownFieldPolicy, average_score,
-    evaluate_trainset,
+    COPRO, CallMetadata, DataLoader, Eval, Example, Module, Predict, PredictError, Predicted,
+    Signature, TypedLoadOptions, TypedMetric, UnknownFieldPolicy, average_score, evaluate_trainset,
 };
 use parquet::arrow::ArrowWriter;
 use std::collections::HashMap;
@@ -280,11 +279,8 @@ fn json_array_typed_success() -> Result<()> {
         r#"[{"question":"What is 2+2?","answer":"4"},{"question":"Capital of France?","answer":"Paris"}]"#,
     )?;
 
-    let examples = DataLoader::load_json::<QARow>(
-        path.to_str().unwrap(),
-        false,
-        TypedLoadOptions::default(),
-    )?;
+    let examples =
+        DataLoader::load_json::<QARow>(path.to_str().unwrap(), false, TypedLoadOptions::default())?;
 
     assert_eq!(examples.len(), 2);
     assert_eq!(examples[1].answer, "Paris");
@@ -348,11 +344,8 @@ fn jsonl_typed_success() -> Result<()> {
 "#,
     )?;
 
-    let examples = DataLoader::load_json::<QARow>(
-        path.to_str().unwrap(),
-        true,
-        TypedLoadOptions::default(),
-    )?;
+    let examples =
+        DataLoader::load_json::<QARow>(path.to_str().unwrap(), true, TypedLoadOptions::default())?;
 
     assert_eq!(examples.len(), 2);
     assert_eq!(examples[0].question, "What is 2+2?");

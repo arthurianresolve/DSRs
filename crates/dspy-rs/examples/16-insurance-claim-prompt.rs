@@ -5,7 +5,7 @@ Run with:
 cargo run --example 16-insurance-claim-prompt
 */
 
-use dspy_rs::{Schema, ChatAdapter, Signature, init_tracing};
+use dspy_rs::{ChatAdapter, Schema, Signature, init_tracing};
 
 // Keep the example self-contained; dates are represented as YYYY-MM-DD strings.
 type NaiveDate = String;

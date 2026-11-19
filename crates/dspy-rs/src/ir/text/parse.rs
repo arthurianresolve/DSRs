@@ -1381,7 +1381,10 @@ impl<'a> Parser<'a> {
             })?;
             builder::extern_hole(&name, sig, hash, &cap_refs)
         } else {
-            self.expect_kw("js", "after the hole capability list (or `extern \"<hash>\"`)")?;
+            self.expect_kw(
+                "js",
+                "after the hole capability list (or `extern \"<hash>\"`)",
+            )?;
             let code = self.raw_code("after `js`")?;
             builder::hole(&name, sig, &code, &cap_refs)
         };

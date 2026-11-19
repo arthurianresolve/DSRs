@@ -8,9 +8,7 @@ use std::sync::{Arc, LazyLock};
 
 use dspy_rs::ir::{Overlay, StepKind, with_ambient_overlay};
 use dspy_rs::trace::capture;
-use dspy_rs::{
-    LM, LMClient, TestCompletionModel, configure, cot, module, predict,
-};
+use dspy_rs::{LM, LMClient, TestCompletionModel, configure, cot, module, predict};
 use rig::completion::AssistantContent;
 use rig::message::Text;
 use tokio::sync::Mutex;
@@ -123,8 +121,7 @@ fn module_lowers_to_a_program_with_an_extern_hole() {
     // Leaves: two predicts and one extern hole, named after the bindings.
     for leaf in ["drafter", "upper", "checker"] {
         assert!(
-            program.param_id(&format!("{leaf}.instruction")).is_some()
-                || printed.contains(leaf),
+            program.param_id(&format!("{leaf}.instruction")).is_some() || printed.contains(leaf),
             "leaf `{leaf}` missing from the program"
         );
     }
@@ -132,7 +129,10 @@ fn module_lowers_to_a_program_with_an_extern_hole() {
         printed.contains("extern \""),
         "the hole prints as an extern binding:\n{printed}"
     );
-    assert!(printed.contains("hole upper_hole"), "hole sig named after the binding");
+    assert!(
+        printed.contains("hole upper_hole"),
+        "hole sig named after the binding"
+    );
 
     // Main sig inferred from step signatures (never guessed).
     let main = &program.sigs[program.sig];
@@ -181,7 +181,10 @@ async fn module_fn_runs_through_the_interpreter_and_reads_the_ambient_overlay() 
 
     // One span per leaf, named after the bindings, in body order.
     assert_eq!(trace.components, vec!["drafter", "upper", "checker"]);
-    assert_ne!(trace.spans[1].request_hash, 0, "hole spans carry a preimage");
+    assert_ne!(
+        trace.spans[1].request_hash, 0,
+        "hole spans carry a preimage"
+    );
 
     // Ambient overlay: mutate the drafter's instruction gene; the program is
     // untouched — the interpreter reads through the overlay at render time.
@@ -194,10 +197,8 @@ async fn module_fn_runs_through_the_interpreter_and_reads_the_ambient_overlay() 
 
     client.push_response(response_with_fields(&[("draft", "second")]));
     client.push_response(response_with_fields(&[("rate", "3")]));
-    let (out, trace) = capture(|| {
-        with_ambient_overlay(Arc::new(overlay), qa("again".to_string()))
-    })
-    .await;
+    let (out, trace) =
+        capture(|| with_ambient_overlay(Arc::new(overlay), qa("again".to_string()))).await;
     let out = out.expect("overlaid run succeeds");
     assert_eq!(out.upper, "SECOND");
 
@@ -229,6 +230,9 @@ async fn module_fn_runs_through_the_interpreter_and_reads_the_ambient_overlay() 
     let replayed = replayed.expect("strict replay succeeds");
     assert_eq!(replayed.answer, baseline.answer);
     assert_eq!(replayed.upper, baseline.upper);
-    assert_eq!(report.served, 3, "drafter + upper (hole) + checker all served");
+    assert_eq!(
+        report.served, 3,
+        "drafter + upper (hole) + checker all served"
+    );
     assert_eq!(report.live, 0);
 }

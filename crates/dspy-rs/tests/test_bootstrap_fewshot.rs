@@ -58,7 +58,9 @@ fn answer_response(text: &str) -> AssistantContent {
 async fn boot_module(client: TestCompletionModel) -> BootModule {
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await
     .unwrap()
@@ -122,7 +124,10 @@ async fn bootstrap_harvests_demos_and_adopts_when_better() {
     let state = ModuleState::from_module(&mut module).unwrap();
     let predictor = &state.predictors["predictor"];
     assert_eq!(predictor.demos.len(), 2);
-    assert_eq!(predictor.instruction_override, None, "instructions untouched");
+    assert_eq!(
+        predictor.instruction_override, None,
+        "instructions untouched"
+    );
     let demo_prompts: Vec<String> = predictor
         .demos
         .iter()
@@ -130,7 +135,10 @@ async fn bootstrap_harvests_demos_and_adopts_when_better() {
         .collect();
     assert!(demo_prompts.contains(&"0".to_string()));
     assert!(demo_prompts.contains(&"2".to_string()));
-    assert!(!demo_prompts.contains(&"1".to_string()), "failed rollouts never become demos");
+    assert!(
+        !demo_prompts.contains(&"1".to_string()),
+        "failed rollouts never become demos"
+    );
 }
 
 #[tokio::test]

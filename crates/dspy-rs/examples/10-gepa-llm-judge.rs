@@ -10,9 +10,8 @@ OPENAI_API_KEY=your_key cargo run --example 10-gepa-llm-judge
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    Eval, GEPA, LM, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
-    init_tracing,
+    Eval, GEPA, LM, Module, Optimizer, Predict, PredictError, Predicted, Signature, TypedMetric,
+    average_score, configure, evaluate_trainset, init_tracing,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -211,7 +210,9 @@ async fn main() -> Result<()> {
         })
         .await?;
     let test_example = training_example(test_problem, "2");
-    let test_metric = metric.evaluate(&test_example, &test_predicted, None).await?;
+    let test_metric = metric
+        .evaluate(&test_example, &test_predicted, None)
+        .await?;
 
     println!("Test answer: {}", test_predicted.answer);
     println!("Test score: {:.3}", test_metric.score);
