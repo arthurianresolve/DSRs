@@ -141,7 +141,9 @@ pub use data::dataloader::{
 pub use evaluate::{
     TypedMetric, average_score, evaluate_trainset, evaluate_trainset_with_concurrency,
 };
-pub use modules::{ChainOfThought, ChainOfThoughtOutput, Reasoning, WithReasoning};
+pub use modules::{
+    ChainOfThought, ChainOfThoughtOutput, Reasoning, ValidatedPredict, WithReasoning,
+};
 pub use optimizer::{
     BootstrapFewShot, BootstrapReport, Budget, COPRO, Candidate, Engine, EngineConfig, GEPA,
     GEPACandidate, GEPAResult, LeafInfo, MIPROv2, OptimizeTarget, Optimizer, OptimizerCommon,
@@ -191,7 +193,7 @@ pub mod prelude {
         CallMetadata, Module, ModuleState, PredictError, PredictState, Predicted, Predictors,
         WithLM,
     };
-    pub use crate::modules::{ChainOfThought, WithReasoning};
+    pub use crate::modules::{ChainOfThought, ValidatedPredict, WithReasoning};
     pub use crate::predictors::{Demo, Predict};
     // The `predictors!` leaf-declaration macro (and, same name, the module).
     pub use crate::predictors;
