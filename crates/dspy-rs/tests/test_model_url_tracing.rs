@@ -1,4 +1,4 @@
-use dspy_rs::{Chat, LM, LMClient, LMConfig, Message};
+use dspy_rs::{Chat, LM, LMClient, LMConfig, LmCallError, LmFailureKind, Message};
 use std::io::{self, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
@@ -70,8 +70,13 @@ async fn model_transport_failure_omits_url_credentials() {
     let events = String::from_utf8(output.lock().unwrap().clone()).unwrap();
     assert!(events.contains("retrying transient lm completion failure"));
     assert!(err.to_string().contains("HTTP transport error"), "{err}");
+    assert_eq!(
+        err.downcast_ref::<LmCallError>().unwrap().kind(),
+        LmFailureKind::Network
+    );
+    let report = format!("{err:#}");
     for secret in ["query-sentinel", "api-key-sentinel"] {
         assert!(!events.contains(secret), "trace exposed {secret}");
-        assert!(!err.to_string().contains(secret), "error exposed {secret}");
+        assert!(!report.contains(secret), "error chain exposed {secret}");
     }
 }
