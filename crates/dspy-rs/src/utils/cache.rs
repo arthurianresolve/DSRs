@@ -136,10 +136,11 @@ impl ResponseCache {
             .expect("memory-only foyer cache construction cannot fail")
     }
 
-    #[cfg(all(test, feature = "inflight-dedup"))]
+    #[cfg(test)]
     pub(crate) async fn memory_only_for_test() -> Self {
         Self {
             handler: Self::build_memory_only().await,
+            #[cfg(feature = "inflight-dedup")]
             inflight: Deduplicator::new(std::time::Duration::ZERO),
             _disk_dir: None,
         }
