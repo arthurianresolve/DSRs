@@ -180,8 +180,9 @@ async fn optimizer_emits_candidate_progress_scores_and_budget_outcomes() {
     assert!(
         records.iter().any(
             |(_, fields)| fields.get("cached").map(String::as_str) == Some("1")
-                && fields.contains_key("best_score")
-                && fields.contains_key("average_score")
+                && fields.get("best_candidate").map(String::as_str) == Some("Some(0)")
+                && fields.get("best_score").map(String::as_str) == Some("Some(1.0)")
+                && fields.get("average_score").map(String::as_str) == Some("Some(1.0)")
         )
     );
     assert!(
