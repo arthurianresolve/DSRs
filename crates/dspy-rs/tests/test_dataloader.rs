@@ -13,6 +13,8 @@ use dspy_rs::{
     Signature, TypedLoadOptions, TypedMetric, UnknownFieldPolicy, average_score, evaluate_trainset,
 };
 use parquet::arrow::ArrowWriter;
+use parquet::basic::Compression;
+use parquet::file::properties::WriterProperties;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -104,7 +106,10 @@ fn write_qa_parquet(path: &Path, questions: &[&str], answers: &[&str]) -> Result
     let batch = RecordBatch::try_new(schema.clone(), vec![question_col, answer_col])?;
 
     let file = fs::File::create(path)?;
-    let mut writer = ArrowWriter::try_new(file, schema, None)?;
+    let props = WriterProperties::builder()
+        .set_compression(Compression::LZ4_RAW)
+        .build();
+    let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
     writer.write(&batch)?;
     writer.close()?;
     Ok(())
