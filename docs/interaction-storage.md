@@ -47,8 +47,8 @@ error, so storage errors during cancellation are also emitted through tracing.
 
 The journal uses OS file locks across handles/processes and syncs every revision.
 It recovers an incomplete final line before appending and rejects corrupt complete
-records or unknown versions. Reads return the latest revision per ID, and
-reopening a store preserves records. Writes are synchronous, and reads/updates
-scan the journal: this backend suits modest local workloads. The trait supports
-application-specific indexed database backends. Configure retention/archival
-outside the journal; bounded in-memory history does not delete stored records.
+records or unknown versions as it validates the journal. Opening a handle scans
+the file once. Each handle then indexes appended revisions and reads the latest
+record by offset. Writes remain synchronous. Run retention or archival with all
+handles closed before editing or replacing the journal. Bounded in-memory
+history applies to inspection and leaves the stored records intact.

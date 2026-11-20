@@ -11,9 +11,10 @@ use anyhow::Result;
 use dspy_rs::optimizer::engine::{EvalOutcome, GateOutcome};
 use dspy_rs::{
     Budget, CallMetadata, Candidate, Engine, EngineConfig, Eval, LM, LMClient, Module, ModuleState,
-    OptimizeTarget, Predict, PredictError, Predicted, Signature, TestCompletionModel, TypedMetric,
+    OptimizeTarget, Predict, PredictError, Predicted, SamplingOptions, Signature,
+    TestCompletionModel, TypedMetric, current_sampling_options, with_sampling_options,
 };
-use rig::completion::AssistantContent;
+use rig::completion::{AssistantContent, Usage};
 use rig::message::Text;
 
 #[derive(Signature, Clone, Debug)]
@@ -308,6 +309,180 @@ async fn subset_evaluation_respects_order_and_matrix_cells() {
     for idx in [1, 2, 3] {
         assert!(engine.matrix().score(candidate, idx).is_some());
     }
+}
+
+#[tokio::test]
+async fn repeated_batch_pairs_share_one_rollout() {
+    let mut module = EchoModule::new();
+    let examples = trainset(3);
+    let target = OptimizeTarget::module(&mut module, &examples, &IndexMetric);
+    let mut engine = Engine::new(EngineConfig {
+        budget: Budget {
+            max_metric_calls: Some(2),
+            ..Budget::default()
+        },
+        ..EngineConfig::default()
+    });
+    let candidate = engine.register(Candidate::new());
+    let candidates = [candidate, candidate];
+    let subset = [2, 0, 2];
+
+    let first = engine
+        .evaluate_many(&target, &candidates, Some(&subset))
+        .await
+        .unwrap()
+        .completed()
+        .unwrap();
+    assert_eq!(first.len(), 2);
+    for result in &first {
+        assert_eq!(result.candidate, candidate);
+        assert_eq!(
+            result
+                .rollouts
+                .iter()
+                .map(|r| r.example)
+                .collect::<Vec<_>>(),
+            subset
+        );
+        assert_eq!(result.scores(), vec![0.2, 0.0, 0.2]);
+    }
+    assert!(first[0].rollouts[0].trace.is_some());
+    assert!(first[0].rollouts[1].trace.is_some());
+    assert!(first[0].rollouts[2].trace.is_none());
+    assert!(first[1].rollouts.iter().all(|r| r.trace.is_none()));
+    assert_eq!(engine.spend().metric_calls, 2);
+
+    let cached = engine
+        .evaluate_many(&target, &candidates, Some(&subset))
+        .await
+        .unwrap()
+        .completed()
+        .unwrap();
+    assert!(
+        cached
+            .iter()
+            .flat_map(|r| &r.rollouts)
+            .all(|r| r.trace.is_none())
+    );
+    assert_eq!(engine.spend().metric_calls, 2);
+    assert_eq!(engine.spend().cache_hits, 2);
+}
+
+struct SamplingMetric {
+    fail: bool,
+}
+
+impl TypedMetric<(EngSigInput, EngSigOutput), BarrierModule> for SamplingMetric {
+    async fn evaluate(
+        &self,
+        example: &(EngSigInput, EngSigOutput),
+        _prediction: &Predicted<EngSigOutput>,
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        if self.fail {
+            anyhow::bail!("failed sample for {}", example.0.prompt);
+        }
+        let scope = current_sampling_options();
+        assert_eq!(scope.temperature, Some(0.25));
+        Ok(Eval::with_feedback(1.0, scope.id.unwrap()))
+    }
+}
+
+#[tokio::test]
+async fn sampled_rollouts_share_concurrency_across_examples() {
+    let mut module = BarrierModule {
+        predictor: Predict::<EngSig>::new(),
+        barrier: Arc::new(tokio::sync::Barrier::new(4)),
+    };
+    let examples = trainset(2);
+    let target = OptimizeTarget::module(&mut module, &examples, &SamplingMetric { fail: false });
+    let mut engine = Engine::new(EngineConfig {
+        concurrency: 4,
+        ..EngineConfig::default()
+    });
+    let candidate = engine.register(Candidate::new());
+    let scope = SamplingOptions {
+        id: Some("outer".into()),
+        temperature: Some(0.25),
+    };
+    let samples = with_sampling_options(scope.clone(), async {
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            engine.evaluate_sampled(&target, candidate, &[1, 0], 2, "probe"),
+        )
+        .await
+        .expect("both examples must reach the barrier together")
+        .unwrap();
+        assert_eq!(current_sampling_options(), scope);
+        result
+    })
+    .await;
+    assert_eq!(samples.len(), 4);
+    for (index, rollout) in samples.iter().enumerate() {
+        let position = index / 2;
+        let sample = index % 2;
+        assert_eq!(
+            (rollout.example_position, rollout.example, rollout.sample),
+            (position, 1 - position, sample)
+        );
+        let id = rollout.eval.feedback.as_deref().unwrap();
+        assert!(id.starts_with(&format!("outer/probe/{position}/")));
+        assert!(id.ends_with(&format!("/{sample}")));
+    }
+    assert_eq!(engine.spend().metric_calls, 4);
+    assert!(engine.cache().is_empty());
+}
+
+#[tokio::test]
+async fn sampled_rollouts_charge_admitted_work_on_failure() {
+    let mut module = BarrierModule {
+        predictor: Predict::<EngSig>::new(),
+        barrier: Arc::new(tokio::sync::Barrier::new(4)),
+    };
+    let examples = trainset(3);
+    let target = OptimizeTarget::module(&mut module, &examples, &SamplingMetric { fail: true });
+    let mut engine = Engine::new(EngineConfig {
+        concurrency: 4,
+        ..EngineConfig::default()
+    });
+    let candidate = engine.register(Candidate::new());
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        engine.evaluate_sampled(&target, candidate, &[1, 0, 2], 2, "probe"),
+    )
+    .await
+    .expect("a failed batch must finish its admitted samples")
+    .unwrap_err();
+    assert_eq!(error.to_string(), "failed sample for 1");
+    assert_eq!(engine.spend().metric_calls, 4);
+    assert_eq!(engine.spend().lm_calls, 4);
+}
+
+#[tokio::test]
+async fn sampled_rollouts_check_tokens_before_starting_the_next_example() {
+    let client = TestCompletionModel::new((0..4).map(|_| answer_response("0")));
+    let mut usage = Usage::new();
+    usage.total_tokens = 3;
+    client.set_usage(usage);
+    let mut module = lm_module(client.clone()).await;
+    let examples = trainset(2);
+    let target = OptimizeTarget::module(&mut module, &examples, &IndexMetric);
+    let mut engine = Engine::new(EngineConfig {
+        budget: Budget {
+            max_tokens: Some(6),
+            ..Budget::default()
+        },
+        ..EngineConfig::default()
+    });
+    let candidate = engine.register(Candidate::new());
+    let error = engine
+        .evaluate_sampled(&target, candidate, &[0, 1], 2, "probe")
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("sampling budget exhausted"));
+    assert_eq!(client.call_count(), 2);
+    assert_eq!(engine.spend().metric_calls, 2);
+    assert_eq!(engine.spend().tokens.total_tokens, 6);
 }
 
 #[tokio::test]

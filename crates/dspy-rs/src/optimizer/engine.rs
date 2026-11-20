@@ -38,10 +38,10 @@
 //!   seam: sampling params live on LM configs outside the candidate, so
 //!   callers that change them must bump the salt.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{Result, anyhow};
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::stream::{self, FuturesUnordered, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 
@@ -838,7 +838,9 @@ impl Engine {
     /// are injected per rollout, never applied to shared state.
     ///
     /// Cached rollouts return their `Eval` with `trace: None` and consume no
-    /// budget. If the uncached portion doesn't fit the remaining budget the
+    /// budget. Repeated pairs reuse the same score and only the first
+    /// occurrence of a fresh pair carries its trace.
+    /// If the uncached portion doesn't fit the remaining budget the
     /// engine runs nothing and returns [`BatchEvalOutcome::BudgetExhausted`].
     #[tracing::instrument(name = "dsrs.optimizer.batch", level = "info", skip_all,
         fields(candidates = candidates.len(), examples = target.num_examples()))]
@@ -872,24 +874,31 @@ impl Engine {
             incoming.temperature.map(f32::to_bits),
         ));
 
-        // Partition the (candidate × example) grid into cached and pending.
-        let mut cached: HashMap<(usize, usize), Eval> = HashMap::new();
-        let mut pending: Vec<(usize, usize)> = Vec::new();
-        for &candidate in candidates {
+        // Deduplicate each axis once, retaining first-seen order for scheduling.
+        let [unique_candidates, unique_indices] = [candidates, indices.as_slice()].map(|items| {
+            let mut seen = HashSet::new();
+            items
+                .iter()
+                .copied()
+                .filter(|&index| seen.insert(index))
+                .collect::<Vec<_>>()
+        });
+        let repeats =
+            unique_candidates.len() != candidates.len() || unique_indices.len() != indices.len();
+
+        let mut cached = HashMap::new();
+        let mut pending = Vec::new();
+        for &candidate in &unique_candidates {
             let candidate_hash = self.candidates[candidate].0;
-            for &idx in &indices {
-                let key = (candidate, idx);
-                if cached.contains_key(&key) || pending.contains(&key) {
-                    continue;
-                }
+            for &idx in &unique_indices {
                 match self
                     .cache
                     .get(baseline, candidate_hash, target.example_uid(idx), salt)
                 {
                     Some(eval) => {
-                        cached.insert(key, eval.clone());
+                        cached.insert((candidate, idx), eval.clone());
                     }
-                    None => pending.push(key),
+                    None => pending.push((candidate, idx)),
                 }
             }
         }
@@ -903,7 +912,7 @@ impl Engine {
 
         // Bind each requested candidate against the target once.
         let mut bound: HashMap<usize, BoundCandidate> = HashMap::new();
-        for &candidate in candidates {
+        for &candidate in &unique_candidates {
             tracing::debug!(target: "dsrs::content", candidate,
                 params = ?self.candidate(candidate), "optimizer candidate parameters");
             bound.insert(candidate, target.bind(&self.candidates[candidate].1)?);
@@ -915,7 +924,8 @@ impl Engine {
         // Accounting: fresh rollouts consume budget, cached hits are free.
         self.spend.metric_calls += fresh.len();
         self.spend.lm_calls += fresh.len();
-        self.spend.cache_hits += cached.len();
+        let cache_hits = cached.len();
+        self.spend.cache_hits += cache_hits;
         for (_, _, _, trace) in &fresh {
             self.spend.lm_spans += trace.spans.len();
             for span in &trace.spans {
@@ -924,8 +934,10 @@ impl Engine {
         }
 
         // Bookkeeping: cache inserts + matrix records.
-        let mut fresh_by_key: HashMap<(usize, usize), (Eval, Trace)> =
-            HashMap::with_capacity(fresh.len());
+        for (&(candidate, idx), eval) in &cached {
+            self.matrix.record(candidate, idx, eval.score);
+        }
+        let mut fresh_by_key = HashMap::with_capacity(fresh.len());
         for (candidate, idx, eval, trace) in fresh {
             self.cache.insert(
                 baseline,
@@ -937,9 +949,6 @@ impl Engine {
             self.matrix.record(candidate, idx, eval.score);
             fresh_by_key.insert((candidate, idx), (eval, trace));
         }
-        for (&(candidate, idx), eval) in &cached {
-            self.matrix.record(candidate, idx, eval.score);
-        }
 
         let evals: Vec<CandidateEval> = candidates
             .iter()
@@ -948,22 +957,24 @@ impl Engine {
                 rollouts: indices
                     .iter()
                     .map(|&idx| {
-                        if let Some((eval, trace)) = fresh_by_key.remove(&(candidate, idx)) {
-                            RolloutOutcome {
-                                example: idx,
-                                eval,
-                                trace: Some(trace),
+                        let key = (candidate, idx);
+                        let (eval, trace) = if let Some((eval, trace)) = fresh_by_key.remove(&key) {
+                            if repeats {
+                                cached.insert(key, eval.clone());
                             }
+                            (eval, Some(trace))
                         } else {
-                            let eval = cached
-                                .get(&(candidate, idx))
-                                .cloned()
-                                .expect("every requested pair is either fresh or cached");
-                            RolloutOutcome {
-                                example: idx,
-                                eval,
-                                trace: None,
-                            }
+                            let eval = if repeats {
+                                cached.get(&key).cloned()
+                            } else {
+                                cached.remove(&key)
+                            };
+                            (eval.expect("evaluated pair"), None)
+                        };
+                        RolloutOutcome {
+                            example: idx,
+                            eval,
+                            trace,
                         }
                     })
                     .collect(),
@@ -977,10 +988,10 @@ impl Engine {
             .flat_map(|eval| &eval.rollouts)
             .map(|rollout| rollout.eval.score)
             .sum();
-        tracing::info!(fresh = pending.len(), cached = cached.len(),
+        tracing::info!(fresh = pending.len(), cached = cache_hits,
             best_candidate = ?best, best_score = ?best.and_then(|id| self.matrix.mean(id)),
             average_score = ?(score_count > 0).then(|| score_sum / score_count as f64),
-            completed = self.spend.metric_calls, requested = pending.len() + cached.len(),
+            completed = self.spend.metric_calls, requested = pending.len() + cache_hits,
             metric_calls = self.spend.metric_calls, lm_calls = self.spend.lm_calls,
             "optimizer batch completed");
         Ok(BatchEvalOutcome::Complete(evals))
@@ -1026,69 +1037,110 @@ impl Engine {
                 "sampling budget exhausted ({sample_count} rollouts needed)"
             ));
         }
-        let bound = target.bind(&self.candidates[candidate].1)?;
-        let candidate_hash = self.candidates[candidate].0;
-        let example_uid = target.example_uid(example);
-        let incoming = crate::current_sampling_options();
-        let concurrency = self.config.concurrency.max(1);
-        let sampled = stream::iter(0..sample_count)
-            .map(|sample| {
-                let bound = bound.clone();
-                let incoming = incoming.clone();
-                async move {
-                    let options = crate::SamplingOptions {
-                        id: Some(format!(
-                            "{}/{identity}/{candidate_hash:016x}/{example_uid:016x}/{sample}",
-                            incoming.id.as_deref().unwrap_or("")
-                        )),
-                        temperature: incoming.temperature,
-                    };
-                    let (eval, trace) = crate::with_sampling_options(
-                        options,
-                        target.run(example, bound.clone(), candidate_hash),
-                    )
-                    .await?;
-                    Ok::<_, anyhow::Error>((sample, eval, trace))
-                }
-            })
-            .buffer_unordered(concurrency)
-            .collect::<Vec<_>>()
-            .await;
-        let mut successful = Vec::with_capacity(sampled.len());
-        let mut first_error = None;
-        for result in sampled {
-            match result {
-                Ok(item) => successful.push(item),
-                Err(err) if first_error.is_none() => first_error = Some(err),
-                Err(_) => {}
-            }
-        }
-        self.spend.metric_calls = self.spend.metric_calls.saturating_add(sample_count);
-        self.spend.lm_calls = self.spend.lm_calls.saturating_add(sample_count);
-        for (_, _, trace) in &successful {
-            self.spend.lm_spans += trace.spans.len();
-            for span in &trace.spans {
-                self.spend.tokens = self.spend.tokens + span.usage;
-            }
-        }
-        if let Some(err) = first_error {
-            return Err(err);
-        }
-        let mut sampled = successful;
-        sampled.sort_by_key(|(sample, _, _)| *sample);
-        Ok(sampled
+        Ok(self
+            .run_samples(
+                target,
+                candidate,
+                std::iter::once((example, identity.to_owned())),
+                sample_count,
+            )
+            .await?
             .into_iter()
-            .map(|(_, eval, trace)| RolloutOutcome {
+            .map(|rollout| RolloutOutcome {
                 example,
-                eval,
-                trace: Some(trace),
+                eval: rollout.eval,
+                trace: Some(rollout.trace),
             })
             .collect())
     }
 
-    /// Evaluates every `(example, sample)` pair in request order. Work is
-    /// bounded by the Engine concurrency, bypasses normal rollout-cache and
-    /// score-matrix bookkeeping, and is budgeted before any probe runs.
+    async fn run_samples(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidate: usize,
+        examples: impl Iterator<Item = (usize, String)>,
+        samples_per_example: usize,
+    ) -> Result<Vec<SampledRolloutOutcome>> {
+        let bound = target.bind(&self.candidates[candidate].1)?;
+        let candidate_hash = self.candidates[candidate].0;
+        let incoming = crate::current_sampling_options();
+        let concurrency = self.config.concurrency.max(1);
+        let mut requests = examples
+            .enumerate()
+            .flat_map(|(position, (example, identity))| {
+                let uid = target.example_uid(example);
+                let prefix = format!(
+                    "{}/{identity}/{candidate_hash:016x}/{uid:016x}",
+                    incoming.id.as_deref().unwrap_or("")
+                );
+                (0..samples_per_example)
+                    .map(move |sample| (position, example, sample, format!("{prefix}/{sample}")))
+            })
+            .peekable();
+        let mut in_flight = FuturesUnordered::new();
+        let mut rollouts = Vec::new();
+        let mut failure = None;
+        loop {
+            // After a failure, finish the failing example's samples and drain
+            // admitted work without starting any later example.
+            while in_flight.len() < concurrency {
+                let Some((position, example, sample, id)) = requests.next_if(|(position, ..)| {
+                    failure
+                        .as_ref()
+                        .is_none_or(|(failed, _)| position <= failed)
+                }) else {
+                    break;
+                };
+                let options = crate::SamplingOptions {
+                    id: Some(id),
+                    temperature: incoming.temperature,
+                };
+                let run = target.run(example, bound.clone(), candidate_hash);
+                in_flight.push(async move {
+                    let result = crate::with_sampling_options(options, run).await;
+                    (position, example, sample, result)
+                });
+            }
+            let Some((position, example, sample, result)) = in_flight.next().await else {
+                break;
+            };
+            self.spend.metric_calls = self.spend.metric_calls.saturating_add(1);
+            self.spend.lm_calls = self.spend.lm_calls.saturating_add(1);
+            match result {
+                Ok((eval, trace)) => {
+                    self.spend.lm_spans += trace.spans.len();
+                    for span in &trace.spans {
+                        self.spend.tokens = self.spend.tokens + span.usage;
+                    }
+                    rollouts.push(SampledRolloutOutcome {
+                        example_position: position,
+                        example,
+                        sample,
+                        eval,
+                        trace,
+                    });
+                }
+                Err(error)
+                    if failure
+                        .as_ref()
+                        .is_none_or(|(earliest, _)| position < *earliest) =>
+                {
+                    failure = Some((position, error));
+                }
+                Err(_) => {}
+            }
+        }
+        if let Some((_, error)) = failure {
+            return Err(error);
+        }
+        rollouts.sort_unstable_by_key(|rollout| (rollout.example_position, rollout.sample));
+        Ok(rollouts)
+    }
+
+    /// Returns every `(example, sample)` result in request order. Probes share
+    /// the engine's concurrency limit and bypass its rollout cache and score
+    /// matrix. A configured token budget is checked between example groups.
+    /// On failure, scheduled probes are accounted for before returning.
     pub async fn evaluate_sampled(
         &mut self,
         target: &OptimizeTarget<'_>,
@@ -1106,7 +1158,35 @@ impl Engine {
                 "sampling budget exhausted ({total} rollouts needed)"
             ));
         }
-        let incoming = crate::current_sampling_options();
+        if examples.is_empty() {
+            return Ok(Vec::new());
+        }
+        if candidate >= self.candidates.len() {
+            return Err(anyhow!("candidate index {candidate} is not registered"));
+        }
+        if self.config.budget.max_tokens.is_none()
+            && examples
+                .iter()
+                .all(|&example| example < target.num_examples())
+        {
+            if total == 0 {
+                return Ok(Vec::new());
+            }
+            return self
+                .run_samples(
+                    target,
+                    candidate,
+                    examples
+                        .iter()
+                        .enumerate()
+                        .map(|(position, &example)| (example, format!("{identity}/{position}"))),
+                    samples_per_example,
+                )
+                .await;
+        }
+
+        // Preserve the per-example token check and the validated prefix of
+        // requests that contain an invalid example index.
         let mut rollouts = Vec::with_capacity(total);
         for (example_position, &example) in examples.iter().enumerate() {
             let identity = format!("{identity}/{example_position}");
@@ -1125,9 +1205,6 @@ impl Engine {
                 }
             }));
         }
-        // Restore the caller's task-local settings after the internal sample
-        // scopes have completed.
-        debug_assert_eq!(crate::current_sampling_options(), incoming);
         Ok(rollouts)
     }
 
