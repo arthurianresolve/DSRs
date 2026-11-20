@@ -1,0 +1,23 @@
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[project]
+name = "dsrs-dspy"
+version = "0.1.2"
+description = "DSRs structured-output adapter for Python DSPy"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = ["dspy>=3.2.1,<4", "json-repair>=0.64,<1", "pydantic>=2,<3"]
+
+[project.urls]
+Repository = "https://github.com/arthurianresolve/DSRs"
+
+[tool.maturin]
+module-name = "dsrs_dspy._dsrs_dspy"
+python-source = "python"
+exclude = ["python/**/*.pyc"]
+features = ["pyo3/extension-module"]
+locked = true

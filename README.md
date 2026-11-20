@@ -21,6 +21,8 @@
 
 ## 📦 Installation
 
+For Python DSPy applications, see the [DSRs DSPy adapter](crates/dspy-py/README.md).
+
 Add DSRs and the dependencies used by the complete example to your `Cargo.toml`:
 
 ```toml
