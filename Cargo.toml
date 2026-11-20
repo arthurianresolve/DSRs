@@ -3,7 +3,7 @@ resolver = "3"
 members = [
     "crates/*",
 ]
-exclude = ["crates/dspy-py"]
+exclude = ["crates/dspy-py", "crates/dspy-rlm"]
 
 # Single source of truth for every dependency used by 2+ member crates.
 # Pins match what Cargo.lock currently resolves — bump here, not in members.

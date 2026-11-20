@@ -1,0 +1,53 @@
+name: RLM
+
+on:
+  push:
+    branches: [main, integration]
+    paths:
+      - ".github/workflows/rlm.yaml"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - "crates/dspy-rlm/**"
+      - "crates/dspy-rs/**"
+      - "crates/dsrs-*/**"
+  pull_request:
+    branches: [main, integration]
+    paths:
+      - ".github/workflows/rlm.yaml"
+      - "Cargo.toml"
+      - "rust-toolchain.toml"
+      - "crates/dspy-rlm/**"
+      - "crates/dspy-rs/**"
+      - "crates/dsrs-*/**"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: "RLM tests (${{ matrix.os }}, Rust ${{ matrix.rust }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        rust: ["1.98.1", "1.99.1", "1.100.0"]
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      PYO3_PYTHON: python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: rustc -vV
+      - if: matrix.rust == '1.100.0'
+        run: cargo fmt --manifest-path crates/dspy-rlm/Cargo.toml -- --check
+      - run: cargo test --locked --manifest-path crates/dspy-rlm/Cargo.toml
