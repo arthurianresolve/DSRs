@@ -1,0 +1,72 @@
+name: Python DSPy Adapter
+
+on:
+  push:
+    paths:
+      - ".github/workflows/python-adapter.yaml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "crates/**"
+  pull_request:
+    paths:
+      - ".github/workflows/python-adapter.yaml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "crates/**"
+
+permissions:
+  contents: read
+
+jobs:
+  wheel:
+    name: "Wheel and DSPy tests (${{ matrix.os }}, Rust ${{ matrix.rust }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        rust: ["1.98.1", "1.99.1", "1.100.0"]
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.rust }}
+      CARGO_INCREMENTAL: "0"
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+      - run: rustc -vV
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Build one abi3 wheel
+        shell: pwsh
+        run: |
+          python -m pip install maturin==1.16.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $maturinArgs = @('build', '--release', '--locked', '--strip', '--manifest-path', 'crates/dspy-py/Cargo.toml', '--out', 'target/dspy-wheels', '--interpreter', 'python')
+          if ($IsLinux) { $maturinArgs += @('--compatibility', 'linux') }
+          maturin @maturinArgs
+          exit $LASTEXITCODE
+      - name: Test wheel on Python 3.14 and DSPy 3.5
+        shell: pwsh
+        run: |
+          $wheel = Get-ChildItem -LiteralPath 'target/dspy-wheels' -Filter '*.whl' -File
+          python -m pip install $wheel.FullName dspy==3.5.0 pytest==9.2.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pytest -q crates/dspy-py/tests
+          exit $LASTEXITCODE
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+      - name: Test the same wheel on Python 3.10 and DSPy 3.2.1
+        shell: pwsh
+        run: |
+          $wheel = Get-ChildItem -LiteralPath 'target/dspy-wheels' -Filter '*.whl' -File
+          python -m pip install $wheel.FullName dspy==3.2.1 pytest==9.2.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pytest -q crates/dspy-py/tests
+          exit $LASTEXITCODE

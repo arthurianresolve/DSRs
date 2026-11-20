@@ -30,6 +30,8 @@ pub struct ChatAdapter;
 
 static FIELD_HEADER_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\[\[ ## ([^#]+?) ## \]\]").unwrap());
+static FLEXIBLE_FIELD_HEADER_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[\[\s*##\s*([^#]+?)\s*##\s*\]\]").unwrap());
 
 const INPUT_RENDER_TEMPLATE_NAME: &str = "__input_field__";
 
@@ -870,6 +872,14 @@ impl ChatAdapter {
     pub fn parse_sections(content: &str) -> IndexMap<String, String> {
         crate::adapter::chat::parse_sections(content)
     }
+
+    /// Splits DSPy chat sections, accepting whitespace variations within field headers.
+    ///
+    /// Section names and Unix-line-ending text are borrowed from the response.
+    /// Duplicate names keep their first occurrence.
+    pub fn parse_sections_flexible(content: &str) -> IndexMap<&str, std::borrow::Cow<'_, str>> {
+        parse_sections_with_pattern(content, &FLEXIBLE_FIELD_HEADER_PATTERN)
+    }
 }
 
 fn evaluate_field_constraints(
@@ -913,6 +923,13 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
 /// an owned, line-normalized copy (matching the historical `lines().join("\n")`
 /// behavior). Duplicate section names keep the first occurrence.
 fn parse_sections_cow(content: &str) -> IndexMap<&str, std::borrow::Cow<'_, str>> {
+    parse_sections_with_pattern(content, &FIELD_HEADER_PATTERN)
+}
+
+fn parse_sections_with_pattern<'a>(
+    content: &'a str,
+    header_pattern: &Regex,
+) -> IndexMap<&'a str, std::borrow::Cow<'a, str>> {
     let base = content.as_ptr() as usize;
     let mut ranges: IndexMap<&str, (usize, usize)> = IndexMap::new();
     // The currently open section: (name, content start offset).
@@ -920,7 +937,10 @@ fn parse_sections_cow(content: &str) -> IndexMap<&str, std::borrow::Cow<'_, str>
 
     for line in content.lines() {
         let trimmed = line.trim();
-        let Some(caps) = FIELD_HEADER_PATTERN.captures(trimmed) else {
+        if !trimmed.starts_with("[[") {
+            continue;
+        }
+        let Some(caps) = header_pattern.captures(trimmed) else {
             continue;
         };
         let line_start = line.as_ptr() as usize - base;
