@@ -1,12 +1,13 @@
 //! Persistent invocation storage, independent of caching and history retention.
 use crate::HistoryEntry;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::future::Future;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -35,11 +36,13 @@ pub trait InteractionStore: std::fmt::Debug + Send + Sync {
 }
 
 /// Versioned, append-only JSONL with durable updates and OS file locking.
-/// Corrupt complete records fail reads; a torn final line is repaired on append.
+/// Each handle validates and indexes complete records on open and as the journal
+/// grows. A torn final line is repaired on append. Close all handles before
+/// editing or replacing existing records.
 /// Contains prompts/responses: choose a path with appropriate access permissions.
 #[derive(Debug)]
 pub struct JsonlInteractionStore {
-    file: Mutex<File>,
+    journal: Mutex<Journal>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -63,6 +66,109 @@ impl Drop for LockedFile<'_> {
     }
 }
 
+#[derive(Debug)]
+struct Journal {
+    file: File,
+    index: JournalIndex,
+}
+
+#[derive(Debug, Default)]
+struct JournalIndex {
+    // The offset just after the last validated newline. A partial or failed
+    // append leaves this boundary available for the next refresh.
+    complete: u64,
+    modified: Option<SystemTime>,
+    invocations: HashMap<String, (u64, RecordLocation)>,
+    newest: BTreeSet<(u64, String)>,
+    traces: HashMap<String, RecordLocation>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RecordLocation {
+    offset: u64,
+    len: usize,
+}
+
+fn decode_record(line: &[u8]) -> Result<Record, StorageError> {
+    let revision: Revision = serde_json::from_slice(line)?;
+    if revision.version != 1 {
+        return Err(StorageError::Version(revision.version));
+    }
+    Ok(revision.record)
+}
+
+impl RecordLocation {
+    fn read(self, file: &mut File) -> Result<Record, StorageError> {
+        file.seek(SeekFrom::Start(self.offset))?;
+        let mut line = vec![0; self.len];
+        file.read_exact(&mut line)?;
+        decode_record(&line)
+    }
+
+    fn invocation(self, file: &mut File, id: &str) -> Result<HistoryEntry, StorageError> {
+        match self.read(file)? {
+            Record::Invocation { entry } if entry.id == id => Ok(entry),
+            _ => Err(changed_record()),
+        }
+    }
+}
+
+fn changed_record() -> StorageError {
+    std::io::Error::new(ErrorKind::InvalidData, "indexed interaction record changed").into()
+}
+
+impl JournalIndex {
+    fn refresh(&mut self, file: &mut File) -> Result<u64, StorageError> {
+        let meta = file.metadata()?;
+        let len = meta.len();
+        let modified = meta.modified().ok();
+        if len < self.complete || (len == self.complete && modified != self.modified) {
+            *self = Self::default();
+        }
+        if len > self.complete {
+            file.seek(SeekFrom::Start(self.complete))?;
+            let mut reader = BufReader::new(file);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                reader.read_until(b'\n', &mut line)?;
+                if line.last() != Some(&b'\n') {
+                    break;
+                }
+                if line.len() > 1 {
+                    let location = RecordLocation {
+                        offset: self.complete,
+                        len: line.len(),
+                    };
+                    self.record(decode_record(&line)?, location);
+                }
+                self.complete += line.len() as u64;
+            }
+        }
+        self.modified = modified;
+        Ok(len)
+    }
+
+    fn record(&mut self, record: Record, location: RecordLocation) {
+        match record {
+            Record::Invocation { entry } => {
+                let timestamp = entry.timestamp_us;
+                let id = entry.id;
+                if let Some((old, _)) = self.invocations.insert(id.clone(), (timestamp, location)) {
+                    if old == timestamp {
+                        return;
+                    }
+                    self.newest.remove(&(old, id.clone()));
+                }
+                self.newest.insert((timestamp, id));
+            }
+            Record::Execution { trace } => {
+                self.traces.insert(trace.meta.trace_id, location);
+            }
+        }
+    }
+}
+
 impl JsonlInteractionStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let file = OpenOptions::new()
@@ -72,65 +178,35 @@ impl JsonlInteractionStore {
             .write(true)
             .open(path)?;
         let store = Self {
-            file: Mutex::new(file),
+            journal: Mutex::new(Journal {
+                file,
+                index: JournalIndex::default(),
+            }),
         };
-        store.recent(0)?;
+        store.locked(|_, _, _| Ok(()))?;
         Ok(store)
     }
 
     fn locked<T>(
         &self,
-        f: impl FnOnce(&mut File) -> Result<T, StorageError>,
+        f: impl FnOnce(&mut File, &JournalIndex, u64) -> Result<T, StorageError>,
     ) -> Result<T, StorageError> {
-        let mut file = self.file.lock().unwrap_or_else(|p| p.into_inner());
+        let mut journal = self.journal.lock().unwrap_or_else(|p| p.into_inner());
+        let Journal { file, index } = &mut *journal;
         file.lock()?;
-        let guard = LockedFile(&mut file);
-        f(guard.0)
-    }
-
-    fn read(
-        file: &mut File,
-    ) -> Result<
-        (
-            HashMap<String, HistoryEntry>,
-            HashMap<String, crate::Trace>,
-            u64,
-        ),
-        StorageError,
-    > {
-        file.seek(SeekFrom::Start(0))?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        let complete = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
-        let mut entries = HashMap::new();
-        let mut traces = HashMap::new();
-        for line in bytes[..complete]
-            .split(|b| *b == b'\n')
-            .filter(|line| !line.is_empty())
-        {
-            let revision: Revision = serde_json::from_slice(line)?;
-            if revision.version != 1 {
-                return Err(StorageError::Version(revision.version));
-            }
-            match revision.record {
-                Record::Invocation { entry } => {
-                    entries.insert(entry.id.clone(), entry);
-                }
-                Record::Execution { trace } => {
-                    traces.insert(trace.meta.trace_id.clone(), trace);
-                }
-            }
-        }
-        Ok((entries, traces, complete as u64))
+        let guard = LockedFile(file);
+        let len = index.refresh(guard.0)?;
+        f(guard.0, index, len)
     }
 
     fn append(&self, record: Record) -> Result<(), StorageError> {
         let mut bytes = serde_json::to_vec(&Revision { version: 1, record })?;
         bytes.push(b'\n');
-        self.locked(|file| {
-            let (_, _, complete) = Self::read(file)?;
-            file.set_len(complete)?;
-            file.seek(SeekFrom::Start(complete))?;
+        self.locked(|file, index, len| {
+            if len > index.complete {
+                file.set_len(index.complete)?;
+            }
+            file.seek(SeekFrom::Start(index.complete))?;
             file.write_all(&bytes)?;
             file.sync_data()?;
             Ok(())
@@ -150,21 +226,35 @@ impl InteractionStore for JsonlInteractionStore {
         })
     }
     fn get_trace(&self, id: &str) -> Result<Option<crate::Trace>, StorageError> {
-        self.locked(|file| Ok(Self::read(file)?.1.remove(id)))
+        self.locked(|file, index, _| {
+            index
+                .traces
+                .get(id)
+                .map(|location| match location.read(file)? {
+                    Record::Execution { trace } if trace.meta.trace_id == id => Ok(trace),
+                    _ => Err(changed_record()),
+                })
+                .transpose()
+        })
     }
     fn get(&self, id: &str) -> Result<Option<HistoryEntry>, StorageError> {
-        self.locked(|file| Ok(Self::read(file)?.0.remove(id)))
+        self.locked(|file, index, _| {
+            index
+                .invocations
+                .get(id)
+                .map(|(_, location)| location.invocation(file, id))
+                .transpose()
+        })
     }
     fn recent(&self, limit: usize) -> Result<Vec<HistoryEntry>, StorageError> {
-        self.locked(|file| {
-            let mut entries: Vec<_> = Self::read(file)?.0.into_values().collect();
-            entries.sort_by(|a, b| {
-                b.timestamp_us
-                    .cmp(&a.timestamp_us)
-                    .then_with(|| b.id.cmp(&a.id))
-            });
-            entries.truncate(limit);
-            Ok(entries)
+        self.locked(|file, index, _| {
+            index
+                .newest
+                .iter()
+                .rev()
+                .take(limit)
+                .map(|(_, id)| index.invocations[id].1.invocation(file, id))
+                .collect()
         })
     }
 }

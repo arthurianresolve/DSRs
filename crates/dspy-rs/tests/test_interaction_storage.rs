@@ -131,6 +131,7 @@ async fn torn_tail_is_recovered_but_corruption_is_rejected() {
         .unwrap()
         .write_all(b"bad record\n")
         .unwrap();
+    assert!(store.recent(0).is_err());
     assert!(JsonlInteractionStore::open(&path).is_err());
 }
 
@@ -171,6 +172,69 @@ async fn independent_handles_do_not_lose_concurrent_updates() {
         barrier.wait();
     });
     assert_eq!(a.recent(20).unwrap().len(), 8);
+}
+
+#[tokio::test]
+async fn open_handles_read_the_latest_revision_and_reorder_recent_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("calls.jsonl");
+    let reader = JsonlInteractionStore::open(&path).unwrap();
+    let writer = Arc::new(JsonlInteractionStore::open(&path).unwrap());
+    let lm = lm(vec![answer("a")]).await;
+    with_interaction_store(
+        writer.clone(),
+        lm.call(Chat::new(vec![Message::user("a")]), vec![]),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let mut entry = reader.recent(1).unwrap().pop().unwrap();
+    let original = entry.id.clone();
+
+    entry.id.push_str("-new");
+    writer.upsert(&entry).unwrap();
+    assert_eq!(reader.recent(1).unwrap()[0].id, entry.id);
+    let newer = entry.id.clone();
+
+    entry.id = original.clone();
+    entry.timestamp_us += 1;
+    entry.raw_output = Some("revised".into());
+    writer.upsert(&entry).unwrap();
+    assert_eq!(
+        reader
+            .get(&original)
+            .unwrap()
+            .unwrap()
+            .raw_output
+            .as_deref(),
+        Some("revised")
+    );
+    let ids: Vec<_> = reader
+        .recent(10)
+        .unwrap()
+        .into_iter()
+        .map(|record| record.id)
+        .collect();
+    assert_eq!(ids, [original, newer]);
+
+    let (_, mut trace) = dspy_rs::capture(|| async {}).await;
+    let trace_id = trace.meta.trace_id.clone();
+    writer.upsert_trace(&trace).unwrap();
+    assert!(
+        reader
+            .get_trace(&trace_id)
+            .unwrap()
+            .unwrap()
+            .meta
+            .tags
+            .is_empty()
+    );
+    trace.meta.tags.insert("status".into(), "updated".into());
+    writer.upsert_trace(&trace).unwrap();
+    assert_eq!(
+        reader.get_trace(&trace_id).unwrap().unwrap().meta.tags,
+        trace.meta.tags
+    );
 }
 
 #[derive(Debug)]

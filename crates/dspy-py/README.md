@@ -7,7 +7,7 @@ Examples and tool or history handling use DSPy's existing chat adapter.
 
 ## Install from a checkout
 
-Use Python 3.10 or newer. The adapter supports Rust 1.98.1, 1.99.1, and
+Use Python 3.10 or newer. The adapter supports Rust 1.97.1, 1.98.1, 1.99.1, and
 1.100.0. Run the install commands from the repository root with the repository's
 toolchain, or set `RUSTUP_TOOLCHAIN` to select a different supported version.
 

@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        toolchain: ['1.98.1', '1.99.1', '1.100.0']
+        toolchain: ['1.97.1', '1.98.1', '1.99.1', '1.100.0']
         features: [default, minimal, cache]
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}

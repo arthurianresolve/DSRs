@@ -486,9 +486,10 @@ We welcome contributions! Check existing issues and pull requests before startin
 ### Development Setup
 
 The checkout pins Rust 1.100.0 in `rust-toolchain.toml`, matching native CI.
-Toolchain changes targeting `integration` run the compatibility matrix on Linux
-and Windows with default features, no default features, and cache only. The
-cache jobs also exercise opt-in in-flight request sharing.
+The compatibility matrix covers Rust 1.97.1, 1.98.1, 1.99.1, and 1.100.0 on
+Linux and Windows with default features, no default features, and cache only.
+Toolchain and compatibility workflow changes targeting `integration` run the
+matrix. The cache jobs also exercise opt-in in-flight request sharing.
 The locked Cranelift dependencies require at least Rust 1.94; the previous
 CI pin of 1.90 cannot build them.
 
