@@ -1820,7 +1820,8 @@ impl Interpreter {
         let instruction = self.p_text(cx, n.instruction);
         let demos = self.p_demos(cx, n.demos);
         let lm = self.p_model(&at, cx, n.model)?;
-        let format = output_format(&output_schema_options(&lm, def, &p.types, true));
+        let options = output_schema_options(&lm, def, &p.types, true);
+        let format = output_format(&options);
         let (prefix, mut suffix) = render_prompt(
             def,
             &p.types,
@@ -1924,8 +1925,6 @@ impl Interpreter {
             });
         }
 
-        let options = output_schema_options(&lm, def, &p.types, true);
-        let format = output_format(&options);
         let declarations =
             ChatAdapter
                 .signature_tools(def, &input)

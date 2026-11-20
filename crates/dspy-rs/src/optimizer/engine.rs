@@ -981,16 +981,23 @@ impl Engine {
             })
             .collect();
 
-        let best = self.matrix.best_by_mean();
-        let score_count: usize = evals.iter().map(|eval| eval.rollouts.len()).sum();
-        let score_sum: f64 = evals
-            .iter()
-            .flat_map(|eval| &eval.rollouts)
-            .map(|rollout| rollout.eval.score)
-            .sum();
+        let best = std::cell::OnceCell::new();
+        let best_candidate = || *best.get_or_init(|| self.matrix.best_by_mean());
+        let average_score = || {
+            let count: usize = evals.iter().map(|eval| eval.rollouts.len()).sum();
+            (count > 0).then(|| {
+                let score_sum: f64 = evals
+                    .iter()
+                    .flat_map(|eval| &eval.rollouts)
+                    .map(|rollout| rollout.eval.score)
+                    .sum();
+                score_sum / count as f64
+            })
+        };
         tracing::info!(fresh = pending.len(), cached = cache_hits,
-            best_candidate = ?best, best_score = ?best.and_then(|id| self.matrix.mean(id)),
-            average_score = ?(score_count > 0).then(|| score_sum / score_count as f64),
+            best_candidate = ?best_candidate(),
+            best_score = ?best_candidate().and_then(|id| self.matrix.mean(id)),
+            average_score = ?average_score(),
             completed = self.spend.metric_calls, requested = pending.len() + cache_hits,
             metric_calls = self.spend.metric_calls, lm_calls = self.spend.lm_calls,
             "optimizer batch completed");
