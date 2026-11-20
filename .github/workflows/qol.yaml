@@ -70,3 +70,4 @@ jobs:
           node-version: "24"
           package-manager-cache: false
       - run: node --check docs/toast-chat.js
+      - run: node --test docs-chat-worker/*.test.mjs
