@@ -13,7 +13,7 @@ triggers a `Predict` call over the execution transcript.
 
 ## Build and use
 
-Use CPython 3.14 with Rust 1.98.1, 1.99.1, or 1.100.0. PyO3 links against the
+Use CPython 3.14 with Rust 1.97.1, 1.98.1, 1.99.1, or 1.100.0. PyO3 links against the
 interpreter. Set `PYO3_PYTHON` if more than one interpreter is installed. On
 Windows, include the directory that contains the interpreter DLL on `PATH` when
 running the application or tests.

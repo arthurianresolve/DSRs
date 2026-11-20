@@ -2,7 +2,7 @@
 name = "dspy-py"
 version = "0.1.2"
 edition = "2024"
-rust-version = "1.98.1"
+rust-version = "1.97.1"
 description = "DSRs structured-output adapter for Python DSPy"
 license = "Apache-2.0"
 publish = false
