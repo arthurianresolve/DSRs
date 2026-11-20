@@ -1,0 +1,22 @@
+[package]
+name = "dspy-rlm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+description = "Python-backed reasoning module for DSRs"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+dspy-rs = { path = "../dspy-rs", default-features = false }
+futures = "0.3.31"
+pyo3 = { version = "0.28.3", features = ["auto-initialize"] }
+serde_json = { version = "1.0.143", features = ["preserve_order"] }
+tokio = { version = "1.46.1", features = ["macros", "rt", "sync"] }
+
+[dev-dependencies]
+rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev = "aee3b8bf6576ce41c9ac1dd82520752a65fa0127" }
+tokio = { version = "1.46.1", features = ["rt-multi-thread", "time"] }

@@ -22,6 +22,7 @@
 ## 📦 Installation
 
 For Python DSPy applications, see the [DSRs DSPy adapter](crates/dspy-py/README.md).
+For reasoning over large inputs in a Python session from Rust, see the [DSRs RLM](crates/dspy-rlm/README.md).
 
 Add DSRs and the dependencies used by the complete example to your `Cargo.toml`:
 
