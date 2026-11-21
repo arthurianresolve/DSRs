@@ -103,6 +103,42 @@ fn qa_program() -> Program {
     .unwrap()
 }
 
+#[tokio::test]
+async fn opening_replaces_cached_demos_when_the_overlay_changes() {
+    let (lm, _) = canned_lm(Vec::new()).await;
+    let interp = Interpreter::load(qa_program(), RuntimeEnv::new().bind_model("m", lm))
+        .await
+        .unwrap();
+    let program = interp.program();
+    let slot = program.param_id("assistant.demos").unwrap();
+    let mut overlay = Arc::new(ir::Overlay::new(program));
+    let input = obj(&[("question", json!("live question"))]);
+    for answer in ["first example", "second example"] {
+        Arc::make_mut(&mut overlay)
+            .set(
+                program,
+                slot,
+                ir::ParamValue::Demos {
+                    rows: vec![ir::DemoRow {
+                        input: obj(&[("question", json!("demo question"))]),
+                        output: obj(&[("answer", json!(answer))]),
+                    }],
+                },
+            )
+            .unwrap();
+        for question in ["live one", "live two"] {
+            let live = obj(&[("question", json!(question))]);
+            let chat = interp
+                .conversation_opening(&live, Some(Arc::clone(&overlay)))
+                .unwrap();
+            assert_eq!(chat.len(), 4);
+            assert!(chat.messages[2].content().contains(answer));
+            assert!(chat.messages[3].content().contains(question));
+        }
+    }
+    assert_eq!(interp.conversation_opening(&input, None).unwrap().len(), 2);
+}
+
 /// A tool the loop can dispatch, counting executions so caller-managed runs
 /// can assert it was never invoked.
 #[derive(Clone)]

@@ -232,8 +232,11 @@ impl DataLoader {
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
-        let rows = Self::load_json_rows(path, lines, limits)?;
-        let examples = Self::rows_to_typed::<E>(rows, &opts)?;
+        let examples = if lines && !is_url(path) {
+            Self::load_local_typed_jsonl(path, &opts)?
+        } else {
+            Self::rows_to_typed(Self::load_json_rows(path, lines, limits)?, &opts)?
+        };
         debug!(examples = examples.len(), "typed json examples loaded");
         Ok(examples)
     }
@@ -556,7 +559,7 @@ impl DataLoader {
     {
         let fields = row_struct_fields::<E>()?;
         rows.into_iter()
-            .map(|row| struct_from_row::<E>(&row, &fields, opts).map_err(anyhow::Error::from))
+            .map(|row| Ok(project_row(&row, &fields, opts)?.deserialize()?))
             .collect()
     }
 
@@ -666,7 +669,9 @@ impl DataLoader {
     ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
         let remote = is_url(path);
         if lines && !remote {
-            return Self::load_local_jsonl(path);
+            let mut rows = Vec::new();
+            Self::visit_local_jsonl(path, |row| rows.push(row))?;
+            return Ok(rows);
         }
         let data = Self::fetch_text(path, limits)?;
 
@@ -726,11 +731,44 @@ impl DataLoader {
         Ok(rows)
     }
 
-    fn load_local_jsonl(path: &str) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
+    fn load_local_typed_jsonl<E>(path: &str, opts: &TypedLoadOptions) -> Result<Vec<E>>
+    where
+        E: DeserializeOwned + for<'f> Facet<'f>,
+    {
+        let fields = row_struct_fields::<E>();
+        let mut projected = Vec::new();
+        let mut projection_error = None;
+        Self::visit_local_jsonl(path, |row| {
+            if let Ok(fields) = &fields
+                && projection_error.is_none()
+            {
+                match project_row(&row, fields, opts) {
+                    Ok(row) => projected.push(row),
+                    Err(err) => projection_error = Some(err),
+                }
+            }
+        })?;
+        // User deserializers only run after the file is valid. An earlier
+        // deserialization error also precedes a later row's projection error.
+        fields?;
+        let examples = projected
+            .into_iter()
+            .map(ProjectedRow::deserialize)
+            .collect::<std::result::Result<_, _>>()?;
+        if let Some(err) = projection_error {
+            return Err(err.into());
+        }
+        Ok(examples)
+    }
+
+    fn visit_local_jsonl(
+        path: &str,
+        mut visit: impl FnMut(RowRecord),
+    ) -> std::result::Result<(), DataLoadError> {
         let file = fs::File::open(path).map_err(|err| DataLoadError::Io(err.into()))?;
         let mut reader = BufReader::with_capacity(64 * 1024, file);
         let mut line = String::new();
-        let mut rows = Ok(Vec::new());
+        let mut parsed = Ok(0usize);
         let mut row_index = 0;
         while reader
             .read_line(&mut line)
@@ -738,23 +776,26 @@ impl DataLoader {
             != 0
         {
             row_index += 1;
-            if let Ok(parsed_rows) = &mut rows
+            if let Ok(count) = &mut parsed
                 && !line.trim().is_empty()
             {
                 let text = line.strip_suffix('\n').map_or(line.as_str(), |text| {
                     text.strip_suffix('\r').unwrap_or(text)
                 });
                 match row_from_jsonl_line(text, row_index) {
-                    Ok(row) => parsed_rows.push(row),
-                    Err(error) => rows = Err(error),
+                    Ok(row) => {
+                        visit(row);
+                        *count += 1;
+                    }
+                    Err(error) => parsed = Err(error),
                 }
             }
             // Continue validating input UTF-8 so read errors retain precedence.
             line.clear();
         }
-        let rows = rows?;
-        debug!(rows = rows.len(), "jsonl rows loaded");
-        Ok(rows)
+        let rows = parsed?;
+        debug!(rows, "jsonl rows loaded");
+        Ok(())
     }
 
     #[cfg(feature = "data")]
@@ -981,11 +1022,28 @@ fn row_struct_fields<E: for<'f> Facet<'f>>()
         .collect())
 }
 
-fn struct_from_row<E: DeserializeOwned>(
+struct ProjectedRow {
+    index: usize,
+    fields: Map<String, Value>,
+}
+
+impl ProjectedRow {
+    fn deserialize<E: DeserializeOwned>(self) -> std::result::Result<E, DataLoadError> {
+        serde_json::from_value(Value::Object(self.fields)).map_err(|err| {
+            DataLoadError::TypeMismatch {
+                row: self.index,
+                field: "row".to_string(),
+                message: err.to_string(),
+            }
+        })
+    }
+}
+
+fn project_row(
     row: &RowRecord,
     fields: &[(&'static str, FieldType)],
     opts: &TypedLoadOptions,
-) -> std::result::Result<E, DataLoadError> {
+) -> std::result::Result<ProjectedRow, DataLoadError> {
     let mut used_source_fields = HashSet::new();
     let mut map = Map::new();
 
@@ -994,7 +1052,9 @@ fn struct_from_row<E: DeserializeOwned>(
         match row.values.get(source_field) {
             Some(value) => {
                 map.insert(name.to_string(), coerce_row_value(value, type_ir));
-                used_source_fields.insert(source_field.to_string());
+                if opts.unknown_fields == UnknownFieldPolicy::Error {
+                    used_source_fields.insert(source_field);
+                }
             }
             // Missing optional fields deserialize as `None`; anything else is an error.
             None if type_ir.is_optional() => {}
@@ -1009,7 +1069,7 @@ fn struct_from_row<E: DeserializeOwned>(
 
     if opts.unknown_fields == UnknownFieldPolicy::Error {
         for key in row.values.keys() {
-            if !used_source_fields.contains(key) {
+            if !used_source_fields.contains(key.as_str()) {
                 return Err(DataLoadError::UnknownField {
                     row: row.row_index,
                     field: key.clone(),
@@ -1018,10 +1078,9 @@ fn struct_from_row<E: DeserializeOwned>(
         }
     }
 
-    serde_json::from_value::<E>(Value::Object(map)).map_err(|err| DataLoadError::TypeMismatch {
-        row: row.row_index,
-        field: "row".to_string(),
-        message: err.to_string(),
+    Ok(ProjectedRow {
+        index: row.row_index,
+        fields: map,
     })
 }
 

@@ -53,8 +53,23 @@ impl HistoryRecord {
             }
         }
     }
+    /// The invocation ID used to join prediction metadata to this record.
+    pub fn id(&self) -> String {
+        self.entry
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .id
+            .clone()
+    }
+
     pub fn snapshot(&self) -> HistoryEntry {
-        self.entry.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        let mut entry = self.entry.lock().unwrap_or_else(|p| p.into_inner());
+        // Even an empty chat renders to "[]". Materialize once, on inspection
+        // or persistence, from the messages captured at invocation time.
+        if entry.prompt.is_empty() {
+            entry.prompt = Chat::messages_json(&entry.messages).to_string();
+        }
+        entry.clone()
     }
 
     pub(crate) fn parsed<T, E: std::fmt::Display>(&self, result: &Result<(JsonMap, T), E>) {
@@ -211,7 +226,7 @@ impl HistoryCall {
                 model: config.model.clone(),
                 config: crate::trace::ModelEntry::from_config(config).config,
                 messages: chat.messages.clone(),
-                prompt: chat.to_json().to_string(),
+                prompt: String::new(),
                 response: None,
                 raw_output: None,
                 output: None,

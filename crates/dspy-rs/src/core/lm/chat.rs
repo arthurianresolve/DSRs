@@ -434,12 +434,11 @@ impl Chat {
     }
 
     pub fn to_json(&self) -> Value {
-        let messages = self
-            .messages
-            .iter()
-            .map(|message| message.to_json())
-            .collect::<Vec<Value>>();
-        json!(messages)
+        Self::messages_json(&self.messages)
+    }
+
+    pub(crate) fn messages_json(messages: &[Message]) -> Value {
+        Value::Array(messages.iter().map(Message::to_json).collect())
     }
 
     // -- Rig interop ---------------------------------------------------------

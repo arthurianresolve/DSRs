@@ -514,32 +514,30 @@ impl<S: Signature> Predict<S> {
             None => Vec::new(),
         };
 
-        let mut merged: Option<Overlay> = match (instance, ambient) {
-            (None, None) => None,
-            (Some(instance), None) => Some((*instance).clone()),
-            (None, Some(ambient)) => Some((*ambient).clone()),
-            (Some(instance), Some(ambient)) => {
-                let mut merged = (*instance).clone();
+        let mut merged = match (instance, ambient) {
+            (overlay, None) | (None, overlay) => overlay,
+            (Some(mut instance), Some(ambient)) => {
+                let merged = Arc::make_mut(&mut instance);
                 for (id, value) in ambient.entries() {
                     merged.set(program, id, value.clone()).map_err(|err| {
                         internal_error(format!("failed to compose ambient overlay: {err}"))
                     })?;
                 }
-                Some(merged)
+                Some(instance)
             }
         };
 
         if !params_values.is_empty() {
-            let mut overlay = merged.take().unwrap_or_else(|| Overlay::new(program));
+            let overlay =
+                Arc::make_mut(merged.get_or_insert_with(|| Arc::new(Overlay::new(program))));
             for (id, value) in params_values {
                 overlay.set(program, id, value).map_err(|err| {
                     internal_error(format!("failed to compose ambient params: {err}"))
                 })?;
             }
-            merged = Some(overlay);
         }
 
-        Ok(merged.map(Arc::new))
+        Ok(merged)
     }
 
     /// Resolves the LM: explicit call > instance > scoped default > global.

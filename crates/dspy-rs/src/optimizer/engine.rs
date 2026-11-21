@@ -473,6 +473,17 @@ impl ScoreMatrix {
     /// Pareto view restricted to a subset of example columns (e.g. GEPA's
     /// validation columns when train and validation examples share a matrix).
     pub fn pareto_over(&self, columns: &[usize]) -> ParetoView {
+        // Large validation slices benefit from reading each row contiguously.
+        const ROW_ORDER_MIN_CELLS: usize = 64 * 1024;
+        if self.rows.len().saturating_mul(columns.len()) >= ROW_ORDER_MIN_CELLS
+            && let Some(&start) = columns.first()
+            && columns
+                .iter()
+                .enumerate()
+                .all(|(i, &col)| start.checked_add(i) == Some(col))
+        {
+            return self.pareto_contiguous(start, columns.len());
+        }
         let best: Vec<Option<f64>> = columns
             .iter()
             .map(|&col| {
@@ -493,6 +504,40 @@ impl ScoreMatrix {
                         matches!(
                             (row.get(**col).copied().flatten(), best),
                             (Some(score), Some(best)) if score + SCORE_EPS >= *best
+                        )
+                    })
+                    .count()
+            })
+            .collect();
+        ParetoView { best, wins }
+    }
+
+    fn pareto_contiguous(&self, start: usize, len: usize) -> ParetoView {
+        let mut best: Vec<Option<f64>> = vec![None; len];
+        for row in &self.rows {
+            for (best, score) in best.iter_mut().zip(row.get(start..).unwrap_or_default()) {
+                // Match max_by above, including its choice of the later tie or NaN.
+                if let Some(score) = *score
+                    && best.is_none_or(|old| {
+                        old.partial_cmp(&score) != Some(std::cmp::Ordering::Greater)
+                    })
+                {
+                    *best = Some(score);
+                }
+            }
+        }
+        let wins = self
+            .rows
+            .iter()
+            .map(|row| {
+                row.get(start..)
+                    .unwrap_or_default()
+                    .iter()
+                    .zip(&best)
+                    .filter(|(score, best)| {
+                        matches!(
+                            (score, best),
+                            (Some(score), Some(best)) if *score + SCORE_EPS >= *best
                         )
                     })
                     .count()

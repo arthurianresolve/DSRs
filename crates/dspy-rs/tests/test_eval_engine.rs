@@ -17,6 +17,33 @@ use dspy_rs::{
 use rig::completion::{AssistantContent, Usage};
 use rig::message::Text;
 
+#[test]
+fn contiguous_pareto_matches_column_order_on_sparse_rows_and_ties() {
+    let mut matrix = dspy_rs::optimizer::ScoreMatrix::new(4100);
+    matrix.ensure_rows(64);
+    matrix.record(0, 3, 100.0); // Outside the selected range.
+    matrix.record(0, 7, 0.5);
+    matrix.record(1, 7, 0.5 + 1e-8);
+    matrix.record(1, 12, f64::NAN);
+    matrix.record(2, 12, 0.75);
+    matrix.record(63, 4099, -0.0);
+    let columns: Vec<_> = (7..4103).collect();
+    let forward = matrix.pareto_over(&columns);
+    let reversed = matrix.pareto_over(&columns.into_iter().rev().collect::<Vec<_>>());
+    let bits = |score: &Option<f64>| score.map(f64::to_bits);
+    assert!(
+        forward
+            .best_scores()
+            .iter()
+            .map(bits)
+            .eq(reversed.best_scores().iter().rev().map(bits))
+    );
+    for row in 0..matrix.candidates() {
+        assert_eq!(forward.wins(row), reversed.wins(row));
+    }
+    assert_eq!(forward.frontier(), vec![0, 1, 2, 63]);
+}
+
 #[derive(Signature, Clone, Debug)]
 /// Answer the prompt.
 struct EngSig {
