@@ -474,7 +474,7 @@ impl ScoreMatrix {
     /// validation columns when train and validation examples share a matrix).
     pub fn pareto_over(&self, columns: &[usize]) -> ParetoView {
         // Large validation slices benefit from reading each row contiguously.
-        const ROW_ORDER_MIN_CELLS: usize = 256 * 1024;
+        const ROW_ORDER_MIN_CELLS: usize = 64 * 1024;
         if self.rows.len().saturating_mul(columns.len()) >= ROW_ORDER_MIN_CELLS
             && let Some(&start) = columns.first()
             && columns
@@ -535,8 +535,10 @@ impl ScoreMatrix {
                     .iter()
                     .zip(&best)
                     .filter(|(score, best)| {
-                        matches!((score, best),
-                    (Some(score), Some(best)) if *score + SCORE_EPS >= *best)
+                        matches!(
+                            (score, best),
+                            (Some(score), Some(best)) if *score + SCORE_EPS >= *best
+                        )
                     })
                     .count()
             })
