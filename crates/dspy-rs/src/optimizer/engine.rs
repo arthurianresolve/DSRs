@@ -648,8 +648,22 @@ pub struct RolloutOutcome {
     /// Index into the target's example set.
     pub example: usize,
     pub eval: Eval,
-    /// The captured execution trace; `None` when served from the cache.
+    /// Public evaluations attach the captured trace to the first occurrence of a fresh rollout.
     pub trace: Option<Trace>,
+}
+
+struct FreshRollout {
+    candidate: usize,
+    example: usize,
+    eval: Eval,
+    trace: Option<Trace>,
+}
+
+struct FreshBatch {
+    rollouts: Vec<FreshRollout>,
+    peak_candidates: usize,
+    lm_spans: usize,
+    tokens: LmUsage,
 }
 
 /// An uncached sampled rollout with its minibatch position and sample ordinal.
@@ -906,13 +920,33 @@ impl Engine {
     /// occurrence of a fresh pair carries its trace.
     /// If the uncached portion doesn't fit the remaining budget the
     /// engine runs nothing and returns [`BatchEvalOutcome::BudgetExhausted`].
-    #[tracing::instrument(name = "dsrs.optimizer.batch", level = "info", skip_all,
-        fields(candidates = candidates.len(), examples = target.num_examples()))]
     pub async fn evaluate_many(
         &mut self,
         target: &OptimizeTarget<'_>,
         candidates: &[usize],
         subset: Option<&[usize]>,
+    ) -> Result<BatchEvalOutcome> {
+        self.evaluate_batch(target, candidates, subset, true).await
+    }
+
+    /// Evaluates a scoring batch and releases each trace after metric and usage processing.
+    pub(super) async fn evaluate_scores_many(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidates: &[usize],
+        subset: Option<&[usize]>,
+    ) -> Result<BatchEvalOutcome> {
+        self.evaluate_batch(target, candidates, subset, false).await
+    }
+
+    #[tracing::instrument(name = "dsrs.optimizer.batch", level = "info", skip_all,
+        fields(candidates = candidates.len(), examples = target.num_examples()))]
+    async fn evaluate_batch(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidates: &[usize],
+        subset: Option<&[usize]>,
+        retain_traces: bool,
     ) -> Result<BatchEvalOutcome> {
         for &candidate in candidates {
             if candidate >= self.candidates.len() {
@@ -993,27 +1027,31 @@ impl Engine {
             bound.insert(candidate, target.bind(&self.candidates[candidate].1)?);
         }
 
-        let (fresh, batch_peak) = self.run_rollouts(target, &pending, &bound).await?;
-        self.peak_candidates_in_flight = self.peak_candidates_in_flight.max(batch_peak);
+        let fresh = self
+            .run_rollouts(target, &pending, &bound, retain_traces)
+            .await?;
+        self.peak_candidates_in_flight = self.peak_candidates_in_flight.max(fresh.peak_candidates);
 
         // Accounting: fresh rollouts consume budget, cached hits are free.
-        self.spend.metric_calls += fresh.len();
-        self.spend.lm_calls += fresh.len();
+        self.spend.metric_calls += fresh.rollouts.len();
+        self.spend.lm_calls += fresh.rollouts.len();
         let cache_hits = cached.len();
         self.spend.cache_hits += cache_hits;
-        for (_, _, _, trace) in &fresh {
-            self.spend.lm_spans += trace.spans.len();
-            for span in &trace.spans {
-                self.spend.tokens = self.spend.tokens + span.usage;
-            }
-        }
+        self.spend.lm_spans += fresh.lm_spans;
+        self.spend.tokens = self.spend.tokens + fresh.tokens;
 
         // Bookkeeping: cache inserts + matrix records.
         for (&(candidate, idx), eval) in &cached {
             self.matrix.record(candidate, idx, eval.score);
         }
-        let mut fresh_by_key = HashMap::with_capacity(fresh.len());
-        for (candidate, idx, eval, trace) in fresh {
+        let mut fresh_by_key = HashMap::with_capacity(fresh.rollouts.len());
+        for FreshRollout {
+            candidate,
+            example: idx,
+            eval,
+            trace,
+        } in fresh.rollouts
+        {
             self.cache.insert(
                 baseline,
                 self.candidates[candidate].0,
@@ -1037,7 +1075,7 @@ impl Engine {
                             if repeats {
                                 cached.insert(key, eval.clone());
                             }
-                            (eval, Some(trace))
+                            (eval, trace)
                         } else {
                             let eval = if repeats {
                                 cached.get(&key).cloned()
@@ -1086,7 +1124,29 @@ impl Engine {
         candidate: usize,
         subset: Option<&[usize]>,
     ) -> Result<EvalOutcome> {
-        match self.evaluate_many(target, &[candidate], subset).await? {
+        self.evaluate_one(target, candidate, subset, true).await
+    }
+
+    pub(super) async fn evaluate_scores(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidate: usize,
+        subset: Option<&[usize]>,
+    ) -> Result<EvalOutcome> {
+        self.evaluate_one(target, candidate, subset, false).await
+    }
+
+    async fn evaluate_one(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidate: usize,
+        subset: Option<&[usize]>,
+        retain_traces: bool,
+    ) -> Result<EvalOutcome> {
+        match self
+            .evaluate_batch(target, &[candidate], subset, retain_traces)
+            .await?
+        {
             BatchEvalOutcome::Complete(mut evals) => Ok(EvalOutcome::Complete(evals.remove(0))),
             BatchEvalOutcome::BudgetExhausted { needed } => {
                 Ok(EvalOutcome::BudgetExhausted { needed })
@@ -1324,17 +1384,20 @@ impl Engine {
 
     /// The one shared fan-out: every pending `(candidate, example)` pair —
     /// across all candidates, in both lanes — in a single `buffer_unordered`
-    /// stream. Returns the fresh rollouts and the batch's distinct-candidate
-    /// concurrency high-water mark.
+    /// stream. Extracts usage as rollouts finish so scoring batches can
+    /// release each trace before the next result is collected.
     async fn run_rollouts(
         &self,
         target: &OptimizeTarget<'_>,
         pending: &[(usize, usize)],
         bound: &HashMap<usize, BoundCandidate>,
-    ) -> Result<(Vec<(usize, usize, Eval, Trace)>, usize)> {
+        retain_traces: bool,
+    ) -> Result<FreshBatch> {
         let gauge = Gauge::default();
+        let mut lm_spans = 0;
+        let mut tokens = LmUsage::default();
 
-        let fresh: Vec<(usize, usize, Eval, Trace)> = stream::iter(pending.iter().enumerate().map(
+        let rollouts = stream::iter(pending.iter().enumerate().map(
             |(rollout, &(candidate, idx))| {
                 let bound = bound[&candidate].clone();
                 let candidate_hash = self.candidates[candidate].0;
@@ -1375,10 +1438,27 @@ impl Engine {
             },
         ))
         .buffer_unordered(self.config.concurrency.max(1))
+        .map_ok(|(candidate, example, eval, trace)| {
+            lm_spans += trace.spans.len();
+            for span in &trace.spans {
+                tokens = tokens + span.usage;
+            }
+            FreshRollout {
+                candidate,
+                example,
+                eval,
+                trace: retain_traces.then_some(trace),
+            }
+        })
         .try_collect()
         .await?;
 
-        Ok((fresh, gauge.peak()))
+        Ok(FreshBatch {
+            rollouts,
+            peak_candidates: gauge.peak(),
+            lm_spans,
+            tokens,
+        })
     }
 }
 
@@ -1432,6 +1512,119 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), serde_json::Value::String(v.to_string())))
             .collect()
+    }
+
+    #[tokio::test]
+    async fn scoring_batches_keep_order_cache_and_usage_after_releasing_traces() -> Result<()> {
+        use crate::core::lm::tests::test_lm_with_model;
+        use crate::ir::{
+            self, DemoRow, FieldType, Interpreter, ProgramBuilder, RuntimeEnv, SignatureDef,
+        };
+        use crate::{LMConfig, ProgramMetric, TestCompletionModel};
+        use rig::completion::{AssistantContent, Usage};
+        use std::sync::Arc;
+
+        struct ExactMatch;
+        impl ProgramMetric for ExactMatch {
+            async fn evaluate(
+                &self,
+                example: &DemoRow,
+                output: &JsonMap,
+                trace: Option<&Trace>,
+            ) -> Result<Eval> {
+                let trace = trace.expect("metrics need the original trace");
+                assert_eq!(trace.meta.input.as_ref(), Some(&example.input));
+                assert_eq!(trace.spans.len(), 1);
+                Ok(Eval::score(if output == &example.output {
+                    1.0
+                } else {
+                    0.0
+                }))
+            }
+        }
+
+        let answer = AssistantContent::text("[[ ## answer ## ]]\nyes\n\n[[ ## completed ## ]]");
+        let provider = TestCompletionModel::new([answer.clone(), answer]);
+        provider.set_usage(Usage {
+            input_tokens: 3,
+            output_tokens: 2,
+            total_tokens: 5,
+            ..Usage::new()
+        });
+        let lm = Arc::new(test_lm_with_model(provider.clone()));
+        let mut builder = ProgramBuilder::new("score_only");
+        let model = builder.model(
+            "m",
+            LMConfig {
+                model: lm.config.model.clone(),
+                ..Default::default()
+            },
+        );
+        let sig = builder.sig(
+            SignatureDef::build("QA")
+                .input("question", FieldType::String)
+                .output("answer", FieldType::String)
+                .finish()?,
+        );
+        let predict = ir::predict("answerer", sig)
+            .model(model)
+            .bind("question", ir::input("question"));
+        let program = builder.main(
+            sig,
+            ir::seq([predict]).out("answer", ir::out("answerer", "answer")),
+        )?;
+        let interp = Interpreter::load(program, RuntimeEnv::new().bind_model("m", lm)).await?;
+        let rows = [
+            DemoRow {
+                input: demo(&[("question", "one")]),
+                output: demo(&[("answer", "yes")]),
+            },
+            DemoRow {
+                input: demo(&[("question", "two")]),
+                output: demo(&[("answer", "no")]),
+            },
+        ];
+        let target = OptimizeTarget::program(&interp, &rows, &ExactMatch);
+        let mut engine = Engine::new(EngineConfig {
+            budget: Budget {
+                max_metric_calls: Some(2),
+                ..Budget::default()
+            },
+            ..EngineConfig::default()
+        });
+        let base = engine.register(Candidate::new());
+        let evals = engine
+            .evaluate_scores_many(&target, &[base, base], Some(&[1, 0, 1]))
+            .await?
+            .completed()
+            .expect("two distinct rollouts fit the budget");
+        assert_eq!(evals.len(), 2);
+        for evaluation in evals {
+            assert_eq!(evaluation.candidate, base);
+            assert_eq!(evaluation.scores(), [0.0, 1.0, 0.0]);
+            assert!(evaluation.rollouts.iter().all(|r| r.trace.is_none()));
+        }
+        assert_eq!(engine.matrix().row(base), &[Some(1.0), Some(0.0)]);
+        assert_eq!(engine.spend().metric_calls, 2);
+        assert_eq!(engine.spend().lm_calls, 2);
+        assert_eq!(engine.spend().lm_spans, 2);
+        assert_eq!(engine.spend().tokens.total_tokens, 10);
+
+        let cached = engine
+            .evaluate(&target, base, None)
+            .await?
+            .completed()
+            .unwrap();
+        assert_eq!(cached.scores(), [1.0, 0.0]);
+        assert!(cached.rollouts.iter().all(|r| r.trace.is_none()));
+        assert_eq!(engine.spend().cache_hits, 2);
+        let other = engine.register(Candidate::with_instruction("answerer", "different"));
+        assert!(matches!(
+            engine.evaluate_scores(&target, other, None).await?,
+            EvalOutcome::BudgetExhausted { needed: 2 }
+        ));
+        assert_eq!(provider.call_count(), 2);
+        Ok(())
     }
 
     #[test]

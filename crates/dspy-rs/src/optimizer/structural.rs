@@ -26,7 +26,7 @@ use crate::ir::interp::{Interpreter, RuntimeEnv};
 use crate::ir::params::{DemoRow, Overlay};
 use crate::optimizer::OptimizerCommon;
 use crate::optimizer::engine::{Engine, EngineConfig, EvalOutcome, GateOutcome, Spend};
-use crate::optimizer::target::{OptimizeTarget, ProgramMetric};
+use crate::optimizer::target::{OptimizeTarget, ProgramExamples, ProgramMetric};
 use crate::trace::Trace;
 use crate::utils::truncate;
 use crate::{Predict, Signature};
@@ -559,13 +559,14 @@ impl Structural {
 
         let num_examples = examples.len();
         let all_indices: Vec<usize> = (0..num_examples).collect();
+        let examples = ProgramExamples::new(examples);
 
         // Baseline: the incumbent (+ overlay) over the full example set,
         // traced. Seeds the rollout store and the cache — every later parent
         // minibatch read is served for free.
         let mut incumbent_row = engine.register_overlay(incumbent.clone());
         let baseline_eval = {
-            let target = OptimizeTarget::program(interp, examples, metric);
+            let target = OptimizeTarget::program_with_examples(interp, examples.borrowed(), metric);
             match engine.evaluate(&target, incumbent_row, None).await? {
                 EvalOutcome::Complete(eval) => eval,
                 EvalOutcome::BudgetExhausted { needed } => {
@@ -620,7 +621,8 @@ impl Structural {
             // Cache-served (the incumbent always has full coverage).
             let threshold = {
                 let cur = owned.as_ref().unwrap_or(interp);
-                let target = OptimizeTarget::program(cur, examples, metric);
+                let target =
+                    OptimizeTarget::program_with_examples(cur, examples.borrowed(), metric);
                 match engine
                     .evaluate(&target, incumbent_row, Some(&minibatch))
                     .await?
@@ -688,7 +690,11 @@ impl Structural {
             // 5. The gate: child vs parent on the shared minibatch; only a
             // strict win promotes to the full set.
             let gate = {
-                let child_target = OptimizeTarget::program(&child_interp, examples, metric);
+                let child_target = OptimizeTarget::program_with_examples(
+                    &child_interp,
+                    examples.borrowed(),
+                    metric,
+                );
                 engine
                     .evaluate_gated(&child_target, child_row, &minibatch, threshold)
                     .await?

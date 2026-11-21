@@ -202,7 +202,9 @@ impl Optimizer for COPRO {
                 ));
             }
         };
-        let baseline_validation = match engine.evaluate(target, baseline, Some(&validation)).await?
+        let baseline_validation = match engine
+            .evaluate_scores(target, baseline, Some(&validation))
+            .await?
         {
             EvalOutcome::Complete(eval) => eval.mean(),
             EvalOutcome::BudgetExhausted { needed } => {
@@ -269,15 +271,17 @@ impl Optimizer for COPRO {
                             engine.register(candidate)
                         })
                         .collect::<Vec<_>>();
-                    let evaluations =
-                        match engine.evaluate_many(target, &rows, Some(&train)).await? {
-                            BatchEvalOutcome::Complete(evals) => evals,
-                            BatchEvalOutcome::BudgetExhausted { needed } => {
-                                return Err(anyhow!(
-                                    "budget exhausted ({needed} rollouts needed) during COPRO round"
-                                ));
-                            }
-                        };
+                    let evaluations = match engine
+                        .evaluate_scores_many(target, &rows, Some(&train))
+                        .await?
+                    {
+                        BatchEvalOutcome::Complete(evals) => evals,
+                        BatchEvalOutcome::BudgetExhausted { needed } => {
+                            return Err(anyhow!(
+                                "budget exhausted ({needed} rollouts needed) during COPRO round"
+                            ));
+                        }
+                    };
                     for (instruction, eval) in batch.iter().zip(evaluations) {
                         let score = eval.mean();
                         history
@@ -296,7 +300,10 @@ impl Optimizer for COPRO {
                 current_instructions.insert(leaf.name.clone(), best_instruction);
             }
             let row = engine.register(current.clone());
-            let validation_score = match engine.evaluate(target, row, Some(&validation)).await? {
+            let validation_score = match engine
+                .evaluate_scores(target, row, Some(&validation))
+                .await?
+            {
                 EvalOutcome::Complete(eval) => eval.mean(),
                 EvalOutcome::BudgetExhausted { needed } => {
                     return Err(anyhow!(

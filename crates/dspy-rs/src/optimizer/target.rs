@@ -23,6 +23,7 @@
 //! strategies build candidates from — and computes the run's baseline
 //! identity exactly once.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -289,22 +290,43 @@ where
 // Program lane
 // ---------------------------------------------------------------------------
 
+/// An immutable set of rows paired with its content fingerprints.
+pub(super) struct ProgramExamples<'a> {
+    rows: &'a [DemoRow],
+    uids: Cow<'a, [u64]>,
+}
+
+impl<'a> ProgramExamples<'a> {
+    pub(super) fn new(rows: &'a [DemoRow]) -> Self {
+        Self {
+            rows,
+            uids: Cow::Owned(rows.iter().map(canonical_hash).collect()),
+        }
+    }
+
+    pub(super) fn borrowed(&self) -> ProgramExamples<'_> {
+        ProgramExamples {
+            rows: self.rows,
+            uids: Cow::Borrowed(&self.uids),
+        }
+    }
+}
+
 struct ProgramLane<'a, MT> {
     interp: &'a Interpreter,
-    examples: &'a [DemoRow],
+    examples: ProgramExamples<'a>,
     metric: &'a MT,
-    uids: Vec<u64>,
     program_tag: String,
     winner: Option<Arc<Overlay>>,
 }
 
 impl<'a, MT: ProgramMetric> Lane for ProgramLane<'a, MT> {
     fn num_examples(&self) -> usize {
-        self.examples.len()
+        self.examples.rows.len()
     }
 
     fn example_uid(&self, idx: usize) -> u64 {
-        self.uids[idx]
+        self.examples.uids[idx]
     }
 
     fn baseline(&self) -> u64 {
@@ -333,7 +355,7 @@ impl<'a, MT: ProgramMetric> Lane for ProgramLane<'a, MT> {
             let BoundCandidate::Overlay(overlay) = bound else {
                 return Err(anyhow!("program lane received a non-overlay candidate"));
             };
-            let example = &self.examples[idx];
+            let example = &self.examples.rows[idx];
             let meta = TraceMeta {
                 candidate_hash: Some(candidate_hash),
                 input: Some(example.input.clone()),
@@ -372,7 +394,7 @@ impl<'a, MT: ProgramMetric> Lane for ProgramLane<'a, MT> {
             let BoundCandidate::Overlay(overlay) = bound else {
                 return Err(anyhow!("program lane received a non-overlay candidate"));
             };
-            let example = &self.examples[idx];
+            let example = &self.examples.rows[idx];
             let output = self
                 .interp
                 .run(example.input.clone(), Some(overlay), RunBudget::unlimited())
@@ -543,15 +565,24 @@ impl<'a> OptimizeTarget<'a> {
     where
         MT: ProgramMetric,
     {
+        Self::program_with_examples(interp, ProgramExamples::new(examples), metric)
+    }
+
+    pub(super) fn program_with_examples<MT>(
+        interp: &'a Interpreter,
+        examples: ProgramExamples<'a>,
+        metric: &'a MT,
+    ) -> Self
+    where
+        MT: ProgramMetric,
+    {
         let leaves = program_leaves(interp);
-        let uids = examples.iter().map(canonical_hash).collect();
         let program_tag = format!("{:016x}", interp.program().meta.program_hash);
         Self {
             lane: Box::new(ProgramLane {
                 interp,
                 examples,
                 metric,
-                uids,
                 program_tag,
                 winner: None,
             }),
