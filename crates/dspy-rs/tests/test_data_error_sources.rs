@@ -134,3 +134,40 @@ fn jsonl_read_errors_take_precedence_over_parse_errors() {
         .unwrap();
     assert_eq!(io_error.kind(), std::io::ErrorKind::InvalidData);
 }
+
+#[test]
+fn typed_jsonl_validates_the_file_before_deserializing_rows_in_order() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    #[derive(Debug, serde::Deserialize, facet::Facet)]
+    struct Counted {
+        #[serde(deserialize_with = "count")]
+        value: i64,
+    }
+    fn count<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+        CALLS.fetch_add(1, Ordering::Relaxed);
+        serde::Deserialize::deserialize(d)
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rows.jsonl");
+    let load = || {
+        DataLoader::load_json::<Counted>(path.to_str().unwrap(), true, TypedLoadOptions::default())
+    };
+    std::fs::write(&path, b"{\"value\":1}\nnot json").unwrap();
+    assert!(matches!(
+        load().unwrap_err().downcast_ref::<DataLoadError>(),
+        Some(DataLoadError::Json(_))
+    ));
+    assert_eq!(CALLS.load(Ordering::Relaxed), 0);
+
+    std::fs::write(&path, b"\n{\"value\":\"bad\"}\n{}").unwrap();
+    assert!(matches!(
+        load().unwrap_err().downcast_ref::<DataLoadError>(),
+        Some(DataLoadError::TypeMismatch { row: 2, .. })
+    ));
+    assert_eq!(CALLS.load(Ordering::Relaxed), 1);
+    std::fs::write(&path, b"{\"value\":7,\"unused\":\"extra\"}").unwrap();
+    assert_eq!(load().unwrap()[0].value, 7);
+}

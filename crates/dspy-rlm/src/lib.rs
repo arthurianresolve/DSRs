@@ -286,7 +286,7 @@ async fn run_cell(
 fn record_call(metadata: &mut CallMetadata, response: &mut LMResponse) {
     metadata.lm_usage = metadata.lm_usage + response.usage;
     if let Some(history) = response.history.take() {
-        metadata.call_ids.push(history.snapshot().id);
+        metadata.call_ids.push(history.id());
     }
     metadata.tool_calls.append(&mut response.tool_calls);
     metadata

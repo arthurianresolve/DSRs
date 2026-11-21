@@ -58,7 +58,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::task_local;
 
-use crate::trace::span::{ModelEntry, Span, SpanId, Trace, request_hash};
+use crate::trace::span::{CompId, ModelEntry, Span, SpanId, Trace, request_hash};
 use crate::{LMConfig, Message};
 
 task_local! {
@@ -150,6 +150,7 @@ pub(crate) struct ReplaySession(Arc<Mutex<ReplayInner>>);
 
 struct ReplayInner {
     trace: Trace,
+    span_index: Option<HashMap<(CompId, u32), usize>>,
     mode: ReplayMode,
     /// Per-component next-seq cursors, keyed by component name.
     cursors: HashMap<String, u32>,
@@ -170,8 +171,18 @@ pub(crate) enum ReplayDirective {
 
 impl ReplaySession {
     fn new(trace: Trace, mode: ReplayMode) -> Self {
+        // Small fixtures are cheaper to scan than to index.
+        const INDEX_MIN_SPANS: usize = 1024;
+        let span_index = (trace.spans.len() >= INDEX_MIN_SPANS).then(|| {
+            let mut index = HashMap::with_capacity(trace.spans.len());
+            for (position, span) in trace.spans.iter().enumerate() {
+                index.entry((span.component, span.seq)).or_insert(position);
+            }
+            index
+        });
         Self(Arc::new(Mutex::new(ReplayInner {
             trace,
+            span_index,
             mode,
             cursors: HashMap::new(),
             diverged: false,
@@ -209,14 +220,18 @@ impl ReplaySession {
         }
 
         let seq = inner.cursors.get(component).copied().unwrap_or(0);
-        let recorded = inner.trace.component_id(component).and_then(|id| {
-            inner
-                .trace
-                .spans
-                .iter()
-                .find(|span| span.component == id && span.seq == seq)
-                .cloned()
-        });
+        let recorded = inner
+            .trace
+            .component_id(component)
+            .and_then(|id| match &inner.span_index {
+                Some(index) => index.get(&(id, seq)).map(|&i| &inner.trace.spans[i]),
+                None => inner
+                    .trace
+                    .spans
+                    .iter()
+                    .find(|span| span.component == id && span.seq == seq),
+            })
+            .cloned();
         let span = match recorded {
             Some(span) => span,
             None => {

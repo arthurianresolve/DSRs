@@ -16,7 +16,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Weak};
 use std::time::Instant;
 
 use cranelift_entity::SecondaryMap;
@@ -507,6 +507,8 @@ pub struct Interpreter {
     /// One last-used instruction/system pair per signature. Dynamic candidates
     /// replace entries rather than growing an unbounded process-wide cache.
     system_prompts: RwLock<HashMap<SigId, (String, OutputFormat, String)>>,
+    /// At most one rendered demo set per leaf. The overlay is never kept alive by the cache.
+    demo_messages: RwLock<HashMap<NodeId, CachedDemos>>,
     models: SecondaryMap<ModelId, Option<Arc<LM>>>,
     tool_exec: SecondaryMap<ToolId, Option<ToolExec>>,
     /// Extern-hole bindings by leaf name, verified complete at load.
@@ -689,6 +691,7 @@ impl Interpreter {
         Ok(Self {
             program,
             system_prompts: RwLock::new(HashMap::new()),
+            demo_messages: RwLock::new(HashMap::new()),
             models,
             tool_exec,
             host_holes,
@@ -1211,7 +1214,7 @@ impl Interpreter {
                 let leaf = LeafOutcome {
                     name: at.to_string(),
                     raw_response: raw.clone(),
-                    call_ids: response.history.iter().map(|h| h.snapshot().id).collect(),
+                    call_ids: response.history.iter().map(|h| h.id()).collect(),
                     field_meta: metas,
                     usage: response.usage,
                     model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
@@ -1454,46 +1457,98 @@ impl Interpreter {
         cx: &Cx,
     ) -> Result<(Vec<Message>, Vec<Message>), RunError> {
         let p = &*self.program;
-        let rendered = match &p.nodes[node] {
-            Node::Predict(n) => {
-                let instruction = self.p_text(cx, n.instruction);
-                let demos = self.p_demos(cx, n.demos);
-                let lm = self.p_model(p.syms.get(n.name), cx, n.model)?;
-                let format =
-                    output_format(&output_schema_options(&lm, &p.sigs[n.sig], &p.types, true));
-                render_prompt(
-                    &p.sigs[n.sig],
-                    &p.types,
-                    self.system_prompt(n.sig, &instruction, format),
-                    &demos,
-                    input,
-                    None,
-                    format,
-                )
-            }
-            Node::AgentLoop(n) => {
-                let instruction = self.p_text(cx, n.instruction);
-                let demos = self.p_demos(cx, n.demos);
-                let policy = self.p_context(cx, n.context_policy);
-                let lm = self.p_model(p.syms.get(n.name), cx, n.model)?;
-                let format =
-                    output_format(&output_schema_options(&lm, &p.sigs[n.sig], &p.types, false));
-                render_prompt(
-                    &p.sigs[n.sig],
-                    &p.types,
-                    self.system_prompt(n.sig, &instruction, format),
-                    &demos,
-                    input,
-                    policy.playbook.as_deref(),
-                    format,
-                )
-            }
+        let (name, model, sig, allow_scalar, playbook) = match &p.nodes[node] {
+            Node::Predict(n) => (n.name, n.model, n.sig, true, None),
+            Node::AgentLoop(n) => (
+                n.name,
+                n.model,
+                n.sig,
+                false,
+                self.p_context(cx, n.context_policy).playbook,
+            ),
             _ => unreachable!("conversation_leaf returns only leaves"),
         };
-        rendered.map_err(|err| RunError::Input {
-            at: p.node_display(node).into(),
+        let lm = self.p_model(p.syms.get(name), cx, model)?;
+        let format = output_format(&output_schema_options(
+            &lm,
+            &p.sigs[sig],
+            &p.types,
+            allow_scalar,
+        ));
+        self.render_prompt(node, cx, input, format, playbook.as_deref())
+    }
+
+    fn render_prompt(
+        &self,
+        node: NodeId,
+        cx: &Cx,
+        input: &JsonMap,
+        format: OutputFormat,
+        playbook: Option<&str>,
+    ) -> Result<(Vec<Message>, Vec<Message>), RunError> {
+        let (sig, instruction, demo_slot) = match &self.program.nodes[node] {
+            Node::Predict(n) => (n.sig, n.instruction, n.demos),
+            Node::AgentLoop(n) => (n.sig, n.instruction, n.demos),
+            _ => unreachable!("only prediction and agent nodes render prompts"),
+        };
+        let def = &self.program.sigs[sig];
+        let input_error = |err: anyhow::Error| RunError::Input {
+            at: self.program.node_display(node).into(),
             message: format!("{err:#}"),
-        })
+        };
+        let mut system = self.system_prompt(sig, &self.p_text(cx, instruction), format);
+        if let Some(playbook) = playbook {
+            system.push_str("\n\n");
+            system.push_str(playbook);
+        }
+        let rows = self.p_demos(cx, demo_slot);
+        let mut prefix = Vec::with_capacity(1 + rows.len() * 2);
+        prefix.push(Message::system(system));
+        if !rows.is_empty() {
+            let demos = self
+                .rendered_demos(node, def, rows, format, cx.overlay.as_ref())
+                .map_err(input_error)?;
+            prefix.extend_from_slice(&demos);
+        }
+        let mut suffix = ChatAdapter
+            .signature_history(def, input)
+            .map_err(input_error)?;
+        suffix.push(Message::user(
+            render_input(def, input, format).map_err(input_error)?,
+        ));
+        Ok((prefix, suffix))
+    }
+
+    fn rendered_demos(
+        &self,
+        node: NodeId,
+        def: &SignatureDef,
+        rows: &[DemoRow],
+        format: OutputFormat,
+        overlay: Option<&Arc<Overlay>>,
+    ) -> anyhow::Result<Arc<[Message]>> {
+        if let Some(cached) = self
+            .demo_messages
+            .read()
+            .expect("demo cache poisoned")
+            .get(&node)
+            && cached.matches(format, overlay)
+        {
+            return Ok(Arc::clone(&cached.messages));
+        }
+        let messages: Arc<[Message]> = render_demos(def, &self.program.types, rows, format)?.into();
+        self.demo_messages
+            .write()
+            .expect("demo cache poisoned")
+            .insert(
+                node,
+                CachedDemos {
+                    format,
+                    overlay: overlay.map(Arc::downgrade),
+                    messages: Arc::clone(&messages),
+                },
+            );
+        Ok(messages)
     }
 
     /// A conversation's run state: overlay + run meter, no frames, no
@@ -1817,24 +1872,10 @@ impl Interpreter {
         let def = &p.sigs[n.sig];
         let input = self.resolve_bindings(&at, Some(id), &n.binding, cx)?;
 
-        let instruction = self.p_text(cx, n.instruction);
-        let demos = self.p_demos(cx, n.demos);
         let lm = self.p_model(&at, cx, n.model)?;
         let options = output_schema_options(&lm, def, &p.types, true);
         let format = output_format(&options);
-        let (prefix, mut suffix) = render_prompt(
-            def,
-            &p.types,
-            self.system_prompt(n.sig, &instruction, format),
-            &demos,
-            &input,
-            None,
-            format,
-        )
-        .map_err(|err| RunError::Input {
-            at: at.clone().into(),
-            message: format!("{err:#}"),
-        })?;
+        let (prefix, mut suffix) = self.render_prompt(id, cx, &input, format, None)?;
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
         }
@@ -1994,7 +2035,7 @@ impl Interpreter {
                         name: at.clone(),
                         raw_response: raw.clone(),
                         field_meta: metas,
-                        call_ids: response.history.iter().map(|h| h.snapshot().id).collect(),
+                        call_ids: response.history.iter().map(|h| h.id()).collect(),
                         usage: response.usage,
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
@@ -2234,24 +2275,11 @@ impl Interpreter {
         let def = &p.sigs[n.sig];
         let input = self.resolve_bindings(&at, Some(id), &n.binding, cx)?;
 
-        let instruction = self.p_text(cx, n.instruction);
-        let demos = self.p_demos(cx, n.demos);
         let policy = self.p_context(cx, n.context_policy);
         let lm = self.p_model(&at, cx, n.model)?;
         let format = output_format(&output_schema_options(&lm, def, &p.types, false));
-        let (prefix, mut suffix) = render_prompt(
-            def,
-            &p.types,
-            self.system_prompt(n.sig, &instruction, format),
-            &demos,
-            &input,
-            policy.playbook.as_deref(),
-            format,
-        )
-        .map_err(|err| RunError::Input {
-            at: at.clone().into(),
-            message: format!("{err:#}"),
-        })?;
+        let (prefix, mut suffix) =
+            self.render_prompt(id, cx, &input, format, policy.playbook.as_deref())?;
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
         }
@@ -2448,8 +2476,7 @@ impl Interpreter {
             lc.meter.record_usage(&response.usage);
             run.usage = run.usage + response.usage;
             run.events.extend(response.events.clone());
-            run.call_ids
-                .extend(response.history.iter().map(|h| h.snapshot().id));
+            run.call_ids.extend(response.history.iter().map(|h| h.id()));
             chat = response.chat;
 
             if !response.tool_calls.is_empty() {
@@ -2572,8 +2599,7 @@ impl Interpreter {
         lc.run_meter.record_usage(&response.usage);
         run.usage = run.usage + response.usage;
         run.events.extend(response.events.clone());
-        run.call_ids
-            .extend(response.history.iter().map(|h| h.snapshot().id));
+        run.call_ids.extend(response.history.iter().map(|h| h.id()));
         let raw = response.output.content();
         let parsed = parse_response(lc.def, &self.program.types, &response.output, format);
         if let Some(history) = &response.history {
@@ -2861,9 +2887,9 @@ impl Interpreter {
         }
     }
 
-    fn p_demos(&self, cx: &Cx, id: ParamId) -> Vec<DemoRow> {
+    fn p_demos<'a>(&'a self, cx: &'a Cx, id: ParamId) -> &'a [DemoRow] {
         match self.p_value(cx, id) {
-            ParamValue::Demos { rows } => rows.clone(),
+            ParamValue::Demos { rows } => rows,
             other => panic!("demos slot resolved to {:?}", other.kind()),
         }
     }
@@ -3115,15 +3141,32 @@ async fn lm_call_toolset(
 // Rendering and coercion helpers
 // ---------------------------------------------------------------------------
 
-/// Renders the (prefix, suffix) message split for a leaf call: prefix =
-/// system + demo turns, suffix = the live user turn. Instruction and demos
-/// arrive overlay-resolved.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OutputFormat {
     Delimited,
     JsonSchema,
     JsonScalar,
     JsonMode,
+}
+
+struct CachedDemos {
+    format: OutputFormat,
+    overlay: Option<Weak<Overlay>>,
+    messages: Arc<[Message]>,
+}
+
+impl CachedDemos {
+    fn matches(&self, format: OutputFormat, overlay: Option<&Arc<Overlay>>) -> bool {
+        self.format == format
+            && match (&self.overlay, overlay) {
+                (None, None) => true,
+                // Holding a Weak prevents address reuse, including after Arc::make_mut.
+                (Some(previous), Some(current)) => {
+                    std::ptr::eq(previous.as_ptr(), Arc::as_ptr(current))
+                }
+                _ => false,
+            }
+    }
 }
 
 fn output_format(options: &LMCallOptions) -> OutputFormat {
@@ -3140,22 +3183,14 @@ fn output_format(options: &LMCallOptions) -> OutputFormat {
     }
 }
 
-fn render_prompt(
+fn render_demos(
     def: &SignatureDef,
     types: &TypeTable,
-    mut system: String,
     demos: &[DemoRow],
-    input: &JsonMap,
-    playbook: Option<&str>,
     format: OutputFormat,
-) -> anyhow::Result<(Vec<Message>, Vec<Message>)> {
+) -> anyhow::Result<Vec<Message>> {
     let adapter = ChatAdapter;
-    if let Some(playbook) = playbook {
-        system.push_str("\n\n");
-        system.push_str(playbook);
-    }
-    let mut prefix = Vec::with_capacity(1 + demos.len() * 2);
-    prefix.push(Message::system(system));
+    let mut prefix = Vec::with_capacity(demos.len() * 2);
     for row in demos {
         prefix.push(Message::user(render_input(def, &row.input, format)?));
         prefix.push(Message::assistant(if format == OutputFormat::JsonScalar {
@@ -3172,9 +3207,7 @@ fn render_prompt(
             adapter.format_output_def(def, &row.output)
         }));
     }
-    let mut suffix = adapter.signature_history(def, input)?;
-    suffix.push(Message::user(render_input(def, input, format)?));
-    Ok((prefix, suffix))
+    Ok(prefix)
 }
 
 fn render_input(

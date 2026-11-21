@@ -62,6 +62,10 @@ async fn calls_are_recorded_with_and_without_caching(#[case] cache: bool) {
     let second = lm.call(chat(), vec![]).await.unwrap();
     let history = lm.inspect_history(10).await;
     assert_eq!(history.len(), 2);
+    assert_eq!(original.history.as_ref().unwrap().id(), history[1].id);
+    assert_eq!(second.history.as_ref().unwrap().id(), history[0].id);
+    assert_eq!(history[0].prompt, chat().to_json().to_string());
+    assert_eq!(history[1].prompt, history[0].prompt);
     assert_ne!(history[0].id, history[1].id);
     assert_eq!(history[0].cache_hit, cache);
     assert_eq!(

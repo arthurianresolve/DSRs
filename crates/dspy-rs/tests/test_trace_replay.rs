@@ -179,6 +179,25 @@ async fn strict_replay_diverges_on_mutated_instruction() {
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
+async fn indexed_replay_preserves_component_sequence_and_first_match() {
+    let (mut trace, answer, drafter, refiner) = record_pipeline().await;
+    trace.spans.reverse();
+    let mut duplicate = trace.spans.last().unwrap().clone();
+    duplicate.request_hash ^= 1;
+    trace.spans.resize(2048, duplicate);
+    for (position, span) in trace.spans.iter_mut().enumerate() {
+        span.id = dspy_rs::trace::SpanId(position as u32);
+    }
+    let (result, report) = replay(&trace, ReplayMode::Strict, || {
+        run_pipeline(&drafter, &refiner)
+    })
+    .await;
+    assert_eq!(result.unwrap().answer, answer);
+    assert_eq!((report.served, report.live), (3, 0));
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
 async fn strict_replay_reports_divergence_seq_for_repeat_invocations() {
     let (trace, _, drafter, refiner) = record_pipeline().await;
 
