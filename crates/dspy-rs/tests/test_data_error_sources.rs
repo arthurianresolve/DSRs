@@ -86,3 +86,51 @@ fn json_and_mapper_failures_keep_the_typed_original_cause() {
         std::io::ErrorKind::InvalidInput
     );
 }
+
+#[test]
+fn jsonl_mapper_keeps_line_numbers_and_the_unterminated_final_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rows.jsonl");
+    std::fs::write(
+        &path,
+        b"\r\n{\"value\":\"first\"}\r\n \n{\"value\":\"last\"}",
+    )
+    .unwrap();
+
+    let rows = DataLoader::load_json_with(
+        path.to_str().unwrap(),
+        true,
+        TypedLoadOptions::default(),
+        |row| {
+            Ok((
+                row.row_index,
+                row.values["value"].as_str().unwrap().to_owned(),
+            ))
+        },
+    )
+    .unwrap();
+
+    assert_eq!(rows, [(2, "first".to_owned()), (4, "last".to_owned())]);
+}
+
+#[test]
+fn jsonl_read_errors_take_precedence_over_parse_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rows.jsonl");
+    let mut bytes = b"not JSON\n".to_vec();
+    bytes.resize(64 * 1024, b' ');
+    bytes.extend_from_slice(b"\n\xff");
+    std::fs::write(&path, bytes).unwrap();
+
+    let error =
+        DataLoader::load_json::<Row>(path.to_str().unwrap(), true, TypedLoadOptions::default())
+            .unwrap_err();
+    let source = error.downcast_ref::<DataLoadError>().unwrap();
+    assert!(matches!(source, DataLoadError::Io(_)));
+    let io_error = source
+        .source()
+        .unwrap()
+        .downcast_ref::<std::io::Error>()
+        .unwrap();
+    assert_eq!(io_error.kind(), std::io::ErrorKind::InvalidData);
+}
