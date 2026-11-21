@@ -360,7 +360,11 @@ impl Optimizer for MIPROv2 {
                 }
             }
         };
-        let mut best_score = score(engine.evaluate(target, baseline, Some(&validation)).await?)?;
+        let mut best_score = score(
+            engine
+                .evaluate_scores(target, baseline, Some(&validation))
+                .await?,
+        )?;
         let mut winner = Candidate::new();
         // Use one fixed minibatch so trial scores are directly comparable.
         let minibatch: Vec<_> = validation
@@ -420,7 +424,7 @@ impl Optimizer for MIPROv2 {
                 .filter(|row| seen.insert(*row))
                 .collect::<Vec<_>>();
             let evaluations = match engine
-                .evaluate_many(target, &rows, Some(&minibatch))
+                .evaluate_scores_many(target, &rows, Some(&minibatch))
                 .await?
             {
                 BatchEvalOutcome::Complete(evals) => evals,
@@ -446,7 +450,11 @@ impl Optimizer for MIPROv2 {
             trial += batch_len;
             if trial % self.full_eval_steps == 0 || trial == self.num_trials {
                 let (_, row, candidate) = pending.take().expect("at least one trial per interval");
-                let full_score = score(engine.evaluate(target, row, Some(&validation)).await?)?;
+                let full_score = score(
+                    engine
+                        .evaluate_scores(target, row, Some(&validation))
+                        .await?,
+                )?;
                 debug!(
                     trial = trial - 1,
                     full_score, best_score, "MIPRO validation"
