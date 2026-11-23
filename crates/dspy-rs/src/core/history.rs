@@ -224,7 +224,7 @@ impl HistoryCall {
                 timestamp_us: crate::trace::capture::now_us(),
                 duration_us: 0,
                 model: config.model.clone(),
-                config: crate::trace::ModelEntry::from_config(config).config,
+                config: crate::trace::ModelEntry::redacted_config(config),
                 messages: chat.messages.clone(),
                 prompt: String::new(),
                 response: None,

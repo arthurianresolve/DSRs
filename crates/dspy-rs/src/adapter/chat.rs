@@ -4,7 +4,8 @@ use minijinja::UndefinedBehavior;
 use minijinja::value::{Kwargs, Value as MiniJinjaValue};
 use regex::Regex;
 use serde_json::{Map, Value, json};
-use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{LazyLock, OnceLock};
 use tracing::{debug, trace};
 
 use crate::ir::{RenderSpec, SignatureDef};
@@ -34,6 +35,29 @@ static FLEXIBLE_FIELD_HEADER_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\[\[\s*##\s*([^#]+?)\s*##\s*\]\]").unwrap());
 
 const INPUT_RENDER_TEMPLATE_NAME: &str = "__input_field__";
+
+#[derive(Default)]
+struct InputTemplate {
+    seen: AtomicBool,
+    compiled: OnceLock<minijinja::Environment<'static>>,
+}
+
+pub(crate) struct PreparedInputTemplates(Vec<InputTemplate>);
+
+impl PreparedInputTemplates {
+    pub(crate) fn new(def: &SignatureDef) -> Option<Self> {
+        def.inputs
+            .iter()
+            .any(|field| matches!(&field.render, RenderSpec::Jinja(_)))
+            .then(|| {
+                Self(
+                    (0..def.inputs.len())
+                        .map(|_| InputTemplate::default())
+                        .collect(),
+                )
+            })
+    }
+}
 
 fn regex_match(value: String, regex: String) -> bool {
     match Regex::new(&regex) {
@@ -507,10 +531,8 @@ impl ChatAdapter {
     /// which output fields to produce.
     ///
     /// Fields absent from `input` are skipped (the historical relaxed path
-    /// navigation for flattened structs). Jinja render templates are compiled
-    /// per call — dynamic defs own their template strings, and a
-    /// process-global cache keyed on them would reintroduce the leak-per-load
-    /// RFC 0002 IR-1 removed.
+    /// navigation for flattened structs). Direct calls compile Jinja templates
+    /// on demand. Loaded interpreters reuse their own templates.
     /// On a template error, returns an explicit marker. Use
     /// [`try_format_input_def`](Self::try_format_input_def) to handle the error.
     pub fn format_input_def(&self, def: &SignatureDef, input: &JsonMap) -> String {
@@ -520,15 +542,25 @@ impl ChatAdapter {
 
     /// Fallible input formatting for runtime callers that must reject bad templates.
     pub fn try_format_input_def(&self, def: &SignatureDef, input: &JsonMap) -> Result<String> {
+        self.try_format_input_prepared(def, input, None)
+    }
+
+    pub(crate) fn try_format_input_prepared(
+        &self,
+        def: &SignatureDef,
+        input: &JsonMap,
+        templates: Option<&PreparedInputTemplates>,
+    ) -> Result<String> {
         if def.outputs.len() == 1
             && def.outputs[0].special_kind() == Some(crate::SpecialField::ToolCalls)
         {
-            return self.try_format_input_with_response(def, input, "Use the supplied tool-calling protocol to request the appropriate tools. Do not copy input fields into the response.");
+            return self.try_format_input_with_response(def, input, "Use the supplied tool-calling protocol to request the appropriate tools. Do not copy input fields into the response.", templates);
         }
         self.try_format_input_with_response(
             def,
             input,
             &format_response_instructions_view(&def_views(&def.outputs)),
+            templates,
         )
     }
 
@@ -537,10 +569,11 @@ impl ChatAdapter {
         def: &SignatureDef,
         input: &JsonMap,
         response_instruction: &str,
+        templates: Option<&PreparedInputTemplates>,
     ) -> Result<String> {
         let mut result = String::new();
         let mut input_context = None;
-        for field in def.inputs.iter() {
+        for (index, field) in def.inputs.iter().enumerate() {
             if field.special_kind() == Some(crate::SpecialField::History) {
                 continue;
             }
@@ -557,6 +590,7 @@ impl ChatAdapter {
                 field,
                 value,
                 input_context.as_ref(),
+                templates.map(|templates| &templates.0[index]),
             )?);
             result.push_str("\n\n");
         }
@@ -573,10 +607,20 @@ impl ChatAdapter {
 
     /// Fallible JSON-response input formatting, sharing the alias-aware render path.
     pub fn try_format_input_json_def(&self, def: &SignatureDef, input: &JsonMap) -> Result<String> {
+        self.try_format_input_json_prepared(def, input, None)
+    }
+
+    pub(crate) fn try_format_input_json_prepared(
+        &self,
+        def: &SignatureDef,
+        input: &JsonMap,
+        templates: Option<&PreparedInputTemplates>,
+    ) -> Result<String> {
         self.try_format_input_with_response(
             def,
             input,
             "Return a JSON object with every output field.",
+            templates,
         )
     }
 
@@ -601,11 +645,12 @@ impl ChatAdapter {
         &self,
         def: &SignatureDef,
         input: &JsonMap,
+        templates: Option<&PreparedInputTemplates>,
     ) -> Result<String> {
         self.try_format_input_with_response(def, input, &format!(
             "Compute `{}` from the inputs and return only its JSON value, without an object wrapper.",
             def.outputs[0].lm_name,
-        ))
+        ), templates)
     }
 
     /// Formats a value-level output map as an assistant message for few-shot
@@ -989,14 +1034,12 @@ fn format_json_value_for_prompt(value: &Value) -> String {
     }
 }
 
-/// Renders one input field of a [`SignatureDef`], honoring its [`RenderSpec`].
-///
-/// The Jinja arm compiles the template per call: templates are owned strings on
-/// a runtime [`SignatureDef`], so there is no `&'static str` key to cache on.
+/// Renders one input field, using the interpreter's prepared template when supplied.
 fn render_input_field_def(
     field: &crate::ir::FieldDef,
     value: &Value,
     input_context: Option<&MiniJinjaValue>,
+    template_slot: Option<&InputTemplate>,
 ) -> Result<String> {
     match &field.render {
         RenderSpec::Default => Ok(match value {
@@ -1008,14 +1051,29 @@ fn render_input_field_def(
             let input_context = input_context.ok_or_else(|| {
                 anyhow::anyhow!("missing input render context for `{}`", field.name)
             })?;
-            let mut env = build_input_render_environment();
-            env.add_template(INPUT_RENDER_TEMPLATE_NAME, template)
-                .with_context(|| {
-                    format!(
-                        "failed to compile input render template for `{}`",
-                        field.name
-                    )
-                })?;
+            let compile_error = || {
+                format!(
+                    "failed to compile input render template for `{}`",
+                    field.name
+                )
+            };
+            let transient;
+            let env = if let Some(env) = template_slot.and_then(|slot| slot.compiled.get()) {
+                env
+            } else if let Some(slot) =
+                template_slot.filter(|slot| slot.seen.swap(true, Ordering::Relaxed))
+            {
+                let mut env = build_input_render_environment();
+                env.add_template_owned(INPUT_RENDER_TEMPLATE_NAME, template.to_string())
+                    .with_context(compile_error)?;
+                slot.compiled.get_or_init(|| env)
+            } else {
+                let mut env = build_input_render_environment();
+                env.add_template(INPUT_RENDER_TEMPLATE_NAME, template)
+                    .with_context(compile_error)?;
+                transient = env;
+                &transient
+            };
             let compiled = env
                 .get_template(INPUT_RENDER_TEMPLATE_NAME)
                 .with_context(|| {

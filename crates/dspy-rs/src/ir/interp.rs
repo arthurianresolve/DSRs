@@ -24,7 +24,7 @@ use futures::future::BoxFuture;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 
-use crate::adapter::chat::ChatAdapter;
+use crate::adapter::chat::{ChatAdapter, PreparedInputTemplates};
 use crate::core::FieldMeta;
 use crate::ir::graph::{
     AgentLoopNode, Binding, BudgetPolicy, CapSet, HoleImpl, HoleNode, ModelId, Node, NodeId,
@@ -33,7 +33,8 @@ use crate::ir::graph::{
 use crate::ir::params::{ContextPolicy, DemoRow, Overlay, ParamId, ParamValue};
 use crate::ir::sig::SignatureDef;
 use crate::ir::validate::{ValidateError, json_matches_type};
-use crate::trace::{JsonMap, SpanEvent, SpanOutcome, SpanRequest, begin_span};
+use crate::trace::capture::begin_span_lazy;
+use crate::trace::{JsonMap, SpanEvent, SpanOutcome, SpanRequest};
 use crate::typesys::{FieldType, TypeTable, json_schema_compatible, json_schema_for_outputs};
 use crate::{
     Chat, LM, LMCallOptions, LMConfig, LmError, LmUsage, Message, Role, ToolLoopMode, ToolSet,
@@ -509,6 +510,7 @@ pub struct Interpreter {
     system_prompts: RwLock<HashMap<SigId, (String, OutputFormat, String)>>,
     /// At most one rendered demo set per leaf. The overlay is never kept alive by the cache.
     demo_messages: RwLock<HashMap<NodeId, CachedDemos>>,
+    input_templates: SecondaryMap<SigId, Option<Arc<PreparedInputTemplates>>>,
     models: SecondaryMap<ModelId, Option<Arc<LM>>>,
     tool_exec: SecondaryMap<ToolId, Option<ToolExec>>,
     /// Extern-hole bindings by leaf name, verified complete at load.
@@ -688,10 +690,17 @@ impl Interpreter {
             }
         }
 
+        let mut input_templates = SecondaryMap::new();
+        for (sig, def) in program.sigs.iter() {
+            if let Some(templates) = PreparedInputTemplates::new(def) {
+                input_templates[sig] = Some(Arc::new(templates));
+            }
+        }
         Ok(Self {
             program,
             system_prompts: RwLock::new(HashMap::new()),
             demo_messages: RwLock::new(HashMap::new()),
+            input_templates,
             models,
             tool_exec,
             host_holes,
@@ -986,7 +995,8 @@ impl Interpreter {
             .leaf_name(node)
             .expect("conversation leaves are named")
             .to_string();
-        let def = self.leaf_sig(node);
+        let sig = self.leaf_sig_id(node);
+        let def = &p.sigs[sig];
         let cx = self.conversation_cx(overlay.clone(), Arc::new(BudgetMeter::new(budget)));
         let lm = match &p.nodes[node] {
             Node::Predict(n) => self.p_model(&at, &cx, n.model)?,
@@ -1014,10 +1024,11 @@ impl Interpreter {
                     matches!(&p.nodes[node], Node::Predict(_)),
                 ));
                 let rendered =
-                    render_input(def, input_map, format).map_err(|err| RunError::Input {
-                        at: at.clone().into(),
-                        message: format!("{err:#}"),
-                    })?;
+                    render_input(def, input_map, format, self.input_templates[sig].as_deref())
+                        .map_err(|err| RunError::Input {
+                            at: at.clone().into(),
+                            message: format!("{err:#}"),
+                        })?;
                 chat.push_message(Message::user(rendered));
             }
             (Vec::new(), chat.messages)
@@ -1033,7 +1044,7 @@ impl Interpreter {
             prefix.len()
         };
 
-        let guard = begin_span(SpanRequest {
+        let guard = begin_span_lazy(|| SpanRequest {
             component: &at,
             prefix: (!prefix.is_empty()).then_some(prefix.as_slice()),
             suffix: &suffix,
@@ -1129,7 +1140,7 @@ impl Interpreter {
         at: &str,
         def: &SignatureDef,
         lm: &Arc<LM>,
-        cx: &Cx,
+        cx: &Cx<'_>,
         messages: Vec<Message>,
         guard: Option<crate::trace::SpanGuard>,
     ) -> Result<ConversationTurn, RunError> {
@@ -1440,9 +1451,13 @@ impl Interpreter {
 
     /// The declared signature of a conversation leaf.
     fn leaf_sig(&self, node: NodeId) -> &SignatureDef {
+        &self.program.sigs[self.leaf_sig_id(node)]
+    }
+
+    fn leaf_sig_id(&self, node: NodeId) -> SigId {
         match &self.program.nodes[node] {
-            Node::Predict(n) => &self.program.sigs[n.sig],
-            Node::AgentLoop(n) => &self.program.sigs[n.sig],
+            Node::Predict(n) => n.sig,
+            Node::AgentLoop(n) => n.sig,
             _ => unreachable!("conversation_leaf returns only leaves"),
         }
     }
@@ -1454,7 +1469,7 @@ impl Interpreter {
         &self,
         node: NodeId,
         input: &JsonMap,
-        cx: &Cx,
+        cx: &Cx<'_>,
     ) -> Result<(Vec<Message>, Vec<Message>), RunError> {
         let p = &*self.program;
         let (name, model, sig, allow_scalar, playbook) = match &p.nodes[node] {
@@ -1481,7 +1496,7 @@ impl Interpreter {
     fn render_prompt(
         &self,
         node: NodeId,
-        cx: &Cx,
+        cx: &Cx<'_>,
         input: &JsonMap,
         format: OutputFormat,
         playbook: Option<&str>,
@@ -1492,6 +1507,7 @@ impl Interpreter {
             _ => unreachable!("only prediction and agent nodes render prompts"),
         };
         let def = &self.program.sigs[sig];
+        let templates = self.input_templates[sig].as_deref();
         let input_error = |err: anyhow::Error| RunError::Input {
             at: self.program.node_display(node).into(),
             message: format!("{err:#}"),
@@ -1506,7 +1522,7 @@ impl Interpreter {
         prefix.push(Message::system(system));
         if !rows.is_empty() {
             let demos = self
-                .rendered_demos(node, def, rows, format, cx.overlay.as_ref())
+                .rendered_demos(node, sig, rows, format, cx.overlay.as_ref())
                 .map_err(input_error)?;
             prefix.extend_from_slice(&demos);
         }
@@ -1514,7 +1530,7 @@ impl Interpreter {
             .signature_history(def, input)
             .map_err(input_error)?;
         suffix.push(Message::user(
-            render_input(def, input, format).map_err(input_error)?,
+            render_input(def, input, format, templates).map_err(input_error)?,
         ));
         Ok((prefix, suffix))
     }
@@ -1522,7 +1538,7 @@ impl Interpreter {
     fn rendered_demos(
         &self,
         node: NodeId,
-        def: &SignatureDef,
+        sig: SigId,
         rows: &[DemoRow],
         format: OutputFormat,
         overlay: Option<&Arc<Overlay>>,
@@ -1536,7 +1552,14 @@ impl Interpreter {
         {
             return Ok(Arc::clone(&cached.messages));
         }
-        let messages: Arc<[Message]> = render_demos(def, &self.program.types, rows, format)?.into();
+        let messages: Arc<[Message]> = render_demos(
+            &self.program.sigs[sig],
+            &self.program.types,
+            rows,
+            format,
+            self.input_templates[sig].as_deref(),
+        )?
+        .into();
         self.demo_messages
             .write()
             .expect("demo cache poisoned")
@@ -1553,12 +1576,17 @@ impl Interpreter {
 
     /// A conversation's run state: overlay + run meter, no frames, no
     /// collection — conversation turns build their [`LeafOutcome`] directly.
-    fn conversation_cx(&self, overlay: Option<Arc<Overlay>>, meter: Arc<BudgetMeter>) -> Cx {
+    fn conversation_cx(
+        &self,
+        overlay: Option<Arc<Overlay>>,
+        meter: Arc<BudgetMeter>,
+    ) -> Cx<'static> {
         Cx {
             overlay,
             meter,
             frames: SecondaryMap::new(),
             inputs: Vec::new(),
+            parent: None,
             feedback: None,
             refine_feedback: None,
             leaves: None,
@@ -1627,6 +1655,7 @@ impl Interpreter {
             meter: Arc::new(BudgetMeter::new(budget)),
             frames: SecondaryMap::new(),
             inputs: vec![input],
+            parent: None,
             feedback: None,
             refine_feedback: None,
             leaves: collect.then(Vec::new),
@@ -1640,7 +1669,11 @@ impl Interpreter {
 
     // -- node dispatch --------------------------------------------------------
 
-    fn eval<'a>(&'a self, id: NodeId, cx: &'a mut Cx) -> BoxFuture<'a, Result<JsonMap, RunError>> {
+    fn eval<'a>(
+        &'a self,
+        id: NodeId,
+        cx: &'a mut Cx<'_>,
+    ) -> BoxFuture<'a, Result<JsonMap, RunError>> {
         Box::pin(async move {
             let out = match &self.program.nodes[id] {
                 Node::Predict(n) => self.eval_predict(id, n, cx).await?,
@@ -1653,28 +1686,22 @@ impl Interpreter {
                     self.resolve_exports(&n.out, cx)?
                 }
                 Node::ForkJoin(n) => {
-                    let branch_cxs: Vec<(NodeId, Cx)> = n
-                        .branches
-                        .iter()
-                        .map(|&branch| (branch, cx.branch()))
-                        .collect();
-                    let futures =
-                        branch_cxs
-                            .into_iter()
-                            .map(|(branch, mut branch_cx)| async move {
-                                self.eval(branch, &mut branch_cx).await?;
-                                Ok::<_, RunError>((branch_cx.frames, branch_cx.leaves))
-                            });
+                    let parent = &*cx;
+                    let futures = n.branches.iter().map(|&branch| async move {
+                        let mut branch_cx = parent.branch();
+                        self.eval(branch, &mut branch_cx).await?;
+                        Ok::<_, RunError>((branch_cx.frames, branch_cx.leaves))
+                    });
                     // First error aborts siblings: try_join_all drops the
                     // remaining futures, whose open spans record Cancelled
                     // via guard-drop (RFC 0001 §3.1).
                     let all_frames = futures::future::try_join_all(futures).await?;
-                    for (frames, leaves) in all_frames {
-                        for (node, out) in frames.iter() {
-                            if let Some(out) = out
-                                && cx.frames[node].is_none()
+                    for (mut frames, leaves) in all_frames {
+                        for (node, out) in frames.iter_mut() {
+                            if let Some(out) = out.take()
+                                && cx.frame(node).is_none()
                             {
-                                cx.frames[node] = Some(out.clone());
+                                cx.frames[node] = Some(out);
                             }
                         }
                         // Branch outcomes merge in declared branch order.
@@ -1746,7 +1773,7 @@ impl Interpreter {
                     result?
                 }
                 Node::Loop(n) => {
-                    let enclosing = cx.inputs.last().cloned().unwrap_or_default();
+                    let enclosing = cx.input().cloned().unwrap_or_default();
                     let mut carry = JsonMap::new();
                     let at = self.program.node_display(id);
                     let mut result = None;
@@ -1796,9 +1823,9 @@ impl Interpreter {
     async fn eval_refine(
         &self,
         n: &crate::ir::graph::RefineNode,
-        cx: &mut Cx,
+        cx: &mut Cx<'_>,
     ) -> Result<JsonMap, RunError> {
-        let mut best: Option<(f64, usize, JsonMap, SecondaryMap<NodeId, Option<JsonMap>>)> = None;
+        let mut best: Option<(f64, usize, JsonMap, Frames)> = None;
         for round in 0..n.max_rounds.get() {
             let child_scope = crate::current_sampling_options().child(
                 format!("refine-{}", self.program.node_display(n.child)),
@@ -1865,7 +1892,7 @@ impl Interpreter {
         &self,
         id: NodeId,
         n: &PredictNode,
-        cx: &mut Cx,
+        cx: &mut Cx<'_>,
     ) -> Result<JsonMap, RunError> {
         let p = &*self.program;
         let at = p.syms.get(n.name).to_string();
@@ -1879,7 +1906,7 @@ impl Interpreter {
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
         }
-        let guard = begin_span(SpanRequest {
+        let guard = begin_span_lazy(|| SpanRequest {
             component: &at,
             prefix: Some(&prefix),
             suffix: &suffix,
@@ -2075,7 +2102,12 @@ impl Interpreter {
         }
     }
 
-    async fn eval_hole(&self, id: NodeId, n: &HoleNode, cx: &mut Cx) -> Result<JsonMap, RunError> {
+    async fn eval_hole(
+        &self,
+        id: NodeId,
+        n: &HoleNode,
+        cx: &mut Cx<'_>,
+    ) -> Result<JsonMap, RunError> {
         let p = &*self.program;
         let at = p.syms.get(n.name).to_string();
         let def = &p.sigs[n.sig];
@@ -2107,7 +2139,7 @@ impl Interpreter {
             },
             ..LMConfig::default()
         };
-        let guard = begin_span(SpanRequest {
+        let guard = begin_span_lazy(|| SpanRequest {
             component: &at,
             prefix: None,
             suffix: &[],
@@ -2268,7 +2300,7 @@ impl Interpreter {
         &self,
         id: NodeId,
         n: &AgentLoopNode,
-        cx: &mut Cx,
+        cx: &mut Cx<'_>,
     ) -> Result<JsonMap, RunError> {
         let p = &*self.program;
         let at = p.syms.get(n.name).to_string();
@@ -2287,7 +2319,7 @@ impl Interpreter {
 
         let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
 
-        let guard = begin_span(SpanRequest {
+        let guard = begin_span_lazy(|| SpanRequest {
             component: &at,
             prefix: Some(&prefix),
             suffix: &suffix,
@@ -2707,7 +2739,7 @@ impl Interpreter {
         &self,
         at: &str,
         n: &AgentLoopNode,
-        cx: &Cx,
+        cx: &Cx<'_>,
         allow_code_mode: bool,
     ) -> Result<AgentSurface, RunError> {
         let p = &*self.program;
@@ -2873,21 +2905,21 @@ impl Interpreter {
 
     // -- param + port resolution ----------------------------------------------
 
-    fn p_value<'a>(&'a self, cx: &'a Cx, id: ParamId) -> &'a ParamValue {
+    fn p_value<'a>(&'a self, cx: &'a Cx<'_>, id: ParamId) -> &'a ParamValue {
         match &cx.overlay {
             Some(overlay) => overlay.resolve(&self.program, id),
             None => &self.program.params[id].default,
         }
     }
 
-    fn p_text(&self, cx: &Cx, id: ParamId) -> String {
+    fn p_text(&self, cx: &Cx<'_>, id: ParamId) -> String {
         match self.p_value(cx, id) {
             ParamValue::Instruction { text } | ParamValue::ToolDesc { text } => text.clone(),
             other => panic!("text slot resolved to {:?}", other.kind()),
         }
     }
 
-    fn p_demos<'a>(&'a self, cx: &'a Cx, id: ParamId) -> &'a [DemoRow] {
+    fn p_demos<'a>(&'a self, cx: &'a Cx<'_>, id: ParamId) -> &'a [DemoRow] {
         match self.p_value(cx, id) {
             ParamValue::Demos { rows } => rows,
             other => panic!("demos slot resolved to {:?}", other.kind()),
@@ -2898,7 +2930,7 @@ impl Interpreter {
     /// enforced when the value entered ([`Overlay::set`] / load-time
     /// validation); the filter here only keeps downstream arena indexing
     /// total against hostile ids.
-    fn p_tool_set(&self, cx: &Cx, id: ParamId, declared: &[ToolId]) -> Box<[ToolId]> {
+    fn p_tool_set(&self, cx: &Cx<'_>, id: ParamId, declared: &[ToolId]) -> Box<[ToolId]> {
         match self.p_value(cx, id) {
             ParamValue::ToolSet { tools } => tools
                 .iter()
@@ -2909,14 +2941,14 @@ impl Interpreter {
         }
     }
 
-    fn p_context(&self, cx: &Cx, id: ParamId) -> ContextPolicy {
+    fn p_context(&self, cx: &Cx<'_>, id: ParamId) -> ContextPolicy {
         match self.p_value(cx, id) {
             ParamValue::ContextPolicy { policy } => policy.clone(),
             other => panic!("context slot resolved to {:?}", other.kind()),
         }
     }
 
-    fn p_model(&self, at: &str, cx: &Cx, id: ParamId) -> Result<Arc<LM>, RunError> {
+    fn p_model(&self, at: &str, cx: &Cx<'_>, id: ParamId) -> Result<Arc<LM>, RunError> {
         let model = match self.p_value(cx, id) {
             ParamValue::ModelRef { model } => *model,
             other => {
@@ -2967,7 +2999,7 @@ impl Interpreter {
         at: &str,
         node: Option<NodeId>,
         binds: &[Binding],
-        cx: &Cx,
+        cx: &Cx<'_>,
     ) -> Result<JsonMap, RunError> {
         let mut map = JsonMap::new();
         for b in binds {
@@ -2983,7 +3015,7 @@ impl Interpreter {
         Ok(map)
     }
 
-    fn resolve_exports(&self, binds: &[Binding], cx: &Cx) -> Result<JsonMap, RunError> {
+    fn resolve_exports(&self, binds: &[Binding], cx: &Cx<'_>) -> Result<JsonMap, RunError> {
         let mut map = JsonMap::new();
         for b in binds {
             let name = self.program.syms.get(b.dst).to_string();
@@ -2992,7 +3024,7 @@ impl Interpreter {
         Ok(map)
     }
 
-    fn resolve_port(&self, at: &str, port: &PortRef, cx: &Cx) -> Result<Value, RunError> {
+    fn resolve_port(&self, at: &str, port: &PortRef, cx: &Cx<'_>) -> Result<Value, RunError> {
         match port {
             PortRef::Lit(value) => Ok(value.clone()),
             // `^field` and `$.field` share the merged scope frame at runtime:
@@ -3001,23 +3033,20 @@ impl Interpreter {
             PortRef::Input(sym) | PortRef::Carried(sym) => {
                 let name = self.program.syms.get(*sym);
                 Ok(cx
-                    .inputs
-                    .last()
+                    .input()
                     .and_then(|frame| frame.get(name))
                     .cloned()
                     .unwrap_or(Value::Null))
             }
             PortRef::Out { node, field } => {
                 let name = self.program.syms.get(*field);
-                let frame = cx.frames[*node]
-                    .as_ref()
-                    .ok_or_else(|| RunError::Internal {
-                        at: at.into(),
-                        message: format!(
-                            "port references {} before it produced output",
-                            self.program.node_display(*node)
-                        ),
-                    })?;
+                let frame = cx.frame(*node).ok_or_else(|| RunError::Internal {
+                    at: at.into(),
+                    message: format!(
+                        "port references {} before it produced output",
+                        self.program.node_display(*node)
+                    ),
+                })?;
                 Ok(frame.get(name).cloned().unwrap_or(Value::Null))
             }
         }
@@ -3188,11 +3217,14 @@ fn render_demos(
     types: &TypeTable,
     demos: &[DemoRow],
     format: OutputFormat,
+    templates: Option<&PreparedInputTemplates>,
 ) -> anyhow::Result<Vec<Message>> {
     let adapter = ChatAdapter;
     let mut prefix = Vec::with_capacity(demos.len() * 2);
     for row in demos {
-        prefix.push(Message::user(render_input(def, &row.input, format)?));
+        prefix.push(Message::user(render_input(
+            def, &row.input, format, templates,
+        )?));
         prefix.push(Message::assistant(if format == OutputFormat::JsonScalar {
             let field = &def.outputs[0];
             row.output
@@ -3214,11 +3246,12 @@ fn render_input(
     def: &SignatureDef,
     input: &JsonMap,
     format: OutputFormat,
+    templates: Option<&PreparedInputTemplates>,
 ) -> anyhow::Result<String> {
     match format {
-        OutputFormat::Delimited => ChatAdapter.try_format_input_def(def, input),
-        OutputFormat::JsonScalar => ChatAdapter.try_format_input_scalar_def(def, input),
-        _ => ChatAdapter.try_format_input_json_def(def, input),
+        OutputFormat::Delimited => ChatAdapter.try_format_input_prepared(def, input, templates),
+        OutputFormat::JsonScalar => ChatAdapter.try_format_input_scalar_def(def, input, templates),
+        _ => ChatAdapter.try_format_input_json_prepared(def, input, templates),
     }
 }
 
@@ -3586,16 +3619,20 @@ async fn register_code(
 // Run state
 // ---------------------------------------------------------------------------
 
+type Frames = SecondaryMap<NodeId, Option<JsonMap>>;
+
 /// Call-scoped run state; never stored on the interpreter. Concurrent runs
 /// (with different overlays) share one `Arc<Program>`.
-struct Cx {
+struct Cx<'a> {
     overlay: Option<Arc<Overlay>>,
     meter: Arc<BudgetMeter>,
     /// Completed node outputs — `PortRef::Out` resolution.
-    frames: SecondaryMap<NodeId, Option<JsonMap>>,
+    frames: Frames,
     /// Scope-input stack (`$.field`): program input at root, merged carry
     /// frames inside loops.
     inputs: Vec<JsonMap>,
+    /// A fork's parent state stays immutable until every branch returns.
+    parent: Option<&'a Cx<'a>>,
     /// Retry corrective turn, consumed by the next leaf evaluation.
     feedback: Option<String>,
     /// Refine feedback injection: (child leaf, input field, value).
@@ -3606,16 +3643,28 @@ struct Cx {
     leaves: Option<Vec<LeafOutcome>>,
 }
 
-impl Cx {
-    /// A branch context for `ForkJoin`: shared overlay/meter, snapshotted
-    /// frames and inputs, branch-local feedback. Branch-local leaf collection
-    /// when the parent collects; merged back in branch order at the join.
-    fn branch(&self) -> Cx {
+impl Cx<'_> {
+    fn frame(&self, node: NodeId) -> Option<&JsonMap> {
+        self.frames[node]
+            .as_ref()
+            .or_else(|| self.parent.and_then(|parent| parent.frame(node)))
+    }
+
+    fn input(&self) -> Option<&JsonMap> {
+        self.inputs
+            .last()
+            .or_else(|| self.parent.and_then(Cx::input))
+    }
+
+    /// Shares the parent read-only state until join. Branch writes, feedback,
+    /// and leaf collection belong to the new context.
+    fn branch(&self) -> Cx<'_> {
         Cx {
             overlay: self.overlay.clone(),
             meter: Arc::clone(&self.meter),
-            frames: self.frames.clone(),
-            inputs: self.inputs.clone(),
+            frames: SecondaryMap::new(),
+            inputs: Vec::new(),
+            parent: Some(self),
             feedback: None,
             refine_feedback: None,
             leaves: self.leaves.as_ref().map(|_| Vec::new()),
