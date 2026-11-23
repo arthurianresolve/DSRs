@@ -193,15 +193,20 @@ impl ModelEntry {
             url.hash(&mut hasher);
             format!("private:{}", hasher.finish())
         });
-        let mut config = config.clone();
-        config.temperature = crate::core::sampling::effective_temperature(config.temperature);
-        config.api_key = None;
-        config.base_url = config.base_url.as_deref().map(url_origin);
+        let config = Self::redacted_config(config);
         let config_hash = stable_hash_debug(&(config.clone(), endpoint_identity));
         Self {
             config,
             config_hash,
         }
+    }
+
+    pub(crate) fn redacted_config(config: &LMConfig) -> LMConfig {
+        let mut config = config.clone();
+        config.temperature = crate::core::sampling::effective_temperature(config.temperature);
+        config.api_key = None;
+        config.base_url = config.base_url.as_deref().map(url_origin);
+        config
     }
 }
 

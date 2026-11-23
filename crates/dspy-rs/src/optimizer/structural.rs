@@ -580,8 +580,8 @@ impl Structural {
         let mut final_score = baseline_score;
 
         let mut store: RolloutStore = vec![None; num_examples];
-        for rollout in &baseline_eval.rollouts {
-            store[rollout.example] = Some((rollout.eval.clone(), rollout.trace.clone()));
+        for rollout in baseline_eval.rollouts {
+            store[rollout.example] = Some((rollout.eval, rollout.trace));
         }
 
         // The incumbent interpreter: the caller's until an edit is accepted.
@@ -716,18 +716,16 @@ impl Structural {
                     // The child is the new incumbent. Refresh the store from
                     // the full pass, preferring fresh minibatch traces over
                     // cache-served cells.
-                    for rollout in &full.rollouts {
-                        store[rollout.example] =
-                            Some((rollout.eval.clone(), rollout.trace.clone()));
-                    }
-                    for rollout in &mb_eval.rollouts {
-                        if rollout.trace.is_some() {
-                            store[rollout.example] =
-                                Some((rollout.eval.clone(), rollout.trace.clone()));
-                        }
-                    }
                     final_score = full.mean();
                     step.child_minibatch_score = Some(mb_eval.mean());
+                    for rollout in full.rollouts {
+                        store[rollout.example] = Some((rollout.eval, rollout.trace));
+                    }
+                    for rollout in mb_eval.rollouts {
+                        if rollout.trace.is_some() {
+                            store[rollout.example] = Some((rollout.eval, rollout.trace));
+                        }
+                    }
                     step.accepted = true;
                     step.full_score = Some(final_score);
                     accepted += 1;

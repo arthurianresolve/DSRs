@@ -72,6 +72,11 @@ let metric = ExactMatchMetric;
 optimizer.compile_module(&mut module, &train_examples, &metric).await?;
 ```
 
+To overlap instruction proposals across predictors, call `compile_module_with_proposal_concurrency`
+with a `NonZeroUsize` limit. For a custom target and engine, use `compile_with_proposal_concurrency`.
+An engine with a budget cap submits proposals sequentially. With concurrency enabled, requests that
+have started count toward the engine's spend if a proposal fails or the run is cancelled.
+
 The metric is the same `TypedMetric` used by every optimizer: `evaluate(&self, example, prediction, trace) -> Result<Eval>`, where `example` is your full trainset row. MIPROv2 only reads the numerical score; feedback is ignored. See the [evaluation reference](/docs/components/evaluation) for the trait.
 
 `train_examples` is a slice of any row type implementing `ToInput` toward the module's input — a `#[derive(Example)]` struct or `(Input, Output)` tuples; see [Data](/docs/components/data). The module must declare its leaves with `predictors!`; see [Modules](/docs/components/modules#predictor-discovery-predictors).

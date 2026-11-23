@@ -151,6 +151,31 @@ fn jinja_program(template: &str) -> Program {
 }
 
 #[tokio::test]
+async fn cached_jinja_template_renders_each_turns_inputs() {
+    let (lm, _) = canned_lm(vec![]).await;
+    let interp = Interpreter::load(
+        jinja_program("{{ this }} with {{ input.context }}"),
+        RuntimeEnv::new().bind_model("m", lm),
+    )
+    .await
+    .unwrap();
+    for (question, context) in [("one", "first"), ("two", "second"), ("three", "third")] {
+        let input = obj(&[("question", json!(question)), ("context", json!(context))]);
+        let opening = interp.conversation_opening(&input, None).unwrap();
+        assert!(
+            opening
+                .messages
+                .last()
+                .unwrap()
+                .content()
+                .contains(&format!(
+                    "[[ ## question ## ]]\n{question} with {context}\n"
+                ))
+        );
+    }
+}
+
+#[tokio::test]
 async fn jinja_render_failure_returns_input_error_before_lm_call() {
     let (lm, client) = canned_lm(vec![]).await;
     let interp = Interpreter::load(
@@ -330,6 +355,66 @@ async fn fork_join_runs_branches_concurrently() {
     let mut components: Vec<&str> = trace.components.iter().map(String::as_str).collect();
     components.sort();
     assert_eq!(components, vec!["left", "right"]);
+}
+
+#[tokio::test]
+async fn nested_forks_read_outer_inputs_and_completed_frames() {
+    let mut b = ProgramBuilder::new("nested-forks");
+    b.model("m", config());
+    let qa = b.sig(
+        SignatureDef::build("QA")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let nested = ir::fork([
+        ir::predict("local_frame", qa).bind("question", ir::out("middle", "answer")),
+        ir::predict("outer_frame", qa).bind("question", ir::out("before", "answer")),
+        ir::predict("outer_input", qa).bind("question", ir::input("question")),
+    ])
+    .join("answer", ir::out("local_frame", "answer"))
+    .named("nested");
+    let branch = ir::seq([
+        ir::predict("middle", qa).bind("question", ir::out("before", "answer")),
+        nested,
+    ])
+    .out("answer", ir::out("nested", "answer"))
+    .named("branch");
+    let outer = ir::fork([
+        branch,
+        ir::predict("peer", qa).bind("question", ir::input("question")),
+    ])
+    .join("answer", ir::out("branch", "answer"))
+    .named("outer");
+    let program = b
+        .main(
+            qa,
+            ir::seq([
+                ir::predict("before", qa).bind("question", ir::input("question")),
+                outer,
+            ])
+            .out("answer", ir::out("outer", "answer")),
+        )
+        .unwrap();
+
+    let reply = text(fields(&[("answer", "frame value")]));
+    let (lm, client) = canned_lm(vec![reply; 6]).await;
+    let interp = Interpreter::load(program, RuntimeEnv::new().bind_model("m", lm))
+        .await
+        .unwrap();
+    let input = obj(&[("question", json!("original input"))]);
+    let (result, trace) = capture(|| interp.run(input, None, Budget::unlimited())).await;
+    assert_eq!(result.unwrap()["answer"], "frame value");
+    assert_eq!(client.call_count(), 6);
+    for (name, expected) in [
+        ("local_frame", "frame value"),
+        ("outer_frame", "frame value"),
+        ("outer_input", "original input"),
+    ] {
+        let span = trace.for_component(name).next().unwrap();
+        assert_eq!(span.input.as_ref().unwrap()["question"], expected);
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,10 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
 
 use anyhow::{Result, anyhow};
 use bon::Builder;
+use futures::stream::{self, StreamExt, TryStreamExt};
 use rand::{Rng, seq::SliceRandom};
 use tracing::debug;
 
@@ -9,7 +12,7 @@ use crate::core::ToInput;
 use crate::evaluate::TypedMetric;
 use crate::optimizer::engine::{BatchEvalOutcome, Candidate, Engine, EngineConfig, EvalOutcome};
 use crate::optimizer::harvest::{collect_demo_candidates, select_demos};
-use crate::optimizer::{OptimizeTarget, Optimizer, OptimizerCommon, Report};
+use crate::optimizer::{LeafInfo, OptimizeTarget, Optimizer, OptimizerCommon, Report};
 use crate::trace::Trace;
 use crate::{Module, Predictors};
 
@@ -237,10 +240,90 @@ impl MIPROv2 {
         M: Module + Predictors,
         MT: TypedMetric<E, M>,
     {
+        self.compile_module_with_proposal_concurrency(module, trainset, metric, NonZeroUsize::MIN)
+            .await
+    }
+
+    /// Optimizes a typed module with up to `limit` instruction proposals in flight.
+    /// See [`Self::compile_with_proposal_concurrency`] for budget and error behavior.
+    pub async fn compile_module_with_proposal_concurrency<E, M, MT>(
+        &self,
+        module: &mut M,
+        trainset: &[E],
+        metric: &MT,
+        limit: NonZeroUsize,
+    ) -> Result<()>
+    where
+        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
+        M: Module + Predictors,
+        MT: TypedMetric<E, M>,
+    {
         let mut target = OptimizeTarget::module(module, trainset, metric);
         let mut engine = Engine::new(Optimizer::engine_config(self));
-        Optimizer::compile(self, &mut target, &mut engine).await?;
+        self.compile_with_proposal_concurrency(&mut target, &mut engine, limit)
+            .await?;
         Ok(())
+    }
+
+    async fn instruction_sets(
+        &self,
+        leaves: &[LeafInfo],
+        observations: &str,
+        engine: &mut Engine,
+        limit: NonZeroUsize,
+    ) -> Result<Vec<Vec<String>>> {
+        let count = self.num_candidates.saturating_sub(1);
+        if count == 0 {
+            return Ok(leaves
+                .iter()
+                .map(|leaf| vec![leaf.instruction.clone()])
+                .collect());
+        }
+        let proposals = if leaves.len() > 1 && limit.get() > 1 {
+            // Charge at admission, so cancellation preserves the cost of
+            // requests that have started. No borrow crosses the LM await.
+            let engine = RefCell::new(engine);
+            stream::iter(leaves.iter().map(|leaf| {
+                super::propose::request_instructions(
+                    self.prompt_model.as_ref(),
+                    self.temperature,
+                    leaf,
+                    &leaf.instruction,
+                    observations.to_owned(),
+                    count,
+                    || engine.borrow_mut().charge(0, 1),
+                )
+            }))
+            .buffered(limit.get())
+            .try_collect::<Vec<_>>()
+            .await?
+        } else {
+            let mut proposals = Vec::with_capacity(leaves.len());
+            for leaf in leaves {
+                proposals.push(
+                    super::propose::propose(
+                        self.prompt_model.as_ref(),
+                        self.temperature,
+                        leaf,
+                        &leaf.instruction,
+                        observations.to_owned(),
+                        count,
+                        engine,
+                    )
+                    .await?,
+                );
+            }
+            proposals
+        };
+        Ok(leaves
+            .iter()
+            .zip(proposals)
+            .map(|(leaf, proposals)| {
+                std::iter::once(leaf.instruction.clone())
+                    .chain(proposals)
+                    .collect()
+            })
+            .collect())
     }
 }
 
@@ -250,11 +333,28 @@ impl Optimizer for MIPROv2 {
         self.common().engine_config()
     }
 
-    #[tracing::instrument(name = "dsrs.mipro.compile", skip_all, fields(trials = self.num_trials, candidates = self.num_candidates))]
     async fn compile(
         &self,
         target: &mut OptimizeTarget<'_>,
         engine: &mut Engine,
+    ) -> Result<Report> {
+        self.compile_with_proposal_concurrency(target, engine, NonZeroUsize::MIN)
+            .await
+    }
+}
+
+impl MIPROv2 {
+    /// Compiles with up to `limit` simultaneous requests for candidate instructions.
+    ///
+    /// Any engine budget cap selects sequential proposals. Proposal results
+    /// follow leaf order. Requests already admitted count toward engine spend
+    /// if a proposal fails or compilation is cancelled.
+    #[tracing::instrument(name = "dsrs.mipro.compile", skip_all, fields(trials = self.num_trials, candidates = self.num_candidates))]
+    pub async fn compile_with_proposal_concurrency(
+        &self,
+        target: &mut OptimizeTarget<'_>,
+        engine: &mut Engine,
+        limit: NonZeroUsize,
     ) -> Result<Report> {
         let leaves = target.leaves().to_vec();
         if leaves.is_empty() {
@@ -335,23 +435,14 @@ impl Optimizer for MIPROv2 {
             serde_json::to_string(&observations)?
         };
         let observations = crate::utils::truncate(&observations, 24000);
-        let mut instruction_sets = Vec::new();
-        for leaf in &leaves {
-            let mut instructions = vec![leaf.instruction.clone()];
-            instructions.extend(
-                super::propose::propose(
-                    self.prompt_model.as_ref(),
-                    self.temperature,
-                    leaf,
-                    &leaf.instruction,
-                    observations.to_string(),
-                    self.num_candidates.saturating_sub(1),
-                    engine,
-                )
-                .await?,
-            );
-            instruction_sets.push(instructions);
-        }
+        let budget = &engine.config().budget;
+        let capped = budget.max_metric_calls.is_some()
+            || budget.max_lm_calls.is_some()
+            || budget.max_tokens.is_some();
+        let proposal_limit = if capped { NonZeroUsize::MIN } else { limit };
+        let instruction_sets = self
+            .instruction_sets(&leaves, observations, engine, proposal_limit)
+            .await?;
         let score = |outcome: EvalOutcome| -> Result<f64> {
             match outcome {
                 EvalOutcome::Complete(eval) => Ok(eval.mean()),
@@ -372,11 +463,7 @@ impl Optimizer for MIPROv2 {
             .copied()
             .collect();
         let mut pending: Option<(f64, usize, Candidate)> = None;
-        let budget = &engine.config().budget;
-        let batch_size = if budget.max_metric_calls.is_some()
-            || budget.max_lm_calls.is_some()
-            || budget.max_tokens.is_some()
-        {
+        let batch_size = if capped {
             1
         } else {
             self.candidate_batch_size
@@ -554,6 +641,70 @@ mod tests {
                 answer: "one".to_string(),
             },
         )]
+    }
+
+    #[tokio::test]
+    async fn cancelling_parallel_proposals_keeps_admitted_spend() {
+        use crate::{CompletionProvider, LMClient};
+        use rig::completion::{CompletionError, CompletionRequest, CompletionResponse};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        use tokio::sync::Notify;
+
+        struct PendingProposals {
+            started: Arc<AtomicUsize>,
+            limit_reached: Arc<Notify>,
+        }
+
+        impl CompletionProvider for PendingProposals {
+            async fn completion(
+                &self,
+                _request: CompletionRequest,
+            ) -> Result<CompletionResponse<()>, CompletionError> {
+                if self.started.fetch_add(1, Ordering::Relaxed) == 1 {
+                    self.limit_reached.notify_one();
+                }
+                std::future::pending().await
+            }
+        }
+
+        let started = Arc::new(AtomicUsize::new(0));
+        let limit_reached = Arc::new(Notify::new());
+        let lm = test_lm_with_model(TestCompletionModel::new([]))
+            .with_client(LMClient::custom(PendingProposals {
+                started: Arc::clone(&started),
+                limit_reached: Arc::clone(&limit_reached),
+            }))
+            .await
+            .unwrap();
+        let optimizer = MIPROv2::builder()
+            .num_candidates(2)
+            .prompt_model(lm)
+            .build();
+        let leaves: Vec<_> = (0..3)
+            .map(|index| LeafInfo {
+                name: format!("leaf-{index}"),
+                instruction: "seed".into(),
+                default_instruction: "seed".into(),
+                demos: Vec::new(),
+                input_fields: Vec::new(),
+                output_fields: Vec::new(),
+            })
+            .collect();
+        let mut engine = Engine::new(optimizer.engine_config());
+        {
+            let proposals =
+                optimizer.instruction_sets(&leaves, "", &mut engine, NonZeroUsize::new(2).unwrap());
+            tokio::pin!(proposals);
+            tokio::select! {
+                () = limit_reached.notified() => {}
+                result = &mut proposals => panic!("proposal calls should still be in flight: {result:?}"),
+                () = tokio::time::sleep(Duration::from_secs(5)) => panic!("proposal limit was not reached"),
+            }
+        }
+        assert_eq!(started.load(Ordering::Relaxed), 2);
+        assert_eq!(engine.spend().lm_calls, 2);
     }
 
     #[tokio::test]

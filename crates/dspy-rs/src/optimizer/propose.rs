@@ -37,6 +37,29 @@ pub(super) async fn propose(
         engine.budget_allows(1),
         "budget exhausted before instruction proposal"
     );
+    request_instructions(
+        model,
+        temperature,
+        leaf,
+        current,
+        observations,
+        count,
+        || {
+            engine.charge(0, 1);
+        },
+    )
+    .await
+}
+
+pub(super) async fn request_instructions(
+    model: Option<&LM>,
+    temperature: f32,
+    leaf: &LeafInfo,
+    current: &str,
+    observations: String,
+    count: usize,
+    charge: impl FnOnce(),
+) -> Result<Vec<String>> {
     let mut lm = match model {
         Some(lm) => lm.clone(),
         None => crate::core::settings::GLOBAL_SETTINGS
@@ -50,7 +73,7 @@ pub(super) async fn propose(
     };
     lm.config.temperature = temperature;
     let predictor = Predict::<ProposeInstructions>::builder().lm(lm).build();
-    engine.charge(0, 1);
+    charge();
     let result = predictor
         .call(ProposeInstructionsInput {
             task: leaf.schema_for_reflection(),

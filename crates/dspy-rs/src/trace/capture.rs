@@ -283,8 +283,12 @@ pub struct SpanOutcome {
 ///
 /// Used by `Predict`; public so custom leaf modules can record spans too.
 pub fn begin_span(req: SpanRequest<'_>) -> Option<SpanGuard> {
+    begin_span_lazy(|| req)
+}
+
+pub(crate) fn begin_span_lazy<'a>(request: impl FnOnce() -> SpanRequest<'a>) -> Option<SpanGuard> {
     let sink = ACTIVE.try_with(|sink| sink.clone()).ok()?;
-    Some(sink.begin(req))
+    Some(sink.begin(request()))
 }
 
 /// Owns a [`SpanId`] — event/close attribution travels with the guard, never
