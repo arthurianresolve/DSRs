@@ -194,19 +194,55 @@ pub fn set_history_capacity(capacity: usize) {
     GLOBAL.set_capacity(capacity);
 }
 
-pub(crate) struct HistoryCall {
+#[derive(Default)]
+pub(crate) struct CallProgress {
+    pub(crate) events: Vec<SpanEvent>,
+    usage: Option<LmUsage>,
+}
+
+impl CallProgress {
+    pub(crate) fn observe_usage(&mut self, usage: LmUsage) {
+        self.usage = Some(self.total_usage() + usage);
+    }
+
+    pub(crate) fn total_usage(&self) -> LmUsage {
+        self.usage.unwrap_or_default()
+    }
+
+    fn record_error(&mut self, entry: &mut HistoryEntry, error: SpanError) {
+        entry.events = std::mem::take(&mut self.events);
+        entry.usage = self.usage;
+        entry.error = Some(error);
+    }
+}
+
+struct HistoryCapture {
     record: HistoryRecord,
     sinks: Vec<HistoryBuffer>,
     started: Instant,
-    finished: bool,
+}
+
+impl HistoryCapture {
+    fn publish(self, update: impl FnOnce(&mut HistoryEntry, &HistoryRecord)) {
+        {
+            let mut entry = self.record.entry.lock().unwrap_or_else(|p| p.into_inner());
+            update(&mut entry, &self.record);
+            entry.duration_us = self.started.elapsed().as_micros() as u64;
+        }
+        self.record.persist();
+        for sink in self.sinks {
+            sink.push(self.record.clone());
+        }
+    }
+}
+
+pub(crate) struct HistoryCall {
+    pub(crate) progress: CallProgress,
+    capture: Option<HistoryCapture>,
 }
 
 impl HistoryCall {
-    pub(crate) fn begin(
-        config: &LMConfig,
-        chat: &Chat,
-        lm_history: &HistoryBuffer,
-    ) -> Option<Self> {
+    pub(crate) fn begin(config: &LMConfig, chat: &Chat, lm_history: &HistoryBuffer) -> Self {
         let enabled = !super::storage::current_stores().is_empty()
             || lm_history.is_enabled()
             || GLOBAL.is_enabled()
@@ -214,7 +250,10 @@ impl HistoryCall {
                 .try_with(|callers| callers.iter().any(|caller| caller.buffer.is_enabled()))
                 .unwrap_or(false);
         if !enabled {
-            return None;
+            return Self {
+                progress: CallProgress::default(),
+                capture: None,
+            };
         }
         let callers = CALLERS.try_with(Clone::clone).unwrap_or_default();
         let record = HistoryRecord {
@@ -248,18 +287,19 @@ impl HistoryCall {
                 sinks.push(caller.buffer);
             }
         }
-        Some(Self {
-            record,
-            sinks,
-            started: Instant::now(),
-            finished: false,
-        })
+        Self {
+            progress: CallProgress::default(),
+            capture: Some(HistoryCapture {
+                record,
+                sinks,
+                started: Instant::now(),
+            }),
+        }
     }
 
     pub(crate) fn finish(mut self, result: &mut anyhow::Result<LMResponse>) {
-        {
-            let mut entry = self.record.entry.lock().unwrap_or_else(|p| p.into_inner());
-            match result {
+        if let Some(capture) = self.capture.take() {
+            capture.publish(|entry, record| match result {
                 Ok(response) => {
                     entry.response = response
                         .events
@@ -278,40 +318,32 @@ impl HistoryCall {
                         response.usage
                     });
                     entry.events = response.events.clone();
-                    response.history = Some(self.record.clone());
+                    response.history = Some(record.clone());
                 }
-                Err(error) => {
-                    entry.error = Some(SpanError {
+                Err(error) => self.progress.record_error(
+                    entry,
+                    SpanError {
                         kind: SpanErrorKind::Lm,
                         message: error.to_string(),
-                    })
-                }
-            }
-            entry.duration_us = self.started.elapsed().as_micros() as u64;
-        }
-        self.record.persist();
-        self.finished = true;
-        for sink in &self.sinks {
-            sink.push(self.record.clone());
+                    },
+                ),
+            });
         }
     }
 }
 
 impl Drop for HistoryCall {
     fn drop(&mut self) {
-        if !self.finished {
-            {
-                let mut entry = self.record.entry.lock().unwrap_or_else(|p| p.into_inner());
-                entry.duration_us = self.started.elapsed().as_micros() as u64;
-                entry.error = Some(SpanError {
-                    kind: SpanErrorKind::Cancelled,
-                    message: "LM invocation ended before completion".into(),
-                });
-            }
-            self.record.persist();
-            for sink in &self.sinks {
-                sink.push(self.record.clone());
-            }
+        if let Some(capture) = self.capture.take() {
+            capture.publish(|entry, _| {
+                self.progress.record_error(
+                    entry,
+                    SpanError {
+                        kind: SpanErrorKind::Cancelled,
+                        message: "LM invocation ended before completion".into(),
+                    },
+                );
+            });
         }
     }
 }

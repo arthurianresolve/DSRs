@@ -20,8 +20,8 @@
 //! ([`PredictorInfo::set_trace_name`]), so trace spans, candidate entries, and
 //! persistence all address the same names. The target also snapshots
 //! [`LeafInfo`] (schema text, current instruction, demos) — the read surface
-//! strategies build candidates from — and computes the run's baseline
-//! identity exactly once.
+//! strategies build candidates from — and computes the baseline identity.
+//! Module-lane installation refreshes that snapshot from the installed state.
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -42,7 +42,9 @@ use crate::evaluate::{Eval, TypedMetric, evaluator::rollout_traced};
 use crate::ir::graph::Node;
 use crate::ir::interp::{Budget as RunBudget, Interpreter};
 use crate::ir::params::{DemoRow, Overlay, ParamValue};
-use crate::optimizer::engine::{BoundCandidate, Candidate, CandidatePayload, canonical_hash};
+use crate::optimizer::engine::{
+    BoundCandidate, Candidate, CandidatePayload, RolloutDetail, canonical_hash,
+};
 use crate::trace::{JsonMap, Trace, TraceMeta, TraceOutcome, capture_with_meta};
 
 /// How a program-lane strategy tells the engine what "good" means: score one
@@ -133,9 +135,10 @@ impl LeafInfo {
 
 /// The lane-erased evaluation surface the engine drives. Object-safe so the
 /// [`Optimizer`](crate::optimizer::Optimizer) trait can be too.
-pub(crate) trait Lane {
+trait Lane {
     fn num_examples(&self) -> usize;
     fn example_uid(&self, idx: usize) -> u64;
+    fn leaves(&self) -> &[LeafInfo];
     fn baseline(&self) -> u64;
     fn bind(&self, payload: &CandidatePayload) -> Result<BoundCandidate>;
     fn run<'s>(
@@ -143,6 +146,7 @@ pub(crate) trait Lane {
         idx: usize,
         bound: BoundCandidate,
         candidate_hash: u64,
+        detail: RolloutDetail,
         observe_capture: &'s dyn Fn(&Trace),
     ) -> LocalBoxFuture<'s, Result<(Eval, Trace)>>;
     fn output<'s>(&'s self, idx: usize, bound: BoundCandidate)
@@ -162,7 +166,7 @@ struct ModuleLane<'a, E, M, MT> {
     train: &'a [E],
     metric: &'a MT,
     uids: Vec<u64>,
-    baseline: u64,
+    snapshot: ModuleSnapshot,
 }
 
 impl<'a, E, M, MT> ModuleLane<'a, E, M, MT>
@@ -180,14 +184,25 @@ where
     }
 }
 
-/// Content identity of a module's optimizable state: the `predictors()`
-/// snapshot hashed as `{name → PredictState}`. Computed once per target.
-fn module_baseline(leaves: &[(String, &dyn PredictorInfo)]) -> u64 {
-    let states: std::collections::BTreeMap<&str, PredictState> = leaves
-        .iter()
-        .map(|(name, info)| (name.as_str(), info.dump_state()))
-        .collect();
-    canonical_hash(&states)
+struct ModuleSnapshot {
+    leaves: Vec<LeafInfo>,
+    baseline: u64,
+}
+
+impl ModuleSnapshot {
+    fn read(named: &[(String, &dyn PredictorInfo)]) -> Self {
+        let states: std::collections::BTreeMap<&str, PredictState> = named
+            .iter()
+            .map(|(name, info)| (name.as_str(), info.dump_state()))
+            .collect();
+        Self {
+            leaves: named
+                .iter()
+                .map(|(name, info)| LeafInfo::from_predictor(name, *info))
+                .collect(),
+            baseline: canonical_hash(&states),
+        }
+    }
 }
 
 impl<'a, E, M, MT> Lane for ModuleLane<'a, E, M, MT>
@@ -204,8 +219,12 @@ where
         self.uids[idx]
     }
 
+    fn leaves(&self) -> &[LeafInfo] {
+        &self.snapshot.leaves
+    }
+
     fn baseline(&self) -> u64 {
-        self.baseline
+        self.snapshot.baseline
     }
 
     fn bind(&self, payload: &CandidatePayload) -> Result<BoundCandidate> {
@@ -225,6 +244,7 @@ where
         idx: usize,
         bound: BoundCandidate,
         candidate_hash: u64,
+        detail: RolloutDetail,
         observe_capture: &'s dyn Fn(&Trace),
     ) -> LocalBoxFuture<'s, Result<(Eval, Trace)>> {
         Box::pin(async move {
@@ -241,7 +261,14 @@ where
             // rollout: each Predict leaf binds its own entry at call time.
             crate::fx::with_params_shared(
                 params,
-                rollout_traced(module, example, self.metric, meta, true, observe_capture),
+                rollout_traced(
+                    module,
+                    example,
+                    self.metric,
+                    meta,
+                    detail.includes_trace(),
+                    observe_capture,
+                ),
             )
             .await
         })
@@ -267,6 +294,9 @@ where
     }
 
     fn install(&mut self, winner: &Candidate) -> Result<()> {
+        if winner.is_empty() {
+            return Ok(());
+        }
         let mut leaves = HashMap::new();
         for (name, predictor) in self.module.predictors_mut() {
             leaves.entry(name).or_insert(predictor);
@@ -295,7 +325,13 @@ where
                 proposed,
             });
         }
-        apply_predictor_state_updates(&mut updates, "install winner on")
+        let result = apply_predictor_state_updates(&mut updates, "install winner on");
+        drop(updates);
+        drop(leaves);
+        // A custom predictor may fail during rollback. Read the actual state
+        // even when installation reports an error.
+        self.snapshot = ModuleSnapshot::read(&self.module.predictors());
+        result
     }
 
     fn winner_overlay(&self) -> Option<Arc<Overlay>> {
@@ -311,13 +347,16 @@ where
 pub(super) struct ProgramExamples<'a> {
     rows: &'a [DemoRow],
     uids: Cow<'a, [u64]>,
+    order: u64,
 }
 
 impl<'a> ProgramExamples<'a> {
     pub(super) fn new(rows: &'a [DemoRow]) -> Self {
+        let uids: Vec<_> = rows.iter().map(canonical_hash).collect();
         Self {
             rows,
-            uids: Cow::Owned(rows.iter().map(canonical_hash).collect()),
+            order: canonical_hash(&uids),
+            uids: Cow::Owned(uids),
         }
     }
 
@@ -325,6 +364,7 @@ impl<'a> ProgramExamples<'a> {
         ProgramExamples {
             rows: self.rows,
             uids: Cow::Borrowed(&self.uids),
+            order: self.order,
         }
     }
 }
@@ -333,6 +373,7 @@ struct ProgramLane<'a, MT> {
     interp: &'a Interpreter,
     examples: ProgramExamples<'a>,
     metric: &'a MT,
+    leaves: Vec<LeafInfo>,
     program_tag: String,
     winner: Option<Arc<Overlay>>,
 }
@@ -344,6 +385,10 @@ impl<'a, MT: ProgramMetric> Lane for ProgramLane<'a, MT> {
 
     fn example_uid(&self, idx: usize) -> u64 {
         self.examples.uids[idx]
+    }
+
+    fn leaves(&self) -> &[LeafInfo] {
+        &self.leaves
     }
 
     fn baseline(&self) -> u64 {
@@ -367,6 +412,7 @@ impl<'a, MT: ProgramMetric> Lane for ProgramLane<'a, MT> {
         idx: usize,
         bound: BoundCandidate,
         candidate_hash: u64,
+        detail: RolloutDetail,
         observe_capture: &'s dyn Fn(&Trace),
     ) -> LocalBoxFuture<'s, Result<(Eval, Trace)>> {
         Box::pin(async move {
@@ -394,12 +440,14 @@ impl<'a, MT: ProgramMetric> Lane for ProgramLane<'a, MT> {
             // Metric runs outside the capture scope so LM-as-judge metrics
             // don't pollute the execution trace.
             let eval = self.metric.evaluate(example, &output, Some(&trace)).await?;
-            trace.outcome = Some(TraceOutcome {
-                output: Some(output),
-                error: None,
-                eval: Some(eval.clone()),
-                duration_us: started.elapsed().as_micros() as u64,
-            });
+            if detail.includes_trace() {
+                trace.outcome = Some(TraceOutcome {
+                    output: Some(output),
+                    error: None,
+                    eval: Some(eval.clone()),
+                    duration_us: started.elapsed().as_micros() as u64,
+                });
+            }
             Ok((eval, trace))
         })
     }
@@ -506,7 +554,7 @@ fn program_leaves(interp: &Interpreter) -> Vec<LeafInfo> {
 /// module docs for the two lanes.
 pub struct OptimizeTarget<'a> {
     lane: Box<dyn Lane + 'a>,
-    leaves: Vec<LeafInfo>,
+    example_order: u64,
     /// Number of leading example columns that are the validation set, when a
     /// separate valset was supplied.
     val_len: Option<usize>,
@@ -548,32 +596,25 @@ impl<'a> OptimizeTarget<'a> {
         for (name, info) in module.predictors_mut() {
             info.set_trace_name(&name);
         }
-        let named = module.predictors();
-        let leaves: Vec<LeafInfo> = named
-            .iter()
-            .map(|(name, info)| LeafInfo::from_predictor(name, *info))
-            .collect();
-        let baseline = module_baseline(&named);
-        drop(named);
-
+        let snapshot = ModuleSnapshot::read(&module.predictors());
         let val_len = valset.map(<[E]>::len);
         let val = valset.unwrap_or(&[]);
-        let uids = val
+        let uids: Vec<_> = val
             .iter()
             .chain(trainset.iter())
             .map(canonical_hash)
             .collect();
 
         Self {
+            example_order: canonical_hash(&(val_len, &uids)),
             lane: Box::new(ModuleLane {
                 module,
                 val,
                 train: trainset,
                 metric,
                 uids,
-                baseline,
+                snapshot,
             }),
-            leaves,
             val_len,
         }
     }
@@ -598,21 +639,23 @@ impl<'a> OptimizeTarget<'a> {
         let leaves = program_leaves(interp);
         let program_tag = format!("{:016x}", interp.program().meta.program_hash);
         Self {
+            example_order: examples.order,
             lane: Box::new(ProgramLane {
                 interp,
                 examples,
                 metric,
+                leaves,
                 program_tag,
                 winner: None,
             }),
-            leaves,
             val_len: None,
         }
     }
 
-    /// The optimizable leaves' read surface (snapshotted at construction).
+    /// The optimizable leaves' read surface. Module leaves reflect installed
+    /// predictor state. Program leaves describe the interpreter's base program.
     pub fn leaves(&self) -> &[LeafInfo] {
-        &self.leaves
+        self.lane.leaves()
     }
 
     pub fn num_examples(&self) -> usize {
@@ -661,6 +704,10 @@ impl<'a> OptimizeTarget<'a> {
         self.lane.baseline()
     }
 
+    pub(super) fn example_order(&self) -> u64 {
+        self.example_order
+    }
+
     pub(crate) fn example_uid(&self, idx: usize) -> u64 {
         self.lane.example_uid(idx)
     }
@@ -669,15 +716,16 @@ impl<'a> OptimizeTarget<'a> {
         self.lane.bind(payload)
     }
 
-    pub(crate) async fn run(
+    pub(super) async fn run(
         &self,
         idx: usize,
         bound: BoundCandidate,
         candidate_hash: u64,
+        detail: RolloutDetail,
         observe_capture: &dyn Fn(&Trace),
     ) -> Result<(Eval, Trace)> {
         self.lane
-            .run(idx, bound, candidate_hash, observe_capture)
+            .run(idx, bound, candidate_hash, detail, observe_capture)
             .await
     }
 

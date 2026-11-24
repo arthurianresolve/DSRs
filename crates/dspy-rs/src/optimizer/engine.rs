@@ -30,10 +30,9 @@
 //! Rollouts are cached on `(baseline identity, candidate hash, example uid,
 //! cache salt)`:
 //!
-//! - the *baseline identity* is computed once per run when the target is
-//!   constructed (module lane: hash of the predictors() state snapshot;
-//!   program lane: the program hash). Installing a winner and building a new
-//!   target yields a new baseline, invalidating stale entries;
+//! - the *baseline identity* is the current predictor state snapshot's hash
+//!   in the module lane and the immutable program hash in the program lane.
+//!   Changing installed predictor state yields a new baseline for cache lookups;
 //! - the *cache salt* ([`EngineConfig::cache_salt`]) is the sampling-params
 //!   seam: sampling params live on LM configs outside the candidate, so
 //!   callers that change them must bump the salt.
@@ -791,11 +790,31 @@ pub struct Engine {
     config: EngineConfig,
     candidates: Vec<(u64, CandidatePayload)>,
     matrix: ScoreMatrix,
+    matrix_scope: Option<ScoreScope>,
     cache: RolloutCache,
     spend: Spend,
     /// High-water mark of *distinct candidates* with rollouts in flight at
     /// the same instant (see [`peak_candidate_concurrency`](Self::peak_candidate_concurrency)).
     peak_candidates_in_flight: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ScoreScope {
+    baseline: u64,
+    example_order: u64,
+    salt: u64,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum RolloutDetail {
+    ScoreOnly,
+    Trace,
+}
+
+impl RolloutDetail {
+    pub(super) fn includes_trace(self) -> bool {
+        matches!(self, Self::Trace)
+    }
 }
 
 impl Engine {
@@ -804,6 +823,7 @@ impl Engine {
             config,
             candidates: Vec::new(),
             matrix: ScoreMatrix::new(0),
+            matrix_scope: None,
             cache: RolloutCache::default(),
             spend: Spend::default(),
             peak_candidates_in_flight: 0,
@@ -818,8 +838,29 @@ impl Engine {
         &self.spend
     }
 
+    /// Scores for the last completed evaluation's target and sampling scope.
+    /// Use [`Self::matrix_for`] to check a target after changing its state.
     pub fn matrix(&self) -> &ScoreMatrix {
         &self.matrix
+    }
+
+    /// Scores for `target` under the current sampling options, if this is
+    /// the scope of the last completed evaluation.
+    pub fn matrix_for(&self, target: &OptimizeTarget<'_>) -> Option<&ScoreMatrix> {
+        (self.matrix_scope == Some(self.score_scope(target))).then_some(&self.matrix)
+    }
+
+    fn score_scope(&self, target: &OptimizeTarget<'_>) -> ScoreScope {
+        let incoming = crate::current_sampling_options();
+        ScoreScope {
+            baseline: target.baseline(),
+            example_order: target.example_order(),
+            salt: canonical_hash(&(
+                self.config.cache_salt,
+                incoming.id.as_deref(),
+                incoming.temperature.map(f32::to_bits),
+            )),
+        }
     }
 
     /// The rollout cache. Keys are `(baseline identity, candidate hash,
@@ -926,7 +967,8 @@ impl Engine {
         candidates: &[usize],
         subset: Option<&[usize]>,
     ) -> Result<BatchEvalOutcome> {
-        self.evaluate_batch(target, candidates, subset, true).await
+        self.evaluate_batch(target, candidates, subset, RolloutDetail::Trace)
+            .await
     }
 
     /// Evaluates a scoring batch and releases each trace after metric and usage processing.
@@ -936,7 +978,8 @@ impl Engine {
         candidates: &[usize],
         subset: Option<&[usize]>,
     ) -> Result<BatchEvalOutcome> {
-        self.evaluate_batch(target, candidates, subset, false).await
+        self.evaluate_batch(target, candidates, subset, RolloutDetail::ScoreOnly)
+            .await
     }
 
     #[tracing::instrument(name = "dsrs.optimizer.batch", level = "info", skip_all,
@@ -946,7 +989,7 @@ impl Engine {
         target: &OptimizeTarget<'_>,
         candidates: &[usize],
         subset: Option<&[usize]>,
-        retain_traces: bool,
+        detail: RolloutDetail,
     ) -> Result<BatchEvalOutcome> {
         for &candidate in candidates {
             if candidate >= self.candidates.len() {
@@ -964,13 +1007,8 @@ impl Engine {
             ));
         }
 
-        let baseline = target.baseline();
-        let incoming = crate::current_sampling_options();
-        let salt = canonical_hash(&(
-            self.config.cache_salt,
-            incoming.id.as_deref(),
-            incoming.temperature.map(f32::to_bits),
-        ));
+        let scope = self.score_scope(target);
+        let ScoreScope { baseline, salt, .. } = scope;
 
         // Deduplicate each axis once, retaining first-seen order for scheduling.
         let [unique_candidates, unique_indices] = [candidates, indices.as_slice()].map(|items| {
@@ -1027,13 +1065,17 @@ impl Engine {
             bound.insert(candidate, target.bind(&self.candidates[candidate].1)?);
         }
 
-        let fresh = self
-            .run_rollouts(target, &pending, &bound, retain_traces)
-            .await?;
+        let fresh = self.run_rollouts(target, &pending, &bound, detail).await?;
         self.peak_candidates_in_flight = self.peak_candidates_in_flight.max(fresh.peak_candidates);
 
         let cache_hits = cached.len();
         self.spend.cache_hits += cache_hits;
+
+        if self.matrix_scope != Some(scope) {
+            self.matrix = ScoreMatrix::new(0);
+            self.matrix.ensure_rows(self.candidates.len());
+            self.matrix_scope = Some(scope);
+        }
 
         // Bookkeeping: cache inserts + matrix records.
         for (&(candidate, idx), eval) in &cached {
@@ -1119,7 +1161,8 @@ impl Engine {
         candidate: usize,
         subset: Option<&[usize]>,
     ) -> Result<EvalOutcome> {
-        self.evaluate_one(target, candidate, subset, true).await
+        self.evaluate_one(target, candidate, subset, RolloutDetail::Trace)
+            .await
     }
 
     pub(super) async fn evaluate_scores(
@@ -1128,7 +1171,8 @@ impl Engine {
         candidate: usize,
         subset: Option<&[usize]>,
     ) -> Result<EvalOutcome> {
-        self.evaluate_one(target, candidate, subset, false).await
+        self.evaluate_one(target, candidate, subset, RolloutDetail::ScoreOnly)
+            .await
     }
 
     async fn evaluate_one(
@@ -1136,10 +1180,10 @@ impl Engine {
         target: &OptimizeTarget<'_>,
         candidate: usize,
         subset: Option<&[usize]>,
-        retain_traces: bool,
+        detail: RolloutDetail,
     ) -> Result<EvalOutcome> {
         match self
-            .evaluate_batch(target, &[candidate], subset, retain_traces)
+            .evaluate_batch(target, &[candidate], subset, detail)
             .await?
         {
             BatchEvalOutcome::Complete(mut evals) => Ok(EvalOutcome::Complete(evals.remove(0))),
@@ -1202,7 +1246,7 @@ impl Engine {
         let candidate_hash = self.candidates[candidate].0;
         let incoming = crate::current_sampling_options();
         let concurrency = self.config.concurrency.max(1);
-        let meter = RolloutMeter::new(&mut self.spend);
+        let meter = RolloutMeter::new(&mut self.spend, RolloutDetail::Trace);
         let meter = &meter;
         let mut requests = examples
             .enumerate()
@@ -1382,10 +1426,10 @@ impl Engine {
         target: &OptimizeTarget<'_>,
         pending: &[(usize, usize)],
         bound: &HashMap<usize, BoundCandidate>,
-        retain_traces: bool,
+        detail: RolloutDetail,
     ) -> Result<FreshBatch> {
         let gauge = Gauge::default();
-        let meter = RolloutMeter::new(&mut self.spend);
+        let meter = RolloutMeter::new(&mut self.spend, detail);
         let meter = &meter;
 
         let rollouts = stream::iter(pending.iter().enumerate().map(
@@ -1433,7 +1477,7 @@ impl Engine {
             candidate,
             example,
             eval,
-            trace: retain_traces.then_some(trace),
+            trace: detail.includes_trace().then_some(trace),
         })
         .try_collect()
         .await?;
@@ -1449,15 +1493,17 @@ impl Engine {
 /// publication can wait for success, but started work is charged on every exit.
 struct RolloutMeter<'a> {
     spend: &'a mut Spend,
+    detail: RolloutDetail,
     started: Cell<usize>,
     lm_spans: Cell<usize>,
     tokens: Cell<LmUsage>,
 }
 
 impl<'a> RolloutMeter<'a> {
-    fn new(spend: &'a mut Spend) -> Self {
+    fn new(spend: &'a mut Spend, detail: RolloutDetail) -> Self {
         Self {
             spend,
+            detail,
             started: Cell::default(),
             lm_spans: Cell::default(),
             tokens: Cell::default(),
@@ -1481,7 +1527,13 @@ impl<'a> RolloutMeter<'a> {
             self.tokens.set(tokens);
         };
         target
-            .run(example, bound, candidate_hash, &observe_capture)
+            .run(
+                example,
+                bound,
+                candidate_hash,
+                self.detail,
+                &observe_capture,
+            )
             .await
     }
 }

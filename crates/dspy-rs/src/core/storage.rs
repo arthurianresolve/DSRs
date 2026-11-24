@@ -59,6 +59,25 @@ enum Record<E = HistoryEntry, T = crate::Trace> {
     Execution { trace: T },
 }
 
+enum RecordKey {
+    Invocation { id: String, timestamp: u64 },
+    Execution { id: String },
+}
+
+impl Record {
+    fn into_key(self) -> RecordKey {
+        match self {
+            Self::Invocation { entry } => RecordKey::Invocation {
+                id: entry.id,
+                timestamp: entry.timestamp_us,
+            },
+            Self::Execution { trace } => RecordKey::Execution {
+                id: trace.meta.trace_id,
+            },
+        }
+    }
+}
+
 struct LockedFile<'a>(&'a mut File);
 impl Drop for LockedFile<'_> {
     fn drop(&mut self) {
@@ -140,7 +159,7 @@ impl JournalIndex {
                         offset: self.complete,
                         len: line.len(),
                     };
-                    self.record(decode_record(&line)?, location);
+                    self.record(decode_record(&line)?.into_key(), location);
                 }
                 self.complete += line.len() as u64;
             }
@@ -149,11 +168,9 @@ impl JournalIndex {
         Ok(len)
     }
 
-    fn record(&mut self, record: Record, location: RecordLocation) {
-        match record {
-            Record::Invocation { entry } => {
-                let timestamp = entry.timestamp_us;
-                let id = entry.id;
+    fn record(&mut self, key: RecordKey, location: RecordLocation) {
+        match key {
+            RecordKey::Invocation { id, timestamp } => {
                 if let Some((old, _)) = self.invocations.insert(id.clone(), (timestamp, location)) {
                     if old == timestamp {
                         return;
@@ -162,8 +179,8 @@ impl JournalIndex {
                 }
                 self.newest.insert((timestamp, id));
             }
-            Record::Execution { trace } => {
-                self.traces.insert(trace.meta.trace_id, location);
+            RecordKey::Execution { id } => {
+                self.traces.insert(id, location);
             }
         }
     }
@@ -189,7 +206,7 @@ impl JsonlInteractionStore {
 
     fn locked<T>(
         &self,
-        f: impl FnOnce(&mut File, &JournalIndex, u64) -> Result<T, StorageError>,
+        f: impl FnOnce(&mut File, &mut JournalIndex, u64) -> Result<T, StorageError>,
     ) -> Result<T, StorageError> {
         let mut journal = self.journal.lock().unwrap_or_else(|p| p.into_inner());
         let Journal { file, index } = &mut *journal;
@@ -202,6 +219,9 @@ impl JsonlInteractionStore {
     fn append(&self, record: Record<&HistoryEntry, &crate::Trace>) -> Result<(), StorageError> {
         let mut bytes = serde_json::to_vec(&Revision { version: 1, record })?;
         bytes.push(b'\n');
+        // Use the same v1 decoder as refresh before advancing the cursor. If
+        // the record cannot round-trip, refresh still reports the error.
+        let key = decode_record(&bytes).ok().map(Record::into_key);
         self.locked(|file, index, len| {
             if len > index.complete {
                 file.set_len(index.complete)?;
@@ -209,6 +229,19 @@ impl JsonlInteractionStore {
             file.seek(SeekFrom::Start(index.complete))?;
             file.write_all(&bytes)?;
             file.sync_data()?;
+            if let Some(key) = key
+                && let Ok(modified) = file.metadata().and_then(|meta| meta.modified())
+            {
+                index.record(
+                    key,
+                    RecordLocation {
+                        offset: index.complete,
+                        len: bytes.len(),
+                    },
+                );
+                index.complete += bytes.len() as u64;
+                index.modified = Some(modified);
+            }
             Ok(())
         })
     }

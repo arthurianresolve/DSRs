@@ -1,7 +1,8 @@
 use anyhow::{Result, anyhow};
 use dspy_rs::{
-    CallMetadata, Eval, Module, PredictError, Predicted, Signature, TypedMetric, average_score,
-    evaluate_trainset, evaluate_trainset_with_concurrency,
+    COPRO, CallMetadata, Engine, EngineConfig, Eval, Module, OptimizeTarget, Optimizer, Predict,
+    PredictError, Predicted, Signature, TypedMetric, average_score, evaluate_trainset,
+    evaluate_trainset_with_concurrency,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -123,11 +124,19 @@ struct ScoreOnlyOutput {
     answer: String,
 }
 
-fn unused_output<S: serde::Serializer>(_: &str, _: S) -> Result<S::Ok, S::Error> {
-    panic!("score-only evaluation serialized the prediction");
+fn unused_output<S: serde::Serializer>(value: &str, serializer: S) -> Result<S::Ok, S::Error> {
+    assert!(
+        value == "retained training output",
+        "score-only evaluation serialized the prediction"
+    );
+    serializer.serialize_str(value)
 }
 
-struct ScoreOnlyModule;
+struct ScoreOnlyModule {
+    predictor: Predict<EvalSig>,
+}
+
+dspy_rs::predictors!(ScoreOnlyModule { predictor });
 
 impl Module for ScoreOnlyModule {
     type Input = EvalSigInput;
@@ -177,12 +186,41 @@ impl TypedMetric<(EvalSigInput, EvalSigOutput), ScoreOnlyModule> for ScoreOnlyMe
 async fn score_only_evaluation_keeps_metric_hooks_and_skips_output_serialization() {
     let rows = trainset();
     let metric = ScoreOnlyMetric(AtomicUsize::new(0));
-    let evals = evaluate_trainset(&ScoreOnlyModule, &rows, &metric)
-        .await
-        .unwrap();
+    let module = ScoreOnlyModule {
+        predictor: Predict::new(),
+    };
+    let evals = evaluate_trainset(&module, &rows, &metric).await.unwrap();
     assert_eq!(evals.len(), rows.len());
     assert_eq!(average_score(&evals), 1.0);
     assert_eq!(metric.0.load(Ordering::Relaxed), rows.len());
+}
+
+#[tokio::test]
+async fn copro_score_only_validation_skips_output_serialization() {
+    let mut module = ScoreOnlyModule {
+        predictor: Predict::new(),
+    };
+    let training = [(
+        EvalSigInput {
+            prompt: "retained training output".into(),
+        },
+        EvalSigOutput {
+            answer: "retained training output".into(),
+        },
+    )];
+    let validation = trainset();
+    let metric = ScoreOnlyMetric(AtomicUsize::new(0));
+    let mut target =
+        OptimizeTarget::module_with_valset(&mut module, &training, Some(&validation), &metric);
+    let mut engine = Engine::new(EngineConfig::default());
+    COPRO::builder()
+        .depth(0)
+        .build()
+        .compile(&mut target, &mut engine)
+        .await
+        .unwrap();
+    assert_eq!(metric.0.load(Ordering::Relaxed), 1 + validation.len());
+    assert_eq!(engine.spend().metric_calls, 1 + validation.len());
 }
 
 struct GatedMetric {

@@ -335,8 +335,11 @@ impl DataLoader {
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
-        let rows = Self::load_csv_rows(path, delimiter, has_headers, limits)?;
-        let examples = Self::rows_to_typed::<E>(rows, &opts)?;
+        let mut projection = TypedProjection::new::<E>(&opts);
+        Self::visit_csv_rows(path, delimiter, has_headers, limits, |row| {
+            projection.push(row)
+        })?;
+        let examples: Vec<E> = projection.finish()?;
         debug!(examples = examples.len(), "typed csv examples loaded");
         Ok(examples)
     }
@@ -415,8 +418,9 @@ impl DataLoader {
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
-        let rows = Self::load_parquet_rows(Path::new(path))?;
-        let examples = Self::rows_to_typed::<E>(rows, &opts)?;
+        let mut projection = TypedProjection::new::<E>(&opts);
+        Self::visit_parquet_rows(Path::new(path), |row| projection.push(row))?;
+        let examples: Vec<E> = projection.finish()?;
         debug!(examples = examples.len(), "typed parquet examples loaded");
         Ok(examples)
     }
@@ -544,8 +548,9 @@ impl DataLoader {
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
-        let rows = Self::load_rows_from_parquet_files(&parquet_files)?;
-        let examples = Self::rows_to_typed::<E>(rows, &opts)?;
+        let mut projection = TypedProjection::new::<E>(&opts);
+        Self::visit_parquet_files(&parquet_files, |row| projection.push(row))?;
+        let examples: Vec<E> = projection.finish()?;
         debug!(
             examples = examples.len(),
             "typed hf parquet examples loaded"
@@ -735,30 +740,9 @@ impl DataLoader {
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
-        let fields = row_struct_fields::<E>();
-        let mut projected = Vec::new();
-        let mut projection_error = None;
-        Self::visit_local_jsonl(path, |row| {
-            if let Ok(fields) = &fields
-                && projection_error.is_none()
-            {
-                match project_row(&row, fields, opts) {
-                    Ok(row) => projected.push(row),
-                    Err(err) => projection_error = Some(err),
-                }
-            }
-        })?;
-        // User deserializers only run after the file is valid. An earlier
-        // deserialization error also precedes a later row's projection error.
-        fields?;
-        let examples = projected
-            .into_iter()
-            .map(ProjectedRow::deserialize)
-            .collect::<std::result::Result<_, _>>()?;
-        if let Some(err) = projection_error {
-            return Err(err.into());
-        }
-        Ok(examples)
+        let mut projection = TypedProjection::new::<E>(opts);
+        Self::visit_local_jsonl(path, |row| projection.push(row))?;
+        projection.finish()
     }
 
     fn visit_local_jsonl(
@@ -805,6 +789,19 @@ impl DataLoader {
         has_headers: bool,
         limits: RemoteLoadLimits,
     ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
+        let mut rows = Vec::new();
+        Self::visit_csv_rows(path, delimiter, has_headers, limits, |row| rows.push(row))?;
+        Ok(rows)
+    }
+
+    #[cfg(feature = "data")]
+    fn visit_csv_rows(
+        path: &str,
+        delimiter: char,
+        has_headers: bool,
+        limits: RemoteLoadLimits,
+        visit: impl FnMut(RowRecord),
+    ) -> std::result::Result<(), DataLoadError> {
         if is_url(path) {
             let (bytes, _) = Self::fetch_remote_bytes(path, limits).map_err(|err| match err {
                 DataLoadError::Io(source) => DataLoadError::Csv(source),
@@ -816,7 +813,7 @@ impl DataLoader {
                 .delimiter(delimiter as u8)
                 .has_headers(has_headers)
                 .from_reader(cursor);
-            return Self::collect_csv_rows(&mut reader, has_headers, Some(limits.max_rows));
+            return Self::visit_csv_records(&mut reader, has_headers, Some(limits.max_rows), visit);
         }
 
         let mut reader = ReaderBuilder::new()
@@ -824,15 +821,16 @@ impl DataLoader {
             .has_headers(has_headers)
             .from_path(path)
             .map_err(|err| DataLoadError::Csv(err.into()))?;
-        Self::collect_csv_rows(&mut reader, has_headers, None)
+        Self::visit_csv_records(&mut reader, has_headers, None, visit)
     }
 
     #[cfg(feature = "data")]
-    fn collect_csv_rows<R: std::io::Read>(
+    fn visit_csv_records<R: std::io::Read>(
         reader: &mut csv::Reader<R>,
         has_headers: bool,
         max_rows: Option<usize>,
-    ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
+        mut visit: impl FnMut(RowRecord),
+    ) -> std::result::Result<(), DataLoadError> {
         let header_names = if has_headers {
             Some(
                 reader
@@ -846,27 +844,38 @@ impl DataLoader {
             None
         };
 
-        let mut rows = Vec::new();
+        let mut count = 0;
         for (idx, record) in reader.records().enumerate() {
             if let Some(limit) = max_rows
-                && rows.len() >= limit
+                && idx >= limit
             {
                 return Err(remote_limit("rows", limit));
             }
             let record = record.map_err(|err| DataLoadError::Csv(err.into()))?;
-            rows.push(csv_record_to_row_record(
+            count = idx + 1;
+            visit(csv_record_to_row_record(
                 &record,
-                idx + 1,
+                count,
                 header_names.as_deref(),
             ));
         }
 
-        debug!(rows = rows.len(), "csv rows loaded");
-        Ok(rows)
+        debug!(rows = count, "csv rows loaded");
+        Ok(())
     }
 
     #[cfg(feature = "data")]
     fn load_parquet_rows(path: &Path) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
+        let mut rows = Vec::new();
+        Self::visit_parquet_rows(path, |row| rows.push(row))?;
+        Ok(rows)
+    }
+
+    #[cfg(feature = "data")]
+    fn visit_parquet_rows(
+        path: &Path,
+        mut visit: impl FnMut(RowRecord),
+    ) -> std::result::Result<(), DataLoadError> {
         let file = fs::File::open(path).map_err(|err| DataLoadError::Parquet(err.into()))?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)
             .map_err(|err| DataLoadError::Parquet(err.into()))?;
@@ -874,7 +883,7 @@ impl DataLoader {
             .build()
             .map_err(|err| DataLoadError::Parquet(err.into()))?;
 
-        let mut rows = Vec::new();
+        let mut emitted = 0;
         let mut row_index = 1usize;
 
         for batch_result in reader {
@@ -894,33 +903,33 @@ impl DataLoader {
                 }
 
                 if !values.is_empty() {
-                    rows.push(RowRecord { row_index, values });
+                    visit(RowRecord { row_index, values });
+                    emitted += 1;
                 }
                 row_index += 1;
             }
         }
 
-        debug!(rows = rows.len(), "parquet rows loaded");
-        Ok(rows)
+        debug!(rows = emitted, "parquet rows loaded");
+        Ok(())
     }
 
     #[cfg(feature = "data")]
-    fn load_rows_from_parquet_files(
+    fn visit_parquet_files(
         parquet_files: &[PathBuf],
-    ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
-        let mut all_rows = Vec::new();
+        mut visit: impl FnMut(RowRecord),
+    ) -> std::result::Result<(), DataLoadError> {
         let mut next_index = 1usize;
 
         for file in parquet_files {
-            let mut rows = Self::load_parquet_rows(file)?;
-            for row in &mut rows {
+            Self::visit_parquet_rows(file, |mut row| {
                 row.row_index = next_index;
                 next_index += 1;
-            }
-            all_rows.extend(rows);
+                visit(row);
+            })?;
         }
 
-        Ok(all_rows)
+        Ok(())
     }
 
     #[cfg(feature = "data")]
@@ -1020,6 +1029,50 @@ fn row_struct_fields<E: for<'f> Facet<'f>>()
         .filter(|field| !field.should_skip_deserializing())
         .map(|field| (field.name, field_type_from_shape(field.shape())))
         .collect())
+}
+
+struct TypedProjection<'a> {
+    opts: &'a TypedLoadOptions,
+    fields: std::result::Result<Vec<(&'static str, FieldType)>, DataLoadError>,
+    rows: Vec<ProjectedRow>,
+    error: Option<DataLoadError>,
+}
+
+impl<'a> TypedProjection<'a> {
+    fn new<E: for<'f> Facet<'f>>(opts: &'a TypedLoadOptions) -> Self {
+        Self {
+            opts,
+            fields: row_struct_fields::<E>(),
+            rows: Vec::new(),
+            error: None,
+        }
+    }
+
+    fn push(&mut self, row: RowRecord) {
+        if let Ok(fields) = &self.fields
+            && self.error.is_none()
+        {
+            match project_row(&row, fields, self.opts) {
+                Ok(row) => self.rows.push(row),
+                Err(error) => self.error = Some(error),
+            }
+        }
+    }
+
+    fn finish<E: DeserializeOwned>(self) -> Result<Vec<E>> {
+        self.fields?;
+        // Source validation completes before any user deserializer runs.
+        // A deserialization error on an earlier row wins over a projection error.
+        let examples = self
+            .rows
+            .into_iter()
+            .map(ProjectedRow::deserialize)
+            .collect::<std::result::Result<_, _>>()?;
+        if let Some(error) = self.error {
+            return Err(error.into());
+        }
+        Ok(examples)
+    }
 }
 
 struct ProjectedRow {

@@ -23,6 +23,7 @@ use tracing::{debug, trace, warn};
 
 #[cfg(feature = "cache")]
 use crate::ResponseCache;
+use crate::core::history::{CallProgress, HistoryCall};
 use crate::trace::SpanEvent;
 #[cfg(feature = "cache")]
 use crate::utils::cache::CacheEntry;
@@ -450,7 +451,12 @@ struct ToolLoopResult {
     chat_history: Vec<rig::message::Message>,
     tool_calls: Vec<ToolCall>,
     tool_executions: Vec<String>,
-    events: Vec<SpanEvent>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PreparedCallOptions<'a> {
+    json_mode: bool,
+    output_schema: Option<&'a schemars::Schema>,
 }
 
 /// One executed tool call with the details the trace format records.
@@ -837,7 +843,7 @@ impl LM {
         chat_history: &[rig::message::Message],
         tool_definitions: &[rig::completion::ToolDefinition],
         tool_choice: Option<ToolChoice>,
-        options: &LMCallOptions,
+        options: PreparedCallOptions<'_>,
     ) -> CompletionRequest {
         use rig::OneOrMany;
         CompletionRequest {
@@ -855,9 +861,7 @@ impl LM {
             ),
             max_tokens: Some(self.config.max_tokens as u64),
             tool_choice,
-            additional_params: if options.json_mode
-                && (self.supports_json_mode() || options.force_output_schema)
-            {
+            additional_params: if options.json_mode {
                 match self.client.as_deref() {
                     Some(LMClient::Gemini(_)) => Some(
                         serde_json::json!({"generationConfig":{"responseMimeType":"application/json"}}),
@@ -867,10 +871,7 @@ impl LM {
             } else {
                 None
             },
-            output_schema: (self.supports_output_schema() || options.force_output_schema)
-                .then(|| options.output_schema.clone())
-                .flatten()
-                .map(|value| serde_json::from_value(value).expect("schema validated before call")),
+            output_schema: options.output_schema.cloned(),
         }
     }
 
@@ -878,7 +879,11 @@ impl LM {
     ///
     /// Takes a request *builder* so each attempt constructs its own request from
     /// borrowed parts — no whole-request clone on the common no-retry path.
-    async fn completion_with_retry<F>(&self, build_request: F) -> Result<CompletionResponse<()>>
+    async fn completion_with_retry<F>(
+        &self,
+        build_request: F,
+        progress: &mut CallProgress,
+    ) -> Result<CompletionResponse<()>>
     where
         F: Fn() -> CompletionRequest,
     {
@@ -897,6 +902,7 @@ impl LM {
             }
             match client.completion(request).await {
                 Ok(mut response) => {
+                    progress.observe_usage(response.usage.into());
                     if prompt_tools {
                         decode_prompt_tools(&mut response, tool_required)?;
                     }
@@ -1020,7 +1026,7 @@ impl LM {
             tools,
             chat_history,
             system_prompt,
-            accumulated_usage
+            progress
         ),
         fields(
             initial_tool_count = initial_calls.len(),
@@ -1036,10 +1042,14 @@ impl LM {
         tools: &ToolSet,
         mut chat_history: Vec<rig::message::Message>,
         system_prompt: String,
-        options: &LMCallOptions,
-        accumulated_usage: &mut LmUsage,
+        options: PreparedCallOptions<'_>,
+        progress: &mut CallProgress,
     ) -> Result<ToolLoopResult> {
         let max_iterations = self.config.max_tool_iterations as usize;
+        progress.events.push(SpanEvent::Exchange {
+            message: assistant_message_from_content(&initial_assistant_content),
+            usage: initial_usage,
+        });
         if max_iterations == 0 {
             return Err(ToolLoopError::IterationLimit {
                 limit: max_iterations,
@@ -1048,10 +1058,6 @@ impl LM {
         }
         let mut all_tool_calls = Vec::new();
         let mut all_tool_executions = Vec::new();
-        let mut events = vec![SpanEvent::Exchange {
-            message: assistant_message_from_content(&initial_assistant_content),
-            usage: initial_usage,
-        }];
 
         // Execute the initial tool call batch
         debug!(count = initial_calls.len(), "executing initial tool calls");
@@ -1059,7 +1065,7 @@ impl LM {
         for record in &results {
             all_tool_calls.push(record.call.clone());
             all_tool_executions.push(record.result.clone());
-            events.push(record.to_event());
+            progress.events.push(record.to_event());
         }
 
         // Add initial assistant turn to history, preserving ALL content blocks
@@ -1074,21 +1080,22 @@ impl LM {
         // Now loop until we get a text response
         for iteration in 1..=max_iterations {
             let response = self
-                .completion_with_retry(|| {
-                    self.build_completion_request(
-                        &system_prompt,
-                        &chat_history,
-                        tools.definitions(),
-                        Some(ToolChoice::Auto),
-                        options,
-                    )
-                })
+                .completion_with_retry(
+                    || {
+                        self.build_completion_request(
+                            &system_prompt,
+                            &chat_history,
+                            tools.definitions(),
+                            Some(ToolChoice::Auto),
+                            options,
+                        )
+                    },
+                    progress,
+                )
                 .await?;
 
             let round_usage = LmUsage::from(response.usage);
-            accumulated_usage.prompt_tokens += response.usage.input_tokens;
-            accumulated_usage.completion_tokens += response.usage.output_tokens;
-            accumulated_usage.total_tokens += response.usage.total_tokens;
+            let accumulated_usage = progress.total_usage();
             debug!(
                 iteration,
                 prompt_tokens = accumulated_usage.prompt_tokens,
@@ -1103,7 +1110,7 @@ impl LM {
                 ChoiceAction::Text(text) => {
                     debug!(iteration, "tool loop completed with text");
                     let message = Message::assistant(&text);
-                    events.push(SpanEvent::Exchange {
+                    progress.events.push(SpanEvent::Exchange {
                         message: message.clone(),
                         usage: round_usage,
                     });
@@ -1112,7 +1119,6 @@ impl LM {
                         chat_history,
                         tool_calls: all_tool_calls,
                         tool_executions: all_tool_executions,
-                        events,
                     });
                 }
                 ChoiceAction::ToolCalls {
@@ -1120,6 +1126,10 @@ impl LM {
                     full_content,
                     ..
                 } => {
+                    progress.events.push(SpanEvent::Exchange {
+                        message: assistant_message_from_content(&full_content),
+                        usage: round_usage,
+                    });
                     if iteration == max_iterations {
                         warn!(max_iterations, "max tool iterations reached");
                         return Err(ToolLoopError::IterationLimit {
@@ -1127,10 +1137,6 @@ impl LM {
                         }
                         .into());
                     }
-                    events.push(SpanEvent::Exchange {
-                        message: assistant_message_from_content(&full_content),
-                        usage: round_usage,
-                    });
                     let context = format!("iteration {}", iteration);
                     debug!(iteration, count = calls.len(), "executing tool calls");
                     let results =
@@ -1138,7 +1144,7 @@ impl LM {
                     for record in &results {
                         all_tool_calls.push(record.call.clone());
                         all_tool_executions.push(record.result.clone());
-                        events.push(record.to_event());
+                        progress.events.push(record.to_event());
                     }
 
                     // Preserve full content (reasoning + tool calls) in history
@@ -1237,15 +1243,29 @@ impl LM {
         tool_loop_mode: ToolLoopMode,
         options: LMCallOptions,
     ) -> Result<LMResponse> {
-        let history =
-            crate::core::history::HistoryCall::begin(&self.config, &messages, &self.history);
+        self.call_with_toolset_and_options_ref(messages, tools, tool_loop_mode, &options)
+            .await
+    }
+
+    pub(crate) async fn call_with_toolset_and_options_ref(
+        &self,
+        messages: Chat,
+        tools: &ToolSet,
+        tool_loop_mode: ToolLoopMode,
+        options: &LMCallOptions,
+    ) -> Result<LMResponse> {
+        let mut history = HistoryCall::begin(&self.config, &messages, &self.history);
         debug!(target: "dsrs::content", prompt = %messages.to_json(), "formatted LM prompt");
         let mut result = self
-            .call_with_toolset_inner(messages, tools, tool_loop_mode, options)
+            .call_with_toolset_inner(
+                messages,
+                tools,
+                tool_loop_mode,
+                options,
+                &mut history.progress,
+            )
             .await;
-        if let Some(history) = history {
-            history.finish(&mut result);
-        }
+        history.finish(&mut result);
         if let Ok(response) = &result {
             debug!(target: "dsrs::content", response = %response.output.to_json(), "raw LM response");
         }
@@ -1257,15 +1277,20 @@ impl LM {
         messages: Chat,
         tools: &ToolSet,
         tool_loop_mode: ToolLoopMode,
-        options: LMCallOptions,
+        options: &LMCallOptions,
+        progress: &mut CallProgress,
     ) -> Result<LMResponse> {
         validate_cache_setting(self.config.cache)?;
-        if (self.supports_output_schema() || options.force_output_schema)
-            && let Some(schema) = options.output_schema.clone()
-        {
-            let _: schemars::Schema = serde_json::from_value(schema)
-                .map_err(|source| crate::LmCallError::InvalidOutputSchema { source })?;
-        }
+        let output_schema = if self.supports_output_schema() || options.force_output_schema {
+            options
+                .output_schema
+                .as_ref()
+                .map(<&schemars::Schema>::try_from)
+                .transpose()
+                .map_err(|source| crate::LmCallError::InvalidOutputSchema { source })?
+        } else {
+            None
+        };
         if options.json_mode && !(self.supports_json_mode() || options.force_output_schema) {
             return Err(crate::LmCallError::UnsupportedOption {
                 option: "JSON mode",
@@ -1276,7 +1301,7 @@ impl LM {
         // side-effectful user code and must not be replayed from cache.
         #[cfg(feature = "cache")]
         let cache_key = if self.config.cache && self.cache_handler.is_some() && tools.is_empty() {
-            Some(self.cache_key_for(&messages, &options))
+            Some(self.cache_key_for(&messages, options))
         } else {
             None
         };
@@ -1322,19 +1347,26 @@ impl LM {
         } else {
             None
         };
+        let prepared = PreparedCallOptions {
+            json_mode: options.json_mode,
+            output_schema,
+        };
 
         // Execute the completion using enum dispatch (zero-cost abstraction),
         // retrying transient failures with backoff.
         let response = self
-            .completion_with_retry(|| {
-                self.build_completion_request(
-                    &system_prompt,
-                    &chat_history,
-                    tool_definitions,
-                    tool_choice.clone(),
-                    &options,
-                )
-            })
+            .completion_with_retry(
+                || {
+                    self.build_completion_request(
+                        &system_prompt,
+                        &chat_history,
+                        tool_definitions,
+                        tool_choice.clone(),
+                        prepared,
+                    )
+                },
+                progress,
+            )
             .await?;
         debug!(
             prompt_tokens = response.usage.input_tokens,
@@ -1344,7 +1376,6 @@ impl LM {
         );
 
         let first_usage = LmUsage::from(response.usage);
-        let mut accumulated_usage = first_usage;
 
         // Scan ALL content blocks in the response — don't just look at .first().
         // Responses can be [Reasoning, ToolCall] or [Reasoning, Text].
@@ -1352,12 +1383,11 @@ impl LM {
         let mut returned_tool_calls = Vec::new();
         let mut assistant_content_for_history: Option<rig::OneOrMany<AssistantContent>> = None;
         let mut append_output_after_history = false;
-        let mut events: Vec<SpanEvent> = Vec::new();
         let classified = classify_choice(response.choice)?;
         let first_choice = match classified {
             ChoiceAction::Text(text) => {
                 let message = Message::assistant(&text);
-                events.push(SpanEvent::Exchange {
+                progress.events.push(SpanEvent::Exchange {
                     message: message.clone(),
                     usage: first_usage,
                 });
@@ -1377,8 +1407,8 @@ impl LM {
                         tools,
                         chat_history,
                         system_prompt.clone(),
-                        &options,
-                        &mut accumulated_usage,
+                        prepared,
+                        progress,
                     )
                     .await?;
                 let message = result.message.clone();
@@ -1398,7 +1428,7 @@ impl LM {
                         .map(AssistantContent::ToolCall)
                         .collect::<Vec<_>>(),
                 )?;
-                events.push(SpanEvent::Exchange {
+                progress.events.push(SpanEvent::Exchange {
                     message: assistant_message_from_content(&content),
                     usage: first_usage,
                 });
@@ -1411,7 +1441,7 @@ impl LM {
                 assistant_text,
                 full_content,
             } => {
-                events.push(SpanEvent::Exchange {
+                progress.events.push(SpanEvent::Exchange {
                     message: assistant_message_from_content(&full_content),
                     usage: first_usage,
                 });
@@ -1420,6 +1450,7 @@ impl LM {
                 Message::assistant(assistant_text.unwrap_or_default())
             }
         };
+        let accumulated_usage = progress.total_usage();
 
         // Populate the cache on the plain-text path only: `append_output_after_history`
         // covers the tool-loop and "no tools available" fallbacks, and
@@ -1472,23 +1503,19 @@ impl LM {
             "lm call completed"
         );
 
+        let (tool_calls, tool_executions) = match tool_loop_result {
+            Some(result) => (result.tool_calls, result.tool_executions),
+            None => (returned_tool_calls, Vec::new()),
+        };
         Ok(LMResponse {
             cache_hit: false,
             history: None,
             output: first_choice,
             usage: accumulated_usage,
             chat: full_chat,
-            tool_calls: tool_loop_result
-                .as_ref()
-                .map(|result| result.tool_calls.clone())
-                .unwrap_or(returned_tool_calls),
-            tool_executions: tool_loop_result
-                .as_ref()
-                .map(|result| result.tool_executions.clone())
-                .unwrap_or_default(),
-            events: tool_loop_result
-                .map(|result| result.events)
-                .unwrap_or(events),
+            tool_calls,
+            tool_executions,
+            events: std::mem::take(&mut progress.events),
         })
     }
 
@@ -2042,6 +2069,79 @@ pub(crate) mod tests {
             custom_output_schema: false,
             scalar_output_schema: false,
         }
+    }
+
+    #[rstest::rstest]
+    #[case::provider_error(false)]
+    #[case::cancellation(true)]
+    #[tokio::test]
+    async fn unfinished_auto_tool_loop_keeps_completed_round(#[case] cancel: bool) {
+        struct StallAfterFirst {
+            model: TestCompletionModel,
+            started: Arc<tokio::sync::Notify>,
+        }
+
+        impl CompletionProvider for StallAfterFirst {
+            async fn completion(
+                &self,
+                request: CompletionRequest,
+            ) -> Result<CompletionResponse<()>, CompletionError> {
+                if self.model.call_count() == 0 {
+                    return self.model.completion(request).await;
+                }
+                self.started.notify_one();
+                std::future::pending().await
+            }
+        }
+
+        let model = TestCompletionModel::new([make_tool_call("counter")]);
+        model.set_usage(rig::completion::Usage {
+            input_tokens: 15,
+            output_tokens: 5,
+            total_tokens: 20,
+            ..rig::completion::Usage::new()
+        });
+        let mut lm = test_lm_with_model(model.clone());
+        lm.history.set_capacity(4);
+        let started = Arc::new(tokio::sync::Notify::new());
+        if cancel {
+            lm.client = Some(Arc::new(LMClient::custom(StallAfterFirst {
+                model,
+                started: Arc::clone(&started),
+            })));
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tools: Vec<Arc<dyn ToolDyn>> = vec![Arc::new(CountingTool {
+            calls: Arc::clone(&calls),
+        })];
+        let chat = Chat::new(vec![Message::user("Use the counter")]);
+        let task = tokio::spawn({
+            let lm = lm.clone();
+            async move { lm.call(chat, tools).await }
+        });
+        let error_kind = if cancel {
+            tokio::time::timeout(Duration::from_secs(5), started.notified())
+                .await
+                .expect("the second provider call started");
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            crate::trace::SpanErrorKind::Cancelled
+        } else {
+            assert!(task.await.unwrap().is_err());
+            crate::trace::SpanErrorKind::Lm
+        };
+
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        let history = lm.inspect_history(4).await;
+        assert_eq!(history.len(), 1);
+        let entry = &history[0];
+        assert_eq!(entry.error.as_ref().unwrap().kind, error_kind);
+        assert_eq!(entry.usage.unwrap().total_tokens, 20);
+        assert!(matches!(
+            entry.events.as_slice(),
+            [SpanEvent::Exchange { .. }, SpanEvent::ToolRun { .. }]
+        ));
     }
 
     #[cfg(feature = "inflight-dedup")]

@@ -263,3 +263,36 @@ fn native_json_parser_preserves_string_values_and_field_metadata() {
         other => panic!("expected collected parse errors, got {other}"),
     }
 }
+
+#[test]
+fn native_json_parser_preserves_single_and_shared_alias_values() {
+    for shared in [false, true] {
+        let builder = SignatureDef::build("Native")
+            .input("question", FieldType::String)
+            .output_full(IrFieldDef::new("answer", FieldType::String).aliased("wire"));
+        let def = if shared {
+            builder.output_full(IrFieldDef::new("wire", FieldType::String).aliased("other"))
+        } else {
+            builder
+        }
+        .finish()
+        .unwrap();
+        let response = Message::assistant(r#"{"answer":"fallback","wire":"quoted \"value\""}"#);
+        let (output, meta) = ChatAdapter
+            .parse_output_json_def(&def, &TypeTable::default(), &response)
+            .unwrap();
+        let fields: Vec<_> = output.keys().map(String::as_str).collect();
+        assert_eq!(
+            fields,
+            if shared {
+                &["answer", "wire"][..]
+            } else {
+                &["answer"][..]
+            }
+        );
+        for name in fields {
+            assert_eq!(output[name], "quoted \"value\"");
+            assert_eq!(meta[name].raw_text, r#""quoted \"value\"""#);
+        }
+    }
+}

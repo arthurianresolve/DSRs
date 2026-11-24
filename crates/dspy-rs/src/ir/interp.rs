@@ -17,10 +17,10 @@
 use std::collections::{HashMap, HashSet};
 use std::pin::pin;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, OnceLock, RwLock, Weak};
 use std::time::Instant;
 
-use cranelift_entity::SecondaryMap;
+use cranelift_entity::{PrimaryMap, SecondaryMap};
 use futures::future::BoxFuture;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
@@ -512,6 +512,7 @@ pub struct Interpreter {
     /// At most one rendered demo set per leaf. The overlay is never kept alive by the cache.
     demo_messages: RwLock<HashMap<NodeId, CachedDemos>>,
     input_templates: SecondaryMap<SigId, Option<Arc<PreparedInputTemplates>>>,
+    output_schemas: PrimaryMap<SigId, PreparedOutputSchemas>,
     models: SecondaryMap<ModelId, Option<Arc<LM>>>,
     tool_exec: SecondaryMap<ToolId, Option<ToolExec>>,
     /// Extern-hole bindings by leaf name, verified complete at load.
@@ -692,7 +693,9 @@ impl Interpreter {
         }
 
         let mut input_templates = SecondaryMap::new();
+        let mut output_schemas = PrimaryMap::new();
         for (sig, def) in program.sigs.iter() {
+            output_schemas.push(PreparedOutputSchemas::new(def));
             if let Some(templates) = PreparedInputTemplates::new(def) {
                 input_templates[sig] = Some(Arc::new(templates));
             }
@@ -702,6 +705,7 @@ impl Interpreter {
             system_prompts: RwLock::new(HashMap::new()),
             demo_messages: RwLock::new(HashMap::new()),
             input_templates,
+            output_schemas,
             models,
             tool_exec,
             host_holes,
@@ -713,6 +717,59 @@ impl Interpreter {
 
     pub fn program(&self) -> &Arc<Program> {
         &self.program
+    }
+
+    fn output_format(&self, sig: SigId, lm: &LM, allow_scalar: bool) -> OutputFormat {
+        let prepared = &self.output_schemas[sig];
+        if prepared.tool_calls {
+            return OutputFormat::Delimited;
+        }
+        if lm.supports_output_schema()
+            && *prepared.compatible.get_or_init(|| {
+                json_schema_compatible(&self.program.sigs[sig], &self.program.types)
+            })
+        {
+            if allow_scalar && prepared.scalar && lm.supports_scalar_output_schema() {
+                OutputFormat::JsonScalar
+            } else {
+                OutputFormat::JsonSchema
+            }
+        } else if lm.supports_json_mode() {
+            OutputFormat::JsonMode
+        } else {
+            OutputFormat::Delimited
+        }
+    }
+
+    fn output_options(&self, sig: SigId, format: OutputFormat) -> &LMCallOptions {
+        static DELIMITED: LMCallOptions = LMCallOptions {
+            output_schema: None,
+            json_mode: false,
+            force_output_schema: false,
+        };
+        static JSON_MODE: LMCallOptions = LMCallOptions {
+            output_schema: None,
+            json_mode: true,
+            force_output_schema: false,
+        };
+        let prepared = &self.output_schemas[sig];
+        let options = match format {
+            OutputFormat::Delimited => return &DELIMITED,
+            OutputFormat::JsonMode => return &JSON_MODE,
+            OutputFormat::JsonSchema => &prepared.object_options,
+            OutputFormat::JsonScalar => &prepared.scalar_options,
+        };
+        options.get_or_init(|| {
+            let def = &self.program.sigs[sig];
+            let mut schema = json_schema_for_outputs(def, &self.program.types);
+            if format == OutputFormat::JsonScalar {
+                schema = std::mem::take(&mut schema["properties"][&*def.outputs[0].lm_name]);
+            }
+            Box::new(LMCallOptions {
+                output_schema: Some(schema),
+                ..LMCallOptions::default()
+            })
+        })
     }
 
     fn system_prompt(&self, sig: SigId, instruction: &str, format: OutputFormat) -> String {
@@ -1008,6 +1065,7 @@ impl Interpreter {
             Node::AgentLoop(n) => self.p_model(&at, &cx, n.model)?,
             _ => unreachable!("conversation_leaf returns only leaves"),
         };
+        let format = self.output_format(sig, &lm, matches!(&p.nodes[node], Node::Predict(_)));
 
         // This turn's messages, plus the rendered prefix when we own it (an
         // opening turn interns system+demos; a caller-owned continuation has
@@ -1022,12 +1080,6 @@ impl Interpreter {
         } else {
             if let Some(input_map) = input.as_ref() {
                 self.validate_input(&at, def, input_map)?;
-                let format = output_format(&output_schema_options(
-                    &lm,
-                    def,
-                    &p.types,
-                    matches!(&p.nodes[node], Node::Predict(_)),
-                ));
                 let rendered =
                     render_input(def, input_map, format, self.input_templates[sig].as_deref())
                         .map_err(|err| RunError::Input {
@@ -1094,14 +1146,14 @@ impl Interpreter {
                     .exchange_predict(
                         PredictExchange {
                             at: &at,
-                            def,
+                            sig,
+                            format,
                             lm: &lm,
                             meter: &cx.meter,
                             guard,
                         },
                         messages,
                         |messages| ChatAdapter.signature_tools_from_messages(def, messages),
-                        None,
                         true,
                     )
                     .await?;
@@ -1164,12 +1216,12 @@ impl Interpreter {
         exchange: PredictExchange<'_>,
         messages: Vec<Message>,
         declarations: impl FnOnce(&[Message]) -> anyhow::Result<Vec<rig::completion::ToolDefinition>>,
-        options: Option<LMCallOptions>,
         collect_leaf: bool,
     ) -> Result<(JsonMap, Option<LeafOutcome>, Chat), RunError> {
         let PredictExchange {
             at,
-            def,
+            sig,
+            format,
             lm,
             meter,
             guard,
@@ -1188,8 +1240,8 @@ impl Interpreter {
         }
 
         let types = &self.program.types;
-        let options = options.unwrap_or_else(|| output_schema_options(lm, def, types, true));
-        let format = output_format(&options);
+        let def = &self.program.sigs[sig];
+        let options = self.output_options(sig, format);
         let declarations = declarations(&messages).map_err(|error| RunError::Input {
             at: at.into(),
             message: error.to_string(),
@@ -1197,7 +1249,7 @@ impl Interpreter {
         let toolset = ToolSet::from_definitions(declarations);
         let response = match in_span(
             guard.as_ref(),
-            pin!(lm.call_with_toolset_and_options(
+            pin!(lm.call_with_toolset_and_options_ref(
                 Chat::new(messages),
                 &toolset,
                 if toolset.is_empty() {
@@ -1504,12 +1556,7 @@ impl Interpreter {
             _ => unreachable!("conversation_leaf returns only leaves"),
         };
         let lm = self.p_model(p.syms.get(name), cx, model)?;
-        let format = output_format(&output_schema_options(
-            &lm,
-            &p.sigs[sig],
-            &p.types,
-            allow_scalar,
-        ));
+        let format = self.output_format(sig, &lm, allow_scalar);
         self.render_prompt(node, cx, input, format, playbook.as_deref())
     }
 
@@ -1920,8 +1967,7 @@ impl Interpreter {
         let input = self.resolve_bindings(&at, Some(id), &n.binding, cx)?;
 
         let lm = self.p_model(&at, cx, n.model)?;
-        let options = output_schema_options(&lm, def, &p.types, true);
-        let format = output_format(&options);
+        let format = self.output_format(n.sig, &lm, true);
         let (prefix, mut suffix) = self.render_prompt(id, cx, &input, format, None)?;
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
@@ -2002,14 +2048,14 @@ impl Interpreter {
             .exchange_predict(
                 PredictExchange {
                     at: &at,
-                    def,
+                    sig: n.sig,
+                    format,
                     lm: &lm,
                     meter: &cx.meter,
                     guard,
                 },
                 messages,
                 |_| ChatAdapter.signature_tools(def, &input),
-                Some(options),
                 cx.leaves.is_some(),
             )
             .await?;
@@ -2228,7 +2274,7 @@ impl Interpreter {
 
         let policy = self.p_context(cx, n.context_policy);
         let lm = self.p_model(&at, cx, n.model)?;
-        let format = output_format(&output_schema_options(&lm, def, &p.types, false));
+        let format = self.output_format(n.sig, &lm, false);
         let (prefix, mut suffix) =
             self.render_prompt(id, cx, &input, format, policy.playbook.as_deref())?;
         if let Some(feedback) = cx.feedback.take() {
@@ -2416,6 +2462,7 @@ impl Interpreter {
         suspend_on_tools: bool,
     ) -> Result<LoopOutcome, RunError> {
         let types = &self.program.types;
+        let format = self.output_format(lc.n.sig, lc.lm, false);
 
         for turn in start_turn..lc.n.stop.max_turns.get() {
             if lc.meter.try_reserve_call().is_err() {
@@ -2426,8 +2473,7 @@ impl Interpreter {
             }
 
             chat = truncate_history(chat, lc.prefix_len, lc.policy);
-            let options = output_schema_options(lc.lm, lc.def, types, false);
-            let format = output_format(&options);
+            let options = self.output_options(lc.n.sig, format);
             let response = lm_call_toolset(lc.lm, chat, lc.toolset, lc.at, options).await?;
             lc.meter.record_usage(&response.usage);
             run.usage = run.usage + response.usage;
@@ -2534,15 +2580,20 @@ impl Interpreter {
         lc.run_meter
             .try_reserve_call()
             .map_err(|_| RunError::Budget { at: lc.at.into() })?;
-        let options = output_schema_options(lc.lm, lc.def, &self.program.types, false);
-        let format = output_format(&options);
+        let format = self.output_format(lc.n.sig, lc.lm, false);
+        let options = self.output_options(lc.n.sig, format);
         chat.push_message(Message::user(
             "Budget exhausted — wrap up now. Produce the final output fields in the required \
              required output format, without calling any tools.",
         ));
         let response = lc
             .lm
-            .call_with_options(chat, Vec::new(), ToolLoopMode::Auto, options)
+            .call_with_toolset_and_options_ref(
+                chat,
+                &ToolSet::default(),
+                ToolLoopMode::Auto,
+                options,
+            )
             .await
             .map_err(|err| RunError::Lm {
                 at: lc.at.into(),
@@ -3020,7 +3071,8 @@ struct AgentSurface {
 
 struct PredictExchange<'a> {
     at: &'a str,
-    def: &'a SignatureDef,
+    sig: SigId,
+    format: OutputFormat,
     lm: &'a LM,
     meter: &'a BudgetMeter,
     guard: Option<SpanGuard>,
@@ -3084,9 +3136,9 @@ async fn lm_call_toolset(
     chat: Chat,
     toolset: &ToolSet,
     at: &str,
-    options: LMCallOptions,
+    options: &LMCallOptions,
 ) -> Result<crate::core::lm::LMResponse, RunError> {
-    lm.call_with_toolset_and_options(chat, toolset, ToolLoopMode::CallerManaged, options)
+    lm.call_with_toolset_and_options_ref(chat, toolset, ToolLoopMode::CallerManaged, options)
         .await
         .map_err(|err| RunError::Lm {
             at: at.into(),
@@ -3130,17 +3182,27 @@ impl CachedDemos {
     }
 }
 
-fn output_format(options: &LMCallOptions) -> OutputFormat {
-    if let Some(schema) = &options.output_schema {
-        if schema.get("type").and_then(Value::as_str) == Some("string") {
-            OutputFormat::JsonScalar
-        } else {
-            OutputFormat::JsonSchema
+struct PreparedOutputSchemas {
+    tool_calls: bool,
+    scalar: bool,
+    compatible: OnceLock<bool>,
+    object_options: OnceLock<Box<LMCallOptions>>,
+    scalar_options: OnceLock<Box<LMCallOptions>>,
+}
+
+impl PreparedOutputSchemas {
+    fn new(def: &SignatureDef) -> Self {
+        Self {
+            tool_calls: def
+                .outputs
+                .iter()
+                .any(|field| field.special_kind() == Some(crate::SpecialField::ToolCalls)),
+            scalar: matches!(&*def.outputs, [field]
+                if matches!(field.ty, FieldType::String | FieldType::Literal(_))),
+            compatible: OnceLock::new(),
+            object_options: OnceLock::new(),
+            scalar_options: OnceLock::new(),
         }
-    } else if options.json_mode {
-        OutputFormat::JsonMode
-    } else {
-        OutputFormat::Delimited
     }
 }
 
@@ -3197,43 +3259,6 @@ fn parse_response(
         OutputFormat::Delimited => ChatAdapter.parse_output_def(def, types, response),
         OutputFormat::JsonScalar => ChatAdapter.parse_output_scalar_def(def, types, response),
         _ => ChatAdapter.parse_output_json_def(def, types, response),
-    }
-}
-
-fn output_schema_options(
-    lm: &LM,
-    def: &SignatureDef,
-    types: &TypeTable,
-    allow_scalar: bool,
-) -> LMCallOptions {
-    if def
-        .outputs
-        .iter()
-        .any(|field| field.special_kind() == Some(crate::SpecialField::ToolCalls))
-    {
-        return LMCallOptions::default();
-    }
-    if lm.supports_output_schema() && json_schema_compatible(def, types) {
-        let schema = json_schema_for_outputs(def, types);
-        let scalar = allow_scalar
-            && lm.supports_scalar_output_schema()
-            && def.outputs.len() == 1
-            && matches!(def.outputs[0].ty, FieldType::String | FieldType::Literal(_));
-        LMCallOptions {
-            output_schema: Some(if scalar {
-                schema["properties"][&*def.outputs[0].lm_name].clone()
-            } else {
-                schema
-            }),
-            ..LMCallOptions::default()
-        }
-    } else if lm.supports_json_mode() {
-        LMCallOptions {
-            json_mode: true,
-            ..LMCallOptions::default()
-        }
-    } else {
-        LMCallOptions::default()
     }
 }
 

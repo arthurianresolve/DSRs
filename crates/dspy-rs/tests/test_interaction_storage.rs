@@ -135,6 +135,24 @@ async fn torn_tail_is_recovered_but_corruption_is_rejected() {
     assert!(JsonlInteractionStore::open(&path).is_err());
 }
 
+#[test]
+fn writer_still_validates_revisions_that_cannot_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("trace.jsonl");
+    let store = JsonlInteractionStore::open(&path).unwrap();
+    let mut trace = dspy_rs::Trace::default();
+    trace.meta.trace_id = "invalid-score".into();
+    trace.outcome = Some(dspy_rs::TraceOutcome {
+        eval: Some(dspy_rs::Eval::score(f64::NAN)),
+        duration_us: 0,
+        output: None,
+        error: None,
+    });
+    store.upsert_trace(&trace).unwrap();
+    assert!(store.get_trace("invalid-score").is_err());
+    assert!(JsonlInteractionStore::open(&path).is_err());
+}
+
 #[tokio::test]
 async fn independent_handles_do_not_lose_concurrent_updates() {
     let dir = tempfile::tempdir().unwrap();

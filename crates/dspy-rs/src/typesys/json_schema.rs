@@ -169,12 +169,16 @@ fn type_schema(ty: &FieldType, types: &TypeTable) -> Value {
 
 /// Maps LM-facing field aliases to canonical output keys recursively.
 pub fn canonicalize_output_aliases(value: Value, def: &SignatureDef, types: &TypeTable) -> Value {
-    let fields = def
-        .outputs
-        .iter()
-        .map(|f| (f.lm_name.as_ref(), f.name.as_ref(), &f.ty))
-        .collect::<Vec<_>>();
-    canonicalize_object(value, &fields, types)
+    let Value::Object(input) = value else {
+        return value;
+    };
+    Value::Object(canonicalize_object(
+        input,
+        def.outputs
+            .iter()
+            .map(|f| (f.lm_name.as_ref(), f.name.as_ref(), &f.ty)),
+        types,
+    ))
 }
 
 /// Rewrites canonical output keys to LM-facing names in few-shot JSON examples.
@@ -250,23 +254,29 @@ fn alias_nested(value: &mut Value, ty: &FieldType, types: &TypeTable) {
     }
 }
 
-fn canonicalize_object(
-    value: Value,
-    fields: &[(&str, &str, &FieldType)],
+fn canonicalize_object<'a>(
+    mut input: Map<String, Value>,
+    fields: impl ExactSizeIterator<Item = (&'a str, &'a str, &'a FieldType)>,
     types: &TypeTable,
-) -> Value {
-    let Value::Object(input) = value else {
-        return value;
-    };
+) -> Map<String, Value> {
+    let single = fields.len() == 1;
     let mut out = Map::new();
     for (lm, canonical, ty) in fields {
-        let Some(mut value) = input.get(*lm).or_else(|| input.get(*canonical)).cloned() else {
+        // An alias can also be another field's canonical key.
+        let selected = if single {
+            input
+                .swap_remove(lm)
+                .or_else(|| input.swap_remove(canonical))
+        } else {
+            input.get(lm).or_else(|| input.get(canonical)).cloned()
+        };
+        let Some(mut value) = selected else {
             continue;
         };
         canonicalize_nested(&mut value, ty, types);
-        out.insert((*canonical).into(), value);
+        out.insert(canonical.into(), value);
     }
-    Value::Object(out)
+    out
 }
 
 fn canonicalize_nested(value: &mut Value, ty: &FieldType, types: &TypeTable) {
@@ -274,15 +284,16 @@ fn canonicalize_nested(value: &mut Value, ty: &FieldType, types: &TypeTable) {
         FieldType::Optional(inner) => canonicalize_nested(value, inner, types),
         FieldType::List(inner) => if let Value::Array(values) = value { for value in values { canonicalize_nested(value, inner, types); } },
         FieldType::Class(name) => {
-            if let Some(class) = types.classes.get(name) {
-                if let Some(input) = value.as_object() {
-                    let input = input.clone();
-                    let mut fields = Vec::new();
-                    for field in &class.fields {
-                        fields.push((field.rendered_name.as_str(), field.name.as_str(), &field.field_type));
-                    }
-                    *value = canonicalize_object(Value::Object(input), &fields, types);
-                }
+            if let Some(class) = types.classes.get(name)
+                && let Value::Object(input) = value
+            {
+                *input = canonicalize_object(
+                    std::mem::take(input),
+                    class.fields.iter().map(|field| {
+                        (field.rendered_name.as_str(), field.name.as_str(), &field.field_type)
+                    }),
+                    types,
+                );
             }
         }
         FieldType::Map(_, item) => if let Value::Object(values) = value { for value in values.values_mut() { canonicalize_nested(value, item, types); } },

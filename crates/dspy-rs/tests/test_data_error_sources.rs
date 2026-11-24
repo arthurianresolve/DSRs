@@ -87,6 +87,32 @@ fn json_and_mapper_failures_keep_the_typed_original_cause() {
     );
 }
 
+#[cfg(feature = "data")]
+#[test]
+fn typed_csv_reports_late_source_errors_before_projection_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rows.csv");
+    let load = || {
+        DataLoader::load_csv::<Row>(
+            path.to_str().unwrap(),
+            ',',
+            true,
+            TypedLoadOptions::default(),
+        )
+    };
+    std::fs::write(&path, b"other\nfirst\ntoo,many\n").unwrap();
+    assert!(matches!(
+        load().unwrap_err().downcast_ref::<DataLoadError>(),
+        Some(DataLoadError::Csv(_))
+    ));
+
+    std::fs::write(&path, b"other\nfirst\n").unwrap();
+    assert!(matches!(
+        load().unwrap_err().downcast_ref::<DataLoadError>(),
+        Some(DataLoadError::MissingField { row: 1, .. })
+    ));
+}
+
 #[test]
 fn jsonl_mapper_keeps_line_numbers_and_the_unterminated_final_row() {
     let dir = tempfile::tempdir().unwrap();

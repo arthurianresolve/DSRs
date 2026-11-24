@@ -940,30 +940,60 @@ async fn install_changes_baseline_identity_and_invalidates_the_cache() {
         .unwrap();
     assert_eq!(engine.spend().lm_calls, 2);
 
-    // Install a winner (the run's one mutation) and start a new run: the
-    // module skeleton changed, so a fresh target computes a new baseline
-    // identity and cached entries for the old baseline must NOT be served.
-    target
-        .install(&Candidate::with_instruction("predictor", "installed"))
-        .unwrap();
-    drop(target);
-    let target = OptimizeTarget::module(&mut module, &examples, &metric);
-
-    client.push_response(answer_response("0"));
-    client.push_response(answer_response("1"));
-    let eval = engine
+    target.install(&Candidate::new()).unwrap();
+    assert!(engine.matrix_for(&target).is_some());
+    let warm = engine
         .evaluate(&target, candidate, None)
         .await
         .unwrap()
         .completed()
         .unwrap();
+    assert!(warm.rollouts.iter().all(|rollout| rollout.trace.is_none()));
+    assert_eq!(engine.spend().cache_hits, 2);
+
+    target
+        .install(&Candidate::with_instruction("predictor", "installed"))
+        .unwrap();
+    assert_eq!(target.leaves()[0].instruction, "installed");
+    assert!(engine.matrix_for(&target).is_none());
+    client.push_response(answer_response("1"));
+    let eval = engine
+        .evaluate(&target, candidate, Some(&[1]))
+        .await
+        .unwrap()
+        .completed()
+        .unwrap();
+    assert_eq!(engine.spend().lm_calls, 3);
+    assert_eq!(engine.spend().cache_hits, 2);
+    assert!(eval.rollouts[0].trace.is_some());
     assert_eq!(
-        engine.spend().lm_calls,
-        4,
-        "new baseline means fresh rollouts"
+        engine.matrix_for(&target).unwrap().row(candidate),
+        &[None, Some(1.0)]
     );
-    assert_eq!(engine.spend().cache_hits, 0);
-    assert!(eval.rollouts.iter().all(|r| r.trace.is_some()));
+}
+
+#[tokio::test]
+async fn reordered_examples_reuse_rollouts_without_reusing_score_columns() {
+    let mut module = EchoModule::new();
+    let mut examples = trainset(2);
+    let mut engine = Engine::new(EngineConfig::default());
+    let candidate = engine.register(Candidate::new());
+    let target = OptimizeTarget::module(&mut module, &examples, &IndexMetric);
+    engine.evaluate(&target, candidate, None).await.unwrap();
+    drop(target);
+
+    examples.reverse();
+    let target = OptimizeTarget::module(&mut module, &examples, &IndexMetric);
+    assert!(engine.matrix_for(&target).is_none());
+    engine
+        .evaluate(&target, candidate, Some(&[0]))
+        .await
+        .unwrap();
+    assert_eq!(engine.spend().metric_calls, 2);
+    assert_eq!(engine.spend().cache_hits, 1);
+    let current = engine.matrix_for(&target).unwrap();
+    assert_eq!(current.score(candidate, 0), Some(0.1));
+    assert_eq!(current.score(candidate, 1), None);
 }
 
 #[tokio::test]

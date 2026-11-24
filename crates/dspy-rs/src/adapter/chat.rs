@@ -867,8 +867,7 @@ impl ChatAdapter {
         parsed: Value,
         raw_response: impl Fn() -> String,
     ) -> std::result::Result<(JsonMap, IndexMap<String, FieldMeta>), ParseError> {
-        let normalized = canonicalize_output_aliases(parsed, def, types);
-        let Some(values) = normalized.as_object() else {
+        let Value::Object(mut values) = canonicalize_output_aliases(parsed, def, types) else {
             return Err(ParseError::CoercionFailed {
                 field: "<response>".into(),
                 expected_type: "JSON object".into(),
@@ -879,8 +878,14 @@ impl ChatAdapter {
         let mut output = JsonMap::new();
         let mut metas = IndexMap::new();
         let mut errors = Vec::new();
+        let single = def.outputs.len() == 1;
         for field in def.outputs.iter() {
-            let Some(value) = values.get(field.name.as_ref()).cloned() else {
+            let value = if single {
+                values.swap_remove(field.name.as_ref())
+            } else {
+                values.get(field.name.as_ref()).cloned()
+            };
+            let Some(value) = value else {
                 errors.push(ParseError::MissingField {
                     field: field.name.to_string(),
                     raw_response: raw_response(),
