@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -290,7 +291,12 @@ pub(crate) fn begin_span_lazy<'a>(request: impl FnOnce() -> SpanRequest<'a>) -> 
     Some(sink.begin(request(), parent))
 }
 
-pub(crate) async fn in_span<F: Future>(guard: Option<&SpanGuard>, future: F) -> F::Output {
+// Keep large interpreter futures in the caller's frame. The capture scope
+// only needs to own a pinned reference while it polls them.
+pub(crate) async fn in_span<F: Future>(
+    guard: Option<&SpanGuard>,
+    future: Pin<&mut F>,
+) -> F::Output {
     match guard {
         Some(guard) => guard.scope(future).await,
         None => future.await,

@@ -15,6 +15,7 @@
 //!   one span whose model is the reserved `sandbox:quickjs` config.
 
 use std::collections::{HashMap, HashSet};
+use std::pin::pin;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock, Weak};
 use std::time::Instant;
@@ -936,7 +937,7 @@ impl Interpreter {
         };
         let outcome = in_span(
             guard.as_ref(),
-            self.agent_loop(&lc, chat, &mut run, next_turn, true),
+            pin!(self.agent_loop(&lc, chat, &mut run, next_turn, true)),
         )
         .await;
         self.conclude_agent_turn(
@@ -1136,7 +1137,7 @@ impl Interpreter {
                 let mut run = AgentRun::default();
                 let outcome = in_span(
                     guard.as_ref(),
-                    self.agent_loop(&lc, Chat::new(messages), &mut run, 0, suspend_on_tools),
+                    pin!(self.agent_loop(&lc, Chat::new(messages), &mut run, 0, suspend_on_tools)),
                 )
                 .await;
                 self.conclude_agent_turn(
@@ -1196,7 +1197,7 @@ impl Interpreter {
         let toolset = ToolSet::from_definitions(declarations);
         let response = match in_span(
             guard.as_ref(),
-            lm.call_with_toolset_and_options(
+            pin!(lm.call_with_toolset_and_options(
                 Chat::new(messages),
                 &toolset,
                 if toolset.is_empty() {
@@ -1205,7 +1206,7 @@ impl Interpreter {
                     ToolLoopMode::CallerManaged
                 },
                 options,
-            ),
+            )),
         )
         .await
         {
@@ -2105,7 +2106,7 @@ impl Interpreter {
         let started = Instant::now();
         let result = in_span(
             guard.as_ref(),
-            self.execute_hole_impl(&at, &imp, &input, def, &n.caps),
+            pin!(self.execute_hole_impl(&at, &imp, &input, def, &n.caps)),
         )
         .await;
         let duration_us = started.elapsed().as_micros() as u64;
@@ -2336,7 +2337,7 @@ impl Interpreter {
         let mut run = AgentRun::default();
         let outcome = in_span(
             guard.as_ref(),
-            self.agent_loop(&loop_cx, chat, &mut run, 0, false),
+            pin!(self.agent_loop(&loop_cx, chat, &mut run, 0, false)),
         )
         .await;
         let outcome = match outcome {
