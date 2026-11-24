@@ -60,8 +60,7 @@ fn serve(body: &str, delay: Duration) -> (String, thread::JoinHandle<()>) {
         );
         let _ = stream.write_all(response.as_bytes());
     });
-    // The URL-shaped path keeps this local endpoint on the existing HTTP loader path.
-    (format!("http://127.0.0.1:{port}/dataset.com"), handle)
+    (format!("http://127.0.0.1:{port}/dataset"), handle)
 }
 
 fn serve_bytes(body: Vec<u8>, content_type: &str) -> (String, thread::JoinHandle<()>) {
@@ -77,7 +76,7 @@ fn serve_bytes(body: Vec<u8>, content_type: &str) -> (String, thread::JoinHandle
         stream.write_all(headers.as_bytes()).unwrap();
         stream.write_all(&body).unwrap();
     });
-    (format!("http://127.0.0.1:{port}/dataset.com"), handle)
+    (format!("http://127.0.0.1:{port}/dataset"), handle)
 }
 
 #[test]
@@ -285,7 +284,7 @@ fn remote_json_deadline_includes_stalled_body_after_slow_headers() {
     });
     let started = Instant::now();
     let error = DataLoader::load_json_with_limits::<Row>(
-        &format!("http://127.0.0.1:{port}/dataset.com"),
+        &format!("http://127.0.0.1:{port}/dataset"),
         false,
         TypedLoadOptions::default(),
         RemoteLoadLimits {
@@ -322,7 +321,7 @@ fn remote_json_rejects_slow_trickle_after_total_deadline() {
         let _ = stream.write_all(b"0\r\n\r\n");
     });
     let err = DataLoader::load_json_with_limits::<Row>(
-        &format!("http://127.0.0.1:{port}/dataset.com"),
+        &format!("http://127.0.0.1:{port}/dataset"),
         false,
         TypedLoadOptions::default(),
         RemoteLoadLimits {

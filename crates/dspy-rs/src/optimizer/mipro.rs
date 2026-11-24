@@ -389,16 +389,12 @@ impl MIPROv2 {
                 ));
             }
         };
-        let scored_traces: Vec<(f64, &Trace)> = baseline_eval
-            .rollouts
-            .iter()
-            .filter_map(|rollout| {
-                rollout
-                    .trace
-                    .as_ref()
-                    .map(|trace| (rollout.eval.score, trace))
-            })
-            .collect();
+        let scored_traces = baseline_eval.rollouts.iter().filter_map(|rollout| {
+            rollout
+                .trace
+                .as_ref()
+                .map(|trace| (rollout.eval.score, trace))
+        });
 
         // Phase 2: bootstrap demo options from successful spans of well-scored
         // training rollouts. Joint trials sample these alongside incumbent and

@@ -459,7 +459,7 @@ impl Optimizer for SIMBA {
 
             // 2. Rank within-example trajectory gaps. A zero gap has no
             // contrast for introspection and leaves the incumbent untouched.
-            let samples = engine
+            let mut samples = engine
                 .evaluate_sampled(
                     target,
                     current_idx,
@@ -467,33 +467,23 @@ impl Optimizer for SIMBA {
                     2,
                     &format!("simba/{sample_nonce:016x}/{step}"),
                 )
-                .await?;
-            let mut contrast: Option<(f64, usize, Eval, Trace, Eval, Trace)> = None;
-            for (position, &example) in minibatch.iter().enumerate() {
-                let example_samples: Vec<_> = samples
-                    .iter()
-                    .filter(|sample| sample.example_position == position)
-                    .collect();
-                let best = example_samples
-                    .iter()
-                    .max_by(|a, b| a.eval.score.total_cmp(&b.eval.score))
-                    .unwrap();
-                let worst = example_samples
-                    .iter()
-                    .min_by(|a, b| a.eval.score.total_cmp(&b.eval.score))
-                    .unwrap();
+                .await?
+                .into_iter();
+            let mut contrast = None;
+            // The engine returns both samples for each example in request order.
+            while let Some(first) = samples.next() {
+                let second = samples.next().expect("two samples per example");
+                let (best, worst) = if first.eval.score.total_cmp(&second.eval.score).is_gt() {
+                    (first, second)
+                } else {
+                    (second, first)
+                };
                 let gap = best.eval.score - worst.eval.score;
-                if gap > 0.0 && contrast.as_ref().map_or(true, |(old, ..)| gap > *old) {
-                    contrast = Some((
-                        gap,
-                        example,
-                        best.eval.clone(),
-                        best.trace.clone(),
-                        worst.eval.clone(),
-                        worst.trace.clone(),
-                    ));
+                if gap > 0.0 && contrast.as_ref().is_none_or(|(old, _, _)| gap > *old) {
+                    contrast = Some((gap, best, worst));
                 }
             }
+            drop(samples);
             let parent = match engine
                 .evaluate(target, current_idx, Some(&minibatch))
                 .await?
@@ -502,15 +492,7 @@ impl Optimizer for SIMBA {
                 EvalOutcome::BudgetExhausted { .. } => break,
             };
             let threshold = parent.mean();
-            let Some((
-                contrast_gap,
-                contrast_example,
-                best_eval,
-                best_trace,
-                worst_eval,
-                worst_trace,
-            )) = contrast
-            else {
+            let Some((contrast_gap, best, worst)) = contrast else {
                 steps.push(SimbaStep {
                     step,
                     move_kind: SimbaMove::NoOp,
@@ -523,10 +505,11 @@ impl Optimizer for SIMBA {
                 });
                 continue;
             };
+            let contrast_example = best.example;
 
             // 3. Propose exactly one move.
-            let demo_child = if best_eval.score >= self.min_demo_score {
-                self.append_demo_child(&leaves, &current, best_eval.score, &best_trace)
+            let demo_child = if best.eval.score >= self.min_demo_score {
+                self.append_demo_child(&leaves, &current, best.eval.score, &best.trace)
             } else {
                 None
             };
@@ -537,7 +520,7 @@ impl Optimizer for SIMBA {
             let (child, move_kind) = match demo_child {
                 Some(child) => (child, SimbaMove::AppendDemo),
                 None => {
-                    let leaf = Self::rule_target(&leaves, Some(&worst_trace));
+                    let leaf = Self::rule_target(&leaves, Some(&worst.trace));
                     let base_instruction = match current.instruction_of(&leaf.name) {
                         Some(instruction) => instruction.to_string(),
                         None => leaf.instruction.clone(),
@@ -546,9 +529,9 @@ impl Optimizer for SIMBA {
                         .propose_rule(
                             leaf,
                             &base_instruction,
-                            Self::summarize_rollout(&best_eval, Some(&best_trace)),
-                            Self::summarize_rollout(&worst_eval, Some(&worst_trace)),
-                            &worst_eval,
+                            Self::summarize_rollout(&best.eval, Some(&best.trace)),
+                            Self::summarize_rollout(&worst.eval, Some(&worst.trace)),
+                            &worst.eval,
                             reflector.as_ref(),
                         )
                         .await;

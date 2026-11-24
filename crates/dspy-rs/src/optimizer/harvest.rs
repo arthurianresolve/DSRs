@@ -21,16 +21,13 @@ use serde_json::Value;
 
 use crate::trace::{JsonMap, Trace};
 
-/// A scored demo candidate: the flat demo row plus the input-only fingerprint
-/// used for deduplication.
-pub(crate) struct DemoCandidate {
+/// A scored demo candidate borrowing the span until selection.
+pub(crate) struct DemoCandidate<'a> {
     /// Effective credit score: the span's own eval when the metric attached
     /// one, the whole-rollout metric score otherwise.
     pub score: f64,
-    /// Canonical fingerprint of the input fields, for input-level dedup.
-    pub input_fingerprint: String,
-    /// The demo row: input and output fields merged into one flat object.
-    pub row: JsonMap,
+    input: &'a JsonMap,
+    output: &'a JsonMap,
 }
 
 /// Builds a flat demo row from a span's recorded input/output field maps.
@@ -59,8 +56,8 @@ fn input_fingerprint(input: &JsonMap) -> String {
 pub(crate) fn collect_demo_candidates<'a>(
     rollouts: impl IntoIterator<Item = (f64, &'a Trace)>,
     min_score: f64,
-) -> HashMap<String, Vec<DemoCandidate>> {
-    let mut candidates: HashMap<String, Vec<DemoCandidate>> = HashMap::new();
+) -> HashMap<&'a str, Vec<DemoCandidate<'a>>> {
+    let mut candidates: HashMap<&str, Vec<_>> = HashMap::new();
     for (rollout_score, trace) in rollouts {
         for span in trace.successes() {
             let score = span.eval.as_ref().map_or(rollout_score, |eval| eval.score);
@@ -69,14 +66,11 @@ pub(crate) fn collect_demo_candidates<'a>(
             }
             let name = trace.component_name(span.component);
             if let (Some(input), Some(output)) = (&span.input, &span.output) {
-                candidates
-                    .entry(name.to_string())
-                    .or_default()
-                    .push(DemoCandidate {
-                        score,
-                        input_fingerprint: input_fingerprint(input),
-                        row: demo_from_json(input, output),
-                    });
+                candidates.entry(name).or_default().push(DemoCandidate {
+                    score,
+                    input,
+                    output,
+                });
             }
         }
     }
@@ -87,7 +81,7 @@ pub(crate) fn collect_demo_candidates<'a>(
 /// (span eval when present, rollout score otherwise), deduplicated on input
 /// fields so repeated inputs don't crowd the demo set.
 pub(crate) fn select_demos(
-    candidates: HashMap<String, Vec<DemoCandidate>>,
+    candidates: HashMap<&str, Vec<DemoCandidate<'_>>>,
     max_per_predictor: usize,
 ) -> HashMap<String, Vec<JsonMap>> {
     if max_per_predictor == 0 {
@@ -105,15 +99,15 @@ pub(crate) fn select_demos(
         let mut seen_inputs = HashSet::new();
         let mut demos = Vec::new();
         for candidate in scored {
-            if seen_inputs.insert(candidate.input_fingerprint) {
-                demos.push(candidate.row);
+            if seen_inputs.insert(input_fingerprint(candidate.input)) {
+                demos.push(demo_from_json(candidate.input, candidate.output));
                 if demos.len() >= max_per_predictor {
                     break;
                 }
             }
         }
         if !demos.is_empty() {
-            selected.insert(path, demos);
+            selected.insert(path.to_owned(), demos);
         }
     }
     selected
@@ -236,6 +230,21 @@ mod tests {
             1,
         );
         assert_eq!(harvested_prompts(&demos, "draft"), vec!["q2"]);
+    }
+
+    #[test]
+    fn demo_selection_keeps_first_equal_score_and_deduplicates_inputs() {
+        let trace = trace(
+            &["draft"],
+            vec![
+                span(0, 0, "same", "first", None),
+                span(1, 0, "same", "second", None),
+                span(2, 0, "different", "third", None),
+            ],
+        );
+        let demos = select_demos(collect_demo_candidates([(1.0, &trace)], 1.0), 2);
+        assert_eq!(harvested_prompts(&demos, "draft"), ["same", "different"]);
+        assert_eq!(demos["draft"][0]["answer"], "first");
     }
 
     #[test]

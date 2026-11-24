@@ -13,7 +13,6 @@ use crate::evaluate::{DEFAULT_EVAL_CONCURRENCY, TypedMetric};
 use crate::optimizer::engine::{Candidate, Engine, EngineConfig, EvalOutcome, Spend};
 use crate::optimizer::harvest::{collect_demo_candidates, select_demos};
 use crate::optimizer::{OptimizeTarget, Optimizer, OptimizerCommon, Report};
-use crate::trace::Trace;
 use crate::{Module, Predictors};
 
 /// Few-shot demo bootstrapper — the simplest complete optimizer.
@@ -140,16 +139,12 @@ impl Optimizer for BootstrapFewShot {
         let baseline_score = baseline_eval.mean();
 
         // 2. Harvest demos from successful spans of well-scored rollouts.
-        let scored_traces: Vec<(f64, &Trace)> = baseline_eval
-            .rollouts
-            .iter()
-            .filter_map(|rollout| {
-                rollout
-                    .trace
-                    .as_ref()
-                    .map(|trace| (rollout.eval.score, trace))
-            })
-            .collect();
+        let scored_traces = baseline_eval.rollouts.iter().filter_map(|rollout| {
+            rollout
+                .trace
+                .as_ref()
+                .map(|trace| (rollout.eval.score, trace))
+        });
         let demos = select_demos(
             collect_demo_candidates(scored_traces, self.min_demo_score),
             self.max_demos,

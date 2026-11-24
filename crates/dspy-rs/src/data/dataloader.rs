@@ -335,15 +335,7 @@ impl DataLoader {
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
         let mut projection = TypedProjection::new::<E>(&opts);
-        let source_fields = (opts.unknown_fields == UnknownFieldPolicy::Ignore).then(|| {
-            projection
-                .fields
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .map(|field| field.source)
-                .collect()
-        });
+        let source_fields = projection.source_fields();
         Self::visit_csv_rows(
             path,
             delimiter,
@@ -432,7 +424,10 @@ impl DataLoader {
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
         let mut projection = TypedProjection::new::<E>(&opts);
-        Self::visit_parquet_rows(Path::new(path), |row| projection.push(row))?;
+        let source_fields = projection.source_fields();
+        Self::visit_parquet_rows(Path::new(path), source_fields.as_ref(), |row| {
+            projection.push(row)
+        })?;
         let examples: Vec<E> = projection.finish()?;
         debug!(examples = examples.len(), "typed parquet examples loaded");
         Ok(examples)
@@ -495,9 +490,15 @@ impl DataLoader {
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
         let mut projection = TypedProjection::new::<E>(&opts);
-        Self::visit_hf_rows(dataset_name, subset, split, verbose, |row| {
-            projection.push(row)
-        })?;
+        let source_fields = projection.source_fields();
+        Self::visit_hf_rows(
+            dataset_name,
+            subset,
+            split,
+            verbose,
+            source_fields.as_ref(),
+            |row| projection.push(row),
+        )?;
         let examples: Vec<E> = projection.finish()?;
         debug!(examples = examples.len(), "typed hf examples loaded");
         Ok(examples)
@@ -534,7 +535,9 @@ impl DataLoader {
     {
         let _ = opts;
         let mut rows = Vec::new();
-        Self::visit_hf_rows(dataset_name, subset, split, verbose, |row| rows.push(row))?;
+        Self::visit_hf_rows(dataset_name, subset, split, verbose, None, |row| {
+            rows.push(row)
+        })?;
         let examples = Self::rows_with_mapper(rows, mapper)?;
         debug!(
             examples = examples.len(),
@@ -566,7 +569,10 @@ impl DataLoader {
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
         let mut projection = TypedProjection::new::<E>(&opts);
-        Self::visit_parquet_files(&parquet_files, |row| projection.push(row))?;
+        let source_fields = projection.source_fields();
+        Self::visit_parquet_files(&parquet_files, source_fields.as_ref(), |row| {
+            projection.push(row)
+        })?;
         let examples: Vec<E> = projection.finish()?;
         debug!(
             examples = examples.len(),
@@ -908,13 +914,14 @@ impl DataLoader {
     #[cfg(feature = "data")]
     fn load_parquet_rows(path: &Path) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
         let mut rows = Vec::new();
-        Self::visit_parquet_rows(path, |row| rows.push(row))?;
+        Self::visit_parquet_rows(path, None, |row| rows.push(row))?;
         Ok(rows)
     }
 
     #[cfg(feature = "data")]
     fn visit_parquet_rows(
         path: &Path,
+        source_fields: Option<&HashSet<&str>>,
         mut visit: impl FnMut(RowRecord),
     ) -> std::result::Result<(), DataLoadError> {
         let file = fs::File::open(path).map_err(|err| DataLoadError::Parquet(err.into()))?;
@@ -930,12 +937,20 @@ impl DataLoader {
         for batch_result in reader {
             let batch = batch_result.map_err(|err| DataLoadError::Parquet(err.into()))?;
             let schema = batch.schema();
+            let mut omitted = Vec::new();
             let columns: Vec<_> = schema
                 .fields()
                 .iter()
                 .zip(batch.columns())
                 .filter_map(|(field, column)| {
-                    parquet_column_reader(column.as_ref()).map(|read| (field.name().as_str(), read))
+                    let read = parquet_column_reader(column.as_ref())?;
+                    let name = field.name().as_str();
+                    if source_fields.is_none_or(|fields| fields.contains(name)) {
+                        Some((name, read))
+                    } else {
+                        omitted.push(column.as_ref());
+                        None
+                    }
                 })
                 .collect();
 
@@ -948,7 +963,8 @@ impl DataLoader {
                     }
                 }
 
-                if !values.is_empty() {
+                // An unprojected value can still make this source row exist.
+                if !values.is_empty() || omitted.iter().any(|column| !column.is_null(local_row)) {
                     visit(RowRecord { row_index, values });
                     emitted += 1;
                 }
@@ -963,12 +979,13 @@ impl DataLoader {
     #[cfg(feature = "data")]
     fn visit_parquet_files(
         parquet_files: &[PathBuf],
+        source_fields: Option<&HashSet<&str>>,
         mut visit: impl FnMut(RowRecord),
     ) -> std::result::Result<(), DataLoadError> {
         let mut next_index = 1usize;
 
         for file in parquet_files {
-            Self::visit_parquet_rows(file, |mut row| {
+            Self::visit_parquet_rows(file, source_fields, |mut row| {
                 row.row_index = next_index;
                 next_index += 1;
                 visit(row);
@@ -984,6 +1001,7 @@ impl DataLoader {
         subset: &str,
         split: &str,
         verbose: bool,
+        source_fields: Option<&HashSet<&str>>,
         visit: impl FnMut(RowRecord),
     ) -> std::result::Result<(), DataLoadError> {
         let api = Api::new().map_err(|err| DataLoadError::Hf(err.into()))?;
@@ -1006,13 +1024,14 @@ impl DataLoader {
                     .map_err(|err| DataLoadError::Hf(err.into())),
             )
         });
-        Self::visit_hf_files(files, verbose, visit)
+        Self::visit_hf_files(files, verbose, source_fields, visit)
     }
 
     #[cfg(feature = "data")]
     fn visit_hf_files(
         files: impl IntoIterator<Item = std::result::Result<(HfFileFormat, PathBuf), DataLoadError>>,
         verbose: bool,
+        source_fields: Option<&HashSet<&str>>,
         mut visit: impl FnMut(RowRecord),
     ) -> std::result::Result<(), DataLoadError> {
         let mut rows = 0;
@@ -1033,12 +1052,14 @@ impl DataLoader {
 
             let limits = RemoteLoadLimits::default();
             match format {
-                HfFileFormat::Parquet => Self::visit_parquet_rows(&file_path, &mut emit)?,
+                HfFileFormat::Parquet => {
+                    Self::visit_parquet_rows(&file_path, source_fields, &mut emit)?
+                }
                 HfFileFormat::Json { lines } => {
                     Self::visit_json_rows(path_str, lines, limits, &mut emit)?
                 }
                 HfFileFormat::Csv => {
-                    Self::visit_csv_rows(path_str, ',', true, limits, None, &mut emit)?
+                    Self::visit_csv_rows(path_str, ',', true, limits, source_fields, &mut emit)?
                 }
             }
         }
@@ -1083,7 +1104,7 @@ mod hf_tests {
         let paths = [
             ("split-0.json", r#"[{"value":"one"}]"#),
             ("split-1.jsonl", "\n{\"value\":\"two\"}\n"),
-            ("split-2.csv", "value\nthree\n"),
+            ("split-2.csv", "value,ignored\nthree,[1]\n"),
         ];
         let files = paths.map(|(name, data)| {
             let path = dir.path().join(name);
@@ -1091,7 +1112,9 @@ mod hf_tests {
             Ok((HfFileFormat::from_name(name).unwrap(), path))
         });
         let mut observed = Vec::new();
-        DataLoader::visit_hf_files(files, false, |row| {
+        let fields = HashSet::from(["value"]);
+        DataLoader::visit_hf_files(files, false, Some(&fields), |row| {
+            assert!(!row.values.contains_key("ignored"));
             observed.push((row.row_index, row.get::<String>("value").unwrap()));
         })
         .unwrap();
@@ -1164,6 +1187,18 @@ impl<'a> TypedProjection<'a> {
             rows: Vec::new(),
             error: None,
         }
+    }
+
+    #[cfg(feature = "data")]
+    fn source_fields(&self) -> Option<HashSet<&'a str>> {
+        (self.unknown_fields == UnknownFieldPolicy::Ignore).then(|| {
+            self.fields
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|field| field.source)
+                .collect()
+        })
     }
 
     fn push(&mut self, row: RowRecord) {

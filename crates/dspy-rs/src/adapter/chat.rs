@@ -3,6 +3,7 @@ use indexmap::IndexMap;
 use minijinja::UndefinedBehavior;
 use minijinja::value::{Kwargs, Value as MiniJinjaValue};
 use regex::Regex;
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, OnceLock};
@@ -344,9 +345,9 @@ impl ChatAdapter {
                 continue;
             }
             let tools: Vec<crate::Tool> = if value.is_array() {
-                serde_json::from_value(value.clone())?
+                Vec::deserialize(value)?
             } else {
-                vec![serde_json::from_value(value.clone())?]
+                vec![crate::Tool::deserialize(value)?]
             };
             for tool in tools {
                 let definition = tool.definition()?;
@@ -382,7 +383,7 @@ impl ChatAdapter {
             if value.is_null() && field.ty.is_optional() {
                 continue;
             }
-            let history: crate::History = serde_json::from_value(value.clone())?;
+            let history = crate::History::deserialize(value)?;
             for message in history.messages {
                 messages.push(match message.role.as_str() {
                     "user" => Message::user(message.content),
@@ -410,7 +411,10 @@ impl ChatAdapter {
                 .rev()
                 .filter(|m| m.role == crate::Role::User)
                 .find_map(|message| {
-                    Self::parse_sections(&message.content()).shift_remove(&*field.lm_name)
+                    let content = message.content_cow();
+                    parse_sections_cow(&content)
+                        .shift_remove(&*field.lm_name)
+                        .map(std::borrow::Cow::into_owned)
                 });
             let Some(value) = value else {
                 anyhow::ensure!(

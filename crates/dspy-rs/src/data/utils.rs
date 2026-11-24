@@ -1,15 +1,20 @@
-use regex::Regex;
-use std::sync::LazyLock;
-
-#[allow(dead_code)]
-static IS_URL_PAT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        "((http|https)://)(www.)?[a-zA-Z0-9@:%._\\+~#?&//=]{2,256}\\.[a-z]{2,6}\\b([-a-zA-Z0-9@:%._\\+~#?&//=]*)",
-    )
-    .unwrap()
-});
-
-/// Returns `true` if the string looks like an HTTP(S) URL.
+/// Returns `true` for an explicit HTTP(S) URL scheme.
 pub fn is_url(path: &str) -> bool {
-    IS_URL_PAT.is_match(path)
+    path.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_url;
+
+    #[test]
+    fn routes_only_explicit_http_schemes() {
+        assert!(is_url("http://127.0.0.1:8080/dataset"));
+        assert!(is_url("HTTP://localhost/dataset"));
+        assert!(is_url("https://[::1]/rows"));
+        assert!(!is_url("datasets/http://example.org/rows"));
+        assert!(!is_url("file:///tmp/data.json"));
+    }
 }

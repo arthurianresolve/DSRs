@@ -497,20 +497,26 @@ fn parquet_numeric_round_trip_for_typed_conversion() -> Result<()> {
 
 #[test]
 fn parquet_omits_null_and_unsupported_cells_without_renumbering_rows() -> Result<()> {
+    #[derive(Debug, PartialEq, facet::Facet, serde::Deserialize)]
+    #[facet(crate = facet)]
+    struct OptionalText {
+        text: Option<String>,
+    }
+
     let dir = tempdir()?;
     let path = dir.path().join("nullable.parquet");
     let batch = RecordBatch::try_from_iter([
         (
             "text",
-            Arc::new(StringArray::from(vec![None, Some("kept"), None])) as ArrayRef,
+            Arc::new(StringArray::from(vec![None, Some("kept"), None, None])) as ArrayRef,
         ),
         (
             "fraction",
-            Arc::new(Float64Array::from(vec![None, Some(1.25), None])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![None, Some(1.25), Some(2.5), None])) as ArrayRef,
         ),
         (
             "binary",
-            Arc::new(BinaryArray::from_vec(vec![b"x", b"y", b"z"])) as ArrayRef,
+            Arc::new(BinaryArray::from_vec(vec![b"x", b"y", b"z", b"w"])) as ArrayRef,
         ),
     ])?;
     let mut writer = ArrowWriter::try_new(fs::File::create(&path)?, batch.schema(), None)?;
@@ -524,15 +530,44 @@ fn parquet_omits_null_and_unsupported_cells_without_renumbering_rows() -> Result
     )?;
     assert_eq!(
         rows,
-        [(
-            2,
-            [
-                ("text".to_string(), serde_json::json!("kept")),
-                ("fraction".to_string(), serde_json::json!(1.25)),
-            ]
-            .into()
-        )]
+        [
+            (
+                2,
+                [
+                    ("text".to_string(), serde_json::json!("kept")),
+                    ("fraction".to_string(), serde_json::json!(1.25)),
+                ]
+                .into()
+            ),
+            (3, [("fraction".to_string(), serde_json::json!(2.5))].into()),
+        ]
     );
+    let projected = DataLoader::load_parquet::<OptionalText>(
+        path.to_str().unwrap(),
+        TypedLoadOptions::default(),
+    )?;
+    assert_eq!(
+        projected,
+        [
+            OptionalText {
+                text: Some("kept".into())
+            },
+            OptionalText { text: None }
+        ]
+    );
+    let remapped = TypedLoadOptions {
+        field_map: [
+            ("question".into(), "text".into()),
+            ("answer".into(), "text".into()),
+        ]
+        .into(),
+        ..TypedLoadOptions::default()
+    };
+    let direct =
+        DataLoader::load_parquet::<QARow>(path.to_str().unwrap(), remapped.clone()).unwrap_err();
+    let sharded = DataLoader::load_hf_from_parquet::<QARow>(vec![path], remapped).unwrap_err();
+    assert!(direct.to_string().contains("at row 3"), "{direct}");
+    assert!(sharded.to_string().contains("at row 2"), "{sharded}");
     Ok(())
 }
 

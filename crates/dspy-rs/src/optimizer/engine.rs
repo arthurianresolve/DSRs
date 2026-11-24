@@ -107,12 +107,17 @@ fn hash_json_canonical(value: &serde_json::Value, hasher: &mut StableHasher) {
         }
         Value::Object(map) => {
             hasher.write(b"{");
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            for key in keys {
+            let hash_entry = |(key, value): (&String, &Value)| {
                 hasher.write(b"k");
                 write_str(hasher, key);
-                hash_json_canonical(&map[key.as_str()], hasher);
+                hash_json_canonical(value, hasher);
+            };
+            if map.keys().is_sorted() {
+                map.iter().for_each(hash_entry);
+            } else {
+                let mut entries: Vec<_> = map.iter().collect();
+                entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+                entries.into_iter().for_each(hash_entry);
             }
             hasher.write(b"}");
         }
@@ -673,18 +678,26 @@ impl ParetoView {
 
     /// Frontier statistics in the shape GEPA reports.
     pub fn statistics(&self) -> ParetoStatistics {
-        let frontier = self.frontier();
-        let coverage: Vec<usize> = frontier.iter().map(|&idx| self.wins[idx]).collect();
+        let mut num_candidates = 0;
+        let mut total_coverage = 0;
+        let mut max_coverage = 0;
+        let mut min_coverage = usize::MAX;
+        for wins in self.wins.iter().copied().filter(|&wins| wins > 0) {
+            num_candidates += 1;
+            total_coverage += wins;
+            max_coverage = max_coverage.max(wins);
+            min_coverage = min_coverage.min(wins);
+        }
         ParetoStatistics {
-            num_candidates: frontier.len(),
+            num_candidates,
             num_examples_covered: self.best.iter().filter(|best| best.is_some()).count(),
-            avg_coverage: if coverage.is_empty() {
+            avg_coverage: if num_candidates == 0 {
                 0.0
             } else {
-                coverage.iter().sum::<usize>() as f32 / coverage.len() as f32
+                total_coverage as f32 / num_candidates as f32
             },
-            max_coverage: coverage.iter().copied().max().unwrap_or(0),
-            min_coverage: coverage.iter().copied().min().unwrap_or(0),
+            max_coverage,
+            min_coverage: if num_candidates == 0 { 0 } else { min_coverage },
         }
     }
 }
@@ -1891,7 +1904,7 @@ mod tests {
         let mut b = Candidate::new();
         b.set_demos(
             "refiner",
-            vec![demo(&[("q", "one"), ("a", "1"), ("b", "2")])],
+            vec![demo(&[("b", "2"), ("a", "1"), ("q", "one")])],
         );
         b.set_instruction("drafter", "be brief");
 

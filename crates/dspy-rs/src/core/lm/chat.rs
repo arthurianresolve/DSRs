@@ -160,8 +160,12 @@ impl Message {
     /// For text-only messages, returns the text. For multi-content messages,
     /// returns all blocks formatted and joined with newlines.
     pub fn content(&self) -> String {
+        self.content_cow().into_owned()
+    }
+
+    pub(crate) fn content_cow(&self) -> std::borrow::Cow<'_, str> {
         if let [ContentBlock::Text { text }] = self.content.as_slice() {
-            return text.clone();
+            return std::borrow::Cow::Borrowed(text);
         }
         let parts: Vec<String> = self
             .content
@@ -186,7 +190,7 @@ impl Message {
                 ContentBlock::Reasoning { reasoning } => reasoning.display_text(),
             })
             .collect();
-        parts.join("\n")
+        std::borrow::Cow::Owned(parts.join("\n"))
     }
 
     /// Returns only the text content, ignoring tool calls, tool results,
