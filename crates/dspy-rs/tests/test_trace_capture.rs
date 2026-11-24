@@ -482,7 +482,9 @@ async fn overlapping_spans_use_their_own_future_scope() {
 
 #[tokio::test]
 async fn resumed_span_scope_respects_the_current_capture() {
-    let (pending, first_trace) = capture(|| async {
+    let mut suspended = None;
+    let suspended_slot = &mut suspended;
+    let ((), first_trace) = capture(move || async move {
         let model = dspy_rs::LMConfig::default();
         let parent = begin_span(dspy_rs::SpanRequest {
             component: "parent",
@@ -512,11 +514,11 @@ async fn resumed_span_scope_respects_the_current_capture() {
                 .await;
         });
         assert!(futures::poll!(&mut pending).is_pending());
-        pending
+        *suspended_slot = Some(pending);
     })
     .await;
 
-    let ((), second_trace) = capture(|| pending).await;
+    let ((), second_trace) = capture(|| suspended.expect("scope suspended")).await;
     assert_eq!(first_trace.spans.len(), 1);
     assert_eq!(second_trace.spans.len(), 1);
     let resumed = &second_trace.spans[0];
