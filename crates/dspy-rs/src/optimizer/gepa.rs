@@ -244,7 +244,11 @@ impl Lineage {
         eval: &CandidateEval,
     ) -> &GEPACandidate {
         candidate.id = self.entries.len();
-        candidate.example_scores = eval.scores().iter().map(|&score| score as f32).collect();
+        candidate.example_scores = eval
+            .rollouts
+            .iter()
+            .map(|rollout| rollout.eval.score as f32)
+            .collect();
         self.entries.push((candidate, engine_row));
         &self.entries.last().expect("just pushed").0
     }
@@ -252,7 +256,11 @@ impl Lineage {
     /// Samples a parent proportional to Pareto coverage (wins on the
     /// validation columns). Falls back to the first candidate when nobody has
     /// wins recorded yet; `None` when there are no candidates at all.
-    fn sample_parent(&self, pareto: &ParetoView, rng: &mut StdRng) -> Option<&GEPACandidate> {
+    fn sample_parent(
+        &self,
+        pareto: &ParetoView,
+        rng: &mut StdRng,
+    ) -> Option<&(GEPACandidate, usize)> {
         if self.entries.is_empty() {
             return None;
         }
@@ -263,16 +271,16 @@ impl Lineage {
             .collect();
         let total: usize = coverages.iter().sum();
         if total == 0 {
-            return self.entries.first().map(|(candidate, _)| candidate);
+            return self.entries.first();
         }
         let mut target = rng.gen_range(0..total);
-        for ((candidate, _), &coverage) in self.entries.iter().zip(&coverages) {
+        for (entry, &coverage) in self.entries.iter().zip(&coverages) {
             if target < coverage {
-                return Some(candidate);
+                return Some(entry);
             }
             target -= coverage;
         }
-        self.entries.last().map(|(candidate, _)| candidate)
+        self.entries.last()
     }
 
     /// Frontier members (wins > 0), i.e. the historical `ParetoFrontier`
@@ -341,10 +349,10 @@ impl GEPA {
                 let input = span
                     .input
                     .as_ref()
-                    .map(|map| serde_json::Value::Object(map.clone()).to_string())
+                    .map(|map| serde_json::to_string(map).expect("JSON map serializes"))
                     .unwrap_or_else(|| "-".to_string());
                 let output = match (&span.output, &span.error) {
-                    (Some(map), _) => serde_json::Value::Object(map.clone()).to_string(),
+                    (Some(map), _) => serde_json::to_string(map).expect("JSON map serializes"),
                     (None, Some(error)) => format!(
                         "<{}: {}>",
                         error.kind.as_str(),
@@ -374,7 +382,8 @@ impl GEPA {
                 }
             }
         }
-        text.trim_end().to_string()
+        text.truncate(text.trim_end().len());
+        text
     }
 
     /// Deterministic fallback mutation: append the feedback to the parent
@@ -578,14 +587,9 @@ impl Optimizer for GEPA {
                 break;
             }
 
-            let parent = lineage
+            let (parent, parent_row) = lineage
                 .sample_parent(&engine.pareto_over(&val_cols), &mut rng)
-                .context("failed to sample from frontier")?
-                .clone();
-            let parent_row = engine.register(Candidate::with_instruction(
-                &parent.module_name,
-                &parent.instruction,
-            ));
+                .context("failed to sample from frontier")?;
 
             // Parent re-evaluation on a trainset minibatch. Already-seen
             // (candidate, example) pairs are served from the rollout cache.
@@ -596,7 +600,7 @@ impl Optimizer for GEPA {
                 .collect();
 
             let parent_eval = match engine
-                .evaluate(target, parent_row, Some(&minibatch))
+                .evaluate(target, *parent_row, Some(&minibatch))
                 .await?
             {
                 EvalOutcome::Complete(eval) => eval,
@@ -604,14 +608,13 @@ impl Optimizer for GEPA {
             };
             Self::require_feedback(&parent_eval, &parent.module_name, generation)?;
 
-            let feedback_summary = Self::summarize_feedback(&parent.module_name, &parent_eval);
-            let parent_score = parent_eval.mean();
-
             // Don't spend a reflection call on a child we can't afford to score.
             if !engine.budget_allows(val_cols.len()) {
                 break;
             }
 
+            let feedback_summary = Self::summarize_feedback(&parent.module_name, &parent_eval);
+            let parent_score = parent_eval.mean();
             let (child_instruction, reflection_calls) = self
                 .propose_child_instruction(
                     &leaves,
@@ -636,10 +639,10 @@ impl Optimizer for GEPA {
             };
             Self::require_feedback(&child_eval, &child.module_name, generation + 1)?;
 
-            let child = lineage.add(child, child_row, &child_eval).clone();
+            let child = lineage.add(child, child_row, &child_eval);
 
             if self.track_stats {
-                all_candidates.push(child);
+                all_candidates.push(child.clone());
                 let pareto = engine.pareto_over(&val_cols);
                 let best_avg = lineage
                     .best_by_average(&pareto)

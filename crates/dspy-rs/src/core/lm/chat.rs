@@ -244,13 +244,14 @@ impl Message {
 
     /// Extracts all tool calls from this message.
     pub fn tool_calls(&self) -> Vec<&ToolCall> {
-        self.content
-            .iter()
-            .filter_map(|b| match b {
-                ContentBlock::ToolCall { tool_call } => Some(tool_call),
-                _ => None,
-            })
-            .collect()
+        self.tool_calls_iter().collect()
+    }
+
+    pub(crate) fn tool_calls_iter(&self) -> impl Iterator<Item = &ToolCall> {
+        self.content.iter().filter_map(|block| match block {
+            ContentBlock::ToolCall { tool_call } => Some(tool_call),
+            _ => None,
+        })
     }
 
     // -- Rig conversion ------------------------------------------------------

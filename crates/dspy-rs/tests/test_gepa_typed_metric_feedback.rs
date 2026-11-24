@@ -293,6 +293,29 @@ async fn gepa_compile_fails_when_feedback_disappears_during_generation() {
 }
 
 #[tokio::test]
+async fn gepa_requires_parent_feedback_even_when_child_budget_is_exhausted() {
+    let metric = FeedbackThenScoreMetric::new(1);
+    let mut module = InstructionEchoModule {
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
+    };
+    let optimizer = GEPA::builder()
+        .num_iterations(1)
+        .minibatch_size(1)
+        .max_rollouts(2)
+        .build();
+
+    let err = optimizer
+        .compile_module_with_valset(&mut module, &trainset(), Some(&valset_for_gepa()), &metric)
+        .await
+        .expect_err("parent feedback is required");
+    let message = err.to_string();
+    assert!(message.contains("GEPA requires feedback for every evaluated example"));
+    assert!(message.contains("generation=0"), "{message}");
+}
+
+#[tokio::test]
 async fn gepa_compile_with_valset_uses_valset_and_tracks_best_outputs_when_enabled() {
     let seen_prompts = Arc::new(Mutex::new(Vec::new()));
     let metric = RecordingFeedbackMetric {

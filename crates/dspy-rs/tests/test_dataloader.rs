@@ -537,6 +537,29 @@ fn parquet_omits_null_and_unsupported_cells_without_renumbering_rows() -> Result
 }
 
 #[test]
+fn typed_csv_projection_preserves_duplicate_names_and_validates_ignored_cells() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("projected.csv");
+    let headers = "question,ignored,question,answer\n";
+    write_file(&path, &format!("{headers}first,[1],last,yes\n"))?;
+    let path = path.to_str().unwrap();
+    let rows = DataLoader::load_csv::<QARow>(path, ',', true, TypedLoadOptions::default())?;
+    assert_eq!(rows[0].question, "last");
+    assert_eq!(rows[0].answer, "yes");
+
+    let mut malformed = format!("{headers}first,").into_bytes();
+    malformed.extend_from_slice(b"\xff,last,yes\n");
+    fs::write(path, malformed)?;
+    let err =
+        DataLoader::load_csv::<QARow>(path, ',', true, TypedLoadOptions::default()).unwrap_err();
+    assert!(matches!(
+        err.downcast_ref::<dspy_rs::DataLoadError>(),
+        Some(dspy_rs::DataLoadError::Csv(_))
+    ));
+    Ok(())
+}
+
+#[test]
 fn reused_csv_record_preserves_cells_and_row_order() -> Result<()> {
     let dir = tempdir()?;
     let path = dir.path().join("cells.csv");

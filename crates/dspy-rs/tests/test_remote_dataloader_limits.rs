@@ -4,7 +4,7 @@ use dspy_rs::{DataLoadError, DataLoader, RemoteLoadLimits, TypedLoadOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, facet::Facet, serde::Deserialize)]
 #[facet(crate = facet)]
@@ -250,6 +250,38 @@ fn remote_json_array_stops_at_row_limit() {
     .unwrap_err();
     assert!(err.to_string().contains("rows limit"), "{err}");
     server.join().unwrap();
+}
+
+#[test]
+fn remote_json_deadline_includes_stalled_body_after_slow_headers() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (done, keep_open) = std::sync::mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        read_request_headers(&mut stream);
+        thread::sleep(Duration::from_millis(1_100));
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 64\r\nConnection: close\r\n\r\n{");
+        let _ = keep_open.recv_timeout(Duration::from_secs(5));
+    });
+    let started = Instant::now();
+    let error = DataLoader::load_json_with_limits::<Row>(
+        &format!("http://127.0.0.1:{port}/dataset.com"),
+        false,
+        TypedLoadOptions::default(),
+        RemoteLoadLimits {
+            timeout: Duration::from_secs(2),
+            ..RemoteLoadLimits::default()
+        },
+    )
+    .unwrap_err();
+    let elapsed = started.elapsed();
+    drop(done);
+    server.join().unwrap();
+
+    assert!(error.to_string().contains("timed out"), "{error:#}");
+    assert!(elapsed < Duration::from_millis(2_750), "{elapsed:?}");
 }
 
 #[test]

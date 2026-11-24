@@ -214,15 +214,16 @@ impl ReplaySession {
         // The same preimage `TraceSink::close` hashes: redacted-config hash ++
         // full rendered prompt. The prefix/suffix split does not matter — the
         // hash streams prefix ++ suffix, and `chat` is exactly that.
-        let got_hash = request_hash(ModelEntry::from_config(config).config_hash, &[], chat);
-        self.decide_hashed(component, got_hash)
+        self.decide_hashed(component, || {
+            request_hash(ModelEntry::from_config(config).config_hash, &[], chat)
+        })
     }
 
     /// [`decide`] with a caller-computed `request_hash` — the seam for leaves
     /// whose identity is not prompt-shaped (holes: impl hash ++ canonical
     /// input ++ caps, RFC 0003 §4.4). The recorded span's `request_hash` was
     /// stamped from the same preimage at capture time.
-    fn decide_hashed(&self, component: &str, got_hash: u64) -> ReplayDirective {
+    fn decide_hashed(&self, component: &str, hash: impl FnOnce() -> u64) -> ReplayDirective {
         let mut inner = self.0.lock().unwrap();
 
         if inner.diverged {
@@ -271,6 +272,7 @@ impl ReplaySession {
             );
         }
 
+        let got_hash = hash();
         if got_hash != span.request_hash {
             let id = span.id;
             let expected_hash = span.request_hash;
@@ -376,5 +378,45 @@ pub(crate) fn intercept_hashed(
     hash: impl FnOnce() -> u64,
 ) -> Option<ReplayDirective> {
     let session = ACTIVE.try_with(|session| session.clone()).ok()?;
-    Some(session.decide_hashed(component, hash()))
+    Some(session.decide_hashed(component, hash))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::trace::capture::{SpanRequest, begin_span, capture};
+
+    #[tokio::test]
+    async fn replay_skips_hashing_for_incomplete_exhausted_and_live_calls() {
+        let (_, trace) = capture(|| async {
+            drop(begin_span(SpanRequest {
+                component: "predict",
+                prefix: None,
+                suffix: &[],
+                input: None,
+                model: &LMConfig::default(),
+                request_hash: Some(1),
+            }));
+        })
+        .await;
+        let trace = Arc::new(trace);
+        let unused_hash = || panic!("request hash is unnecessary");
+        let strict = ReplaySession::new(Arc::clone(&trace), ReplayMode::Strict);
+        assert!(matches!(
+            strict.decide_hashed("predict", unused_hash),
+            ReplayDirective::Refuse(ReplayError::Incomplete { .. })
+        ));
+        assert!(matches!(
+            strict.decide_hashed("missing", unused_hash),
+            ReplayDirective::Refuse(ReplayError::Exhausted { .. })
+        ));
+        let until_divergence = ReplaySession::new(trace, ReplayMode::UntilDivergence);
+        for _ in 0..2 {
+            assert!(matches!(
+                until_divergence.decide_hashed("predict", unused_hash),
+                ReplayDirective::Live
+            ));
+        }
+        assert_eq!(until_divergence.finish().live, 2);
+    }
 }

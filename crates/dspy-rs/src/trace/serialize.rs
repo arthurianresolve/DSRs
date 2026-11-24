@@ -11,6 +11,8 @@
 //! serialization time (never during capture) with a content-hash marker;
 //! truncated spans are marked `complete = false` and refuse strict replay.
 
+use std::io::{self, Write};
+
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
@@ -163,6 +165,25 @@ fn truncate_messages(messages: &mut [Message]) -> bool {
     truncated
 }
 
+#[derive(Default)]
+struct ByteCount(usize);
+
+impl Write for ByteCount {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 = self.0.saturating_add(bytes.len());
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn tool_args_over_budget(args: &serde_json::Value) -> bool {
+    let mut count = ByteCount::default();
+    serde_json::to_writer(&mut count, args).is_ok() && count.0 > TOOL_BUDGET
+}
+
 /// Returns a budget-respecting copy of the span when any field overflows,
 /// `None` when the span fits as-is. Truncation clears `complete`.
 fn truncated_span(span: &Span) -> Option<Span> {
@@ -177,8 +198,7 @@ fn truncated_span(span: &Span) -> Option<Span> {
             .is_some_and(|text| text.len() > TEXT_BUDGET)
         || span.events.iter().any(|event| match event {
             SpanEvent::ToolRun { args, result, .. } => {
-                result.len() > TOOL_BUDGET
-                    || serde_json::to_string(args).map(|s| s.len()).unwrap_or(0) > TOOL_BUDGET
+                result.len() > TOOL_BUDGET || tool_args_over_budget(args)
             }
             _ => false,
         });
@@ -250,6 +270,14 @@ mod tests {
             spans: vec![span],
             ..Trace::default()
         }
+    }
+
+    #[test]
+    fn tool_argument_budget_counts_escaped_utf8_bytes() {
+        let mut text = format!("🚀\n{}", "x".repeat(TOOL_BUDGET - 8));
+        assert!(!tool_args_over_budget(&serde_json::json!(text)));
+        text.push('x');
+        assert!(tool_args_over_budget(&serde_json::json!(text)));
     }
 
     #[test]

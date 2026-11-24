@@ -13,9 +13,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::task_local;
 
+use crate::core::sampling::current_sampling_options;
 use crate::trace::span::{
-    CompId, JsonMap, ModelEntry, ModelId, PrefixEntry, PrefixId, Span, SpanError, SpanErrorKind,
-    SpanEvent, SpanId, Trace, TraceMeta, request_hash,
+    CompId, JsonMap, ModelEntry, ModelId, PrefixEntry, PrefixId, RequestHashState, Span, SpanError,
+    SpanErrorKind, SpanEvent, SpanId, Trace, TraceMeta,
 };
 use crate::utils::hash::stable_hash_debug;
 use crate::{LMConfig, LmUsage, Message};
@@ -55,9 +56,48 @@ struct SinkInner {
     comp_index: HashMap<String, CompId>,
     /// Prefix/model intern maps: content-hash -> id.
     prefix_index: HashMap<u64, PrefixId>,
+    /// Last request hash state for each interned prefix.
+    prefix_hashes: Vec<Option<PrefixHash>>,
     model_index: HashMap<u64, ModelId>,
     /// Monotonic clock anchor for duration measurement.
     epoch: Instant,
+}
+
+struct PrefixHash {
+    model: ModelId,
+    sampling_id: Option<String>,
+    state: RequestHashState,
+}
+
+impl SinkInner {
+    fn request_hash(&mut self, id: SpanId) -> u64 {
+        let span = &self.trace.spans[id.0 as usize];
+        let config_hash = self.trace.models[span.model.0 as usize].config_hash;
+        let sampling_id = current_sampling_options().id;
+        let mut state = if let Some(prefix) = span.prefix {
+            let position = prefix.0 as usize;
+            let cached = &mut self.prefix_hashes[position];
+            if let Some(entry) = cached
+                && entry.model == span.model
+                && entry.sampling_id == sampling_id
+            {
+                entry.state.clone()
+            } else {
+                let mut state = RequestHashState::new(config_hash, sampling_id.as_deref());
+                state.append(&self.trace.prefixes[position].messages);
+                *cached = Some(PrefixHash {
+                    model: span.model,
+                    sampling_id,
+                    state: state.clone(),
+                });
+                state
+            }
+        } else {
+            RequestHashState::new(config_hash, sampling_id.as_deref())
+        };
+        state.append(&span.suffix);
+        state.finish()
+    }
 }
 
 impl TraceSink {
@@ -77,6 +117,7 @@ impl TraceSink {
             seqs: Vec::new(),
             comp_index: HashMap::new(),
             prefix_index: HashMap::new(),
+            prefix_hashes: Vec::new(),
             model_index: HashMap::new(),
             epoch: Instant::now(),
         })))
@@ -119,6 +160,7 @@ impl TraceSink {
                     inner.trace.prefixes.push(PrefixEntry {
                         messages: messages.to_vec(),
                     });
+                    inner.prefix_hashes.push(None);
                     inner.prefix_index.insert(hash, id);
                     id
                 }
@@ -181,18 +223,7 @@ impl TraceSink {
         // An explicit request_hash (holes) was stamped at open; everything
         // else hashes the redacted config + rendered prompt at close.
         if !hash_override {
-            let config_hash = {
-                let span = &inner.trace.spans[id.0 as usize];
-                inner.trace.models[span.model.0 as usize].config_hash
-            };
-            let hash = {
-                let span = &inner.trace.spans[id.0 as usize];
-                let prefix = span
-                    .prefix
-                    .map(|p| inner.trace.prefixes[p.0 as usize].messages.as_slice())
-                    .unwrap_or(&[]);
-                request_hash(config_hash, prefix, &span.suffix)
-            };
+            let hash = inner.request_hash(id);
             inner.trace.spans[id.0 as usize].request_hash = hash;
         }
 
@@ -355,5 +386,70 @@ impl Drop for SpanGuard {
                 self.hash_override,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::trace::span::request_hash;
+    use crate::{SamplingOptions, with_sampling_options};
+
+    #[tokio::test]
+    async fn cached_prefix_hash_tracks_model_and_sampling_identity() {
+        let prefix = [Message::system("shared prompt")];
+        let config = LMConfig::default();
+        let other = LMConfig {
+            temperature: 0.3,
+            ..config.clone()
+        };
+        let (expected, trace) = capture(|| async {
+            let mut expected = Vec::new();
+            for (config, sample) in [
+                (&config, "one"),
+                (&config, "one"),
+                (&config, "two"),
+                (&other, "two"),
+                (&config, "one"),
+            ] {
+                let suffix = [Message::user(format!("question {}", expected.len()))];
+                let guard = begin_span(SpanRequest {
+                    component: "predict",
+                    prefix: Some(&prefix),
+                    suffix: &suffix,
+                    input: None,
+                    model: config,
+                    request_hash: None,
+                })
+                .unwrap();
+                let hash = with_sampling_options(
+                    SamplingOptions {
+                        id: Some(sample.into()),
+                        temperature: None,
+                    },
+                    async {
+                        drop(guard);
+                        request_hash(
+                            ModelEntry::from_config(config).config_hash,
+                            &prefix,
+                            &suffix,
+                        )
+                    },
+                )
+                .await;
+                expected.push(hash);
+            }
+            expected
+        })
+        .await;
+        assert_eq!(trace.prefixes.len(), 1);
+        assert_eq!(
+            trace
+                .spans
+                .iter()
+                .map(|span| span.request_hash)
+                .collect::<Vec<_>>(),
+            expected
+        );
     }
 }

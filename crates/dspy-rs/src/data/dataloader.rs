@@ -335,9 +335,23 @@ impl DataLoader {
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
         let mut projection = TypedProjection::new::<E>(&opts);
-        Self::visit_csv_rows(path, delimiter, has_headers, limits, |row| {
-            projection.push(row)
-        })?;
+        let source_fields = (opts.unknown_fields == UnknownFieldPolicy::Ignore).then(|| {
+            projection
+                .fields
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|field| field.source)
+                .collect()
+        });
+        Self::visit_csv_rows(
+            path,
+            delimiter,
+            has_headers,
+            limits,
+            source_fields.as_ref(),
+            |row| projection.push(row),
+        )?;
         let examples: Vec<E> = projection.finish()?;
         debug!(examples = examples.len(), "typed csv examples loaded");
         Ok(examples)
@@ -582,11 +596,16 @@ impl DataLoader {
     ) -> std::result::Result<(Vec<u8>, Option<String>), DataLoadError> {
         let started = Instant::now();
         let client = reqwest::blocking::Client::builder()
-            .timeout(limits.timeout)
             .build()
             .map_err(|err| DataLoadError::Io(err.into()))?;
+        let remaining = limits.timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Err(remote_timeout(limits.timeout));
+        }
         let mut response = client
             .get(path)
+            // The request timeout also covers reads after the headers arrive.
+            .timeout(remaining)
             .send()
             .and_then(reqwest::blocking::Response::error_for_status)
             .context("failed to fetch remote dataset")
@@ -618,9 +637,20 @@ impl DataLoader {
             }
             let remaining = limits.max_bytes.saturating_sub(bytes.len());
             let read_len = remaining.saturating_add(1).min(chunk.len());
-            let count = response
-                .read(&mut chunk[..read_len])
-                .map_err(|err| DataLoadError::Io(err.into()))?;
+            let count = response.read(&mut chunk[..read_len]).map_err(|err| {
+                let timed_out = err
+                    .get_ref()
+                    .and_then(|source| source.downcast_ref::<reqwest::Error>())
+                    .is_some_and(reqwest::Error::is_timeout);
+                if timed_out {
+                    DataLoadError::Io(anyhow!(err).context(format!(
+                        "remote dataset timed out after {:?}",
+                        limits.timeout
+                    )))
+                } else {
+                    DataLoadError::Io(err.into())
+                }
+            })?;
             if started.elapsed() >= limits.timeout {
                 return Err(remote_timeout(limits.timeout));
             }
@@ -770,7 +800,9 @@ impl DataLoader {
         limits: RemoteLoadLimits,
     ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
         let mut rows = Vec::new();
-        Self::visit_csv_rows(path, delimiter, has_headers, limits, |row| rows.push(row))?;
+        Self::visit_csv_rows(path, delimiter, has_headers, limits, None, |row| {
+            rows.push(row)
+        })?;
         Ok(rows)
     }
 
@@ -780,6 +812,7 @@ impl DataLoader {
         delimiter: char,
         has_headers: bool,
         limits: RemoteLoadLimits,
+        source_fields: Option<&HashSet<&str>>,
         visit: impl FnMut(RowRecord),
     ) -> std::result::Result<(), DataLoadError> {
         if is_url(path) {
@@ -793,7 +826,13 @@ impl DataLoader {
                 .delimiter(delimiter as u8)
                 .has_headers(has_headers)
                 .from_reader(cursor);
-            return Self::visit_csv_records(&mut reader, has_headers, Some(limits.max_rows), visit);
+            return Self::visit_csv_records(
+                &mut reader,
+                has_headers,
+                Some(limits.max_rows),
+                source_fields,
+                visit,
+            );
         }
 
         let mut reader = ReaderBuilder::new()
@@ -801,7 +840,7 @@ impl DataLoader {
             .has_headers(has_headers)
             .from_path(path)
             .map_err(|err| DataLoadError::Csv(err.into()))?;
-        Self::visit_csv_records(&mut reader, has_headers, None, visit)
+        Self::visit_csv_records(&mut reader, has_headers, None, source_fields, visit)
     }
 
     #[cfg(feature = "data")]
@@ -809,6 +848,7 @@ impl DataLoader {
         reader: &mut csv::Reader<R>,
         has_headers: bool,
         max_rows: Option<usize>,
+        source_fields: Option<&HashSet<&str>>,
         mut visit: impl FnMut(RowRecord),
     ) -> std::result::Result<(), DataLoadError> {
         let header_names = if has_headers {
@@ -816,14 +856,13 @@ impl DataLoader {
                 reader
                     .headers()
                     .map_err(|err| DataLoadError::Csv(err.into()))?
-                    .iter()
-                    .map(|header| header.to_string())
-                    .collect::<Vec<_>>(),
+                    .clone(),
             )
         } else {
             None
         };
 
+        let mut columns = None;
         let mut count = 0;
         let mut record = StringRecord::new();
         loop {
@@ -838,11 +877,28 @@ impl DataLoader {
             }
             read.map_err(|err| DataLoadError::Csv(err.into()))?;
             count += 1;
-            visit(csv_record_to_row_record(
-                &record,
-                count,
-                header_names.as_deref(),
-            ));
+            let columns = columns.get_or_insert_with(|| {
+                (0..record.len())
+                    .filter_map(|index| {
+                        let name = header_names
+                            .as_ref()
+                            .and_then(|headers| headers.get(index))
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!("column_{index}"));
+                        source_fields
+                            .is_none_or(|fields| fields.contains(name.as_str()))
+                            .then_some((index, name))
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let values = columns
+                .iter()
+                .map(|(index, name)| (name.clone(), parse_csv_cell(&record[*index])))
+                .collect();
+            visit(RowRecord {
+                row_index: count,
+                values,
+            });
         }
 
         debug!(rows = count, "csv rows loaded");
@@ -981,7 +1037,9 @@ impl DataLoader {
                 HfFileFormat::Json { lines } => {
                     Self::visit_json_rows(path_str, lines, limits, &mut emit)?
                 }
-                HfFileFormat::Csv => Self::visit_csv_rows(path_str, ',', true, limits, &mut emit)?,
+                HfFileFormat::Csv => {
+                    Self::visit_csv_rows(path_str, ',', true, limits, None, &mut emit)?
+                }
             }
         }
 
@@ -1338,25 +1396,6 @@ fn parse_csv_cell(cell: &str) -> serde_json::Value {
         return value;
     }
     Value::String(cell.to_string())
-}
-
-#[cfg(feature = "data")]
-fn csv_record_to_row_record(
-    record: &StringRecord,
-    row_index: usize,
-    headers: Option<&[String]>,
-) -> RowRecord {
-    let mut values = HashMap::new();
-
-    for (idx, cell) in record.iter().enumerate() {
-        let key = headers
-            .and_then(|items| items.get(idx))
-            .cloned()
-            .unwrap_or_else(|| format!("column_{idx}"));
-        values.insert(key, parse_csv_cell(cell));
-    }
-
-    RowRecord { row_index, values }
 }
 
 #[cfg(feature = "data")]

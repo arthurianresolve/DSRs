@@ -6,12 +6,13 @@
 //! JSONL (see [`Trace::to_jsonl`]); the in-memory form always speaks interned ids.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::utils::hash::{StableHasher, stable_hash_debug};
+use crate::utils::hash::{HashWriter, StableHasher, stable_hash_debug};
 use crate::{LMConfig, LmUsage, Message};
 
 /// Index of a span within its trace. Dense, assigned in insertion order.
@@ -193,7 +194,7 @@ impl ModelEntry {
             format!("private:{}", hasher.finish())
         });
         let config = Self::redacted_config(config);
-        let config_hash = stable_hash_debug(&(config.clone(), endpoint_identity));
+        let config_hash = stable_hash_debug(&(&config, endpoint_identity));
         Self {
             config,
             config_hash,
@@ -426,27 +427,55 @@ impl Span {
         flush(&mut out, &mut pending);
         out
     }
+
+    pub(crate) fn recorded_tool_calls(&self) -> Vec<rig::message::ToolCall> {
+        self.events
+            .iter()
+            .filter_map(|event| match event {
+                SpanEvent::Exchange { message, .. } => Some(message),
+                _ => None,
+            })
+            .flat_map(Message::tool_calls_iter)
+            .cloned()
+            .collect()
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct RequestHashState(StableHasher);
+
+impl RequestHashState {
+    pub(crate) fn new(config_hash: u64, sampling_id: Option<&str>) -> Self {
+        let mut hasher = StableHasher::new();
+        hasher.write(&config_hash.to_le_bytes());
+        if let Some(id) = sampling_id {
+            hasher.write(&(id.len() as u64).to_le_bytes());
+            hasher.write(id.as_bytes());
+        }
+        Self(hasher)
+    }
+
+    pub(crate) fn append(&mut self, messages: &[Message]) {
+        let mut writer = HashWriter(&mut self.0);
+        for message in messages {
+            let _ = write!(writer, "{message:?}");
+        }
+    }
+
+    pub(crate) fn finish(self) -> u64 {
+        self.0.finish()
+    }
 }
 
 /// Computes a span's `request_hash`: stable hash over the redacted model config
 /// hash and the full rendered prompt (prefix ++ suffix), streamed through the
 /// messages' `Debug` representation.
 pub(crate) fn request_hash(config_hash: u64, prefix: &[Message], suffix: &[Message]) -> u64 {
-    use crate::utils::hash::HashWriter;
-    use std::fmt::Write as _;
-    use std::hash::Hasher as _;
-
-    let mut hasher = StableHasher::new();
-    hasher.write(&config_hash.to_le_bytes());
-    if let Some(id) = crate::core::sampling::current_sampling_options().id {
-        hasher.write(&(id.len() as u64).to_le_bytes());
-        hasher.write(id.as_bytes());
-    }
-    let mut writer = HashWriter(&mut hasher);
-    for message in prefix.iter().chain(suffix) {
-        let _ = write!(writer, "{message:?}");
-    }
-    hasher.finish()
+    let sampling = crate::core::sampling::current_sampling_options();
+    let mut state = RequestHashState::new(config_hash, sampling.id.as_deref());
+    state.append(prefix);
+    state.append(suffix);
+    state.finish()
 }
 
 #[cfg(test)]

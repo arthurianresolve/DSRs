@@ -2074,11 +2074,7 @@ impl Interpreter {
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
                         span_id: guard.as_ref().map(|guard| guard.id()),
-                        tool_calls: span
-                            .completion_messages()
-                            .iter()
-                            .flat_map(|message| message.tool_calls().into_iter().cloned())
-                            .collect(),
+                        tool_calls: span.recorded_tool_calls(),
                         tool_executions: Vec::new(),
                     });
                 }
@@ -2378,11 +2374,7 @@ impl Interpreter {
                 if let Some(leaves) = cx.leaves.as_mut() {
                     // Served evaluations carry no per-field parse metadata;
                     // the tool record is reconstructed from the recording.
-                    let tool_calls = span
-                        .completion_messages()
-                        .iter()
-                        .flat_map(|message| message.tool_calls().into_iter().cloned())
-                        .collect();
+                    let tool_calls = span.recorded_tool_calls();
                     let tool_executions = span
                         .events
                         .iter()
