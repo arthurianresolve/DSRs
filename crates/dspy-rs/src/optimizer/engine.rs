@@ -770,6 +770,17 @@ enum CandidateKind {
     Overlay,
 }
 
+impl CandidatePayload {
+    fn kind(&self) -> CandidateKind {
+        match self {
+            Self::Params { .. } => CandidateKind::Params,
+            Self::Overlay(_) => CandidateKind::Overlay,
+        }
+    }
+}
+
+const CANDIDATE_INDEX_THRESHOLD: usize = 64;
+
 /// A candidate bound against a concrete target, ready to inject per rollout.
 #[derive(Clone)]
 pub(crate) enum BoundCandidate {
@@ -920,16 +931,37 @@ impl Engine {
     ) -> usize {
         use std::collections::hash_map::Entry;
 
-        match self.candidate_indices.entry((kind, hash)) {
-            Entry::Occupied(entry) => *entry.get(),
-            Entry::Vacant(entry) => {
-                let index = self.candidates.len();
-                self.candidates.push((hash, payload()));
-                self.matrix.ensure_rows(self.candidates.len());
-                entry.insert(index);
-                index
+        let index = self.candidates.len();
+        let entry = if index < CANDIDATE_INDEX_THRESHOLD {
+            if let Some(existing) = self
+                .candidates
+                .iter()
+                .position(|(h, payload)| *h == hash && payload.kind() == kind)
+            {
+                return existing;
             }
+            None
+        } else {
+            if self.candidate_indices.is_empty() {
+                self.candidate_indices.extend(
+                    self.candidates
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (hash, payload))| ((payload.kind(), *hash), index)),
+                );
+            }
+            match self.candidate_indices.entry((kind, hash)) {
+                Entry::Occupied(entry) => return *entry.get(),
+                Entry::Vacant(entry) => Some(entry),
+            }
+        };
+
+        self.candidates.push((hash, payload()));
+        self.matrix.ensure_rows(index + 1);
+        if let Some(entry) = entry {
+            entry.insert(index);
         }
+        index
     }
 
     /// The registered module-lane candidate at `index`, if it is one.
@@ -1607,6 +1639,26 @@ impl Drop for GaugeGuard<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn candidate_ids_survive_registration_index_creation() {
+        let mut engine = Engine::new(EngineConfig::default());
+        let overlay = crate::ir::Overlay::default();
+        let candidate = Candidate::new();
+        assert_eq!(engine.register_overlay(overlay.clone()), 0);
+        assert_eq!(engine.register(candidate.clone()), 1);
+        assert_eq!(engine.register(candidate.clone()), 1);
+        for index in 2..=CANDIDATE_INDEX_THRESHOLD {
+            let instruction = format!("Instruction {index}");
+            assert_eq!(
+                engine.register(Candidate::with_instruction("predictor", instruction)),
+                index
+            );
+        }
+        assert_eq!(engine.register_overlay(overlay), 0);
+        assert_eq!(engine.register(candidate), 1);
+        assert_eq!(engine.num_candidates(), CANDIDATE_INDEX_THRESHOLD + 1);
+    }
 
     fn demo(pairs: &[(&str, &str)]) -> JsonMap {
         pairs
