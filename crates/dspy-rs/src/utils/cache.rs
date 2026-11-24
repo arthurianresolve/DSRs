@@ -45,18 +45,40 @@ impl CacheError {
 pub type CacheKey = u64;
 
 #[cfg(feature = "inflight-dedup")]
-type PendingResponses = Mutex<HashMap<CacheKey, watch::Sender<()>>>;
+type PendingResponses = Mutex<HashMap<CacheKey, watch::Sender<FlightCompletion>>>;
+
+#[cfg(feature = "inflight-dedup")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FlightCompletion {
+    CheckCache,
+    Uncacheable,
+}
 
 #[cfg(feature = "inflight-dedup")]
 pub(crate) enum InflightResponse<'a> {
     Leader(PendingResponse<'a>),
-    Follower(watch::Receiver<()>),
+    Follower(watch::Receiver<FlightCompletion>),
+}
+
+#[cfg(feature = "inflight-dedup")]
+pub(crate) enum SharedResponse<'a> {
+    Cached(String),
+    Leader(PendingResponse<'a>),
+    Independent,
 }
 
 #[cfg(feature = "inflight-dedup")]
 pub(crate) struct PendingResponse<'a> {
     key: CacheKey,
     requests: &'a PendingResponses,
+    completion: FlightCompletion,
+}
+
+#[cfg(feature = "inflight-dedup")]
+impl PendingResponse<'_> {
+    pub(crate) fn finish_uncached(mut self) {
+        self.completion = FlightCompletion::Uncacheable;
+    }
 }
 
 #[cfg(feature = "inflight-dedup")]
@@ -67,8 +89,13 @@ impl Drop for PendingResponse<'_> {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(&self.key);
-        // Closing the channel wakes followers after the map has been unlocked.
-        drop(sender);
+        // Notify followers after the map has been unlocked. The default
+        // completion is a channel close, including on failure or cancellation.
+        if let Some(sender) = sender
+            && self.completion == FlightCompletion::Uncacheable
+        {
+            sender.send_replace(self.completion);
+        }
     }
 }
 
@@ -189,14 +216,46 @@ impl ResponseCache {
         match requests.entry(key) {
             Entry::Occupied(entry) => InflightResponse::Follower(entry.get().subscribe()),
             Entry::Vacant(entry) => {
-                let (sender, _) = watch::channel(());
+                let (sender, _) = watch::channel(FlightCompletion::CheckCache);
                 entry.insert(sender);
                 InflightResponse::Leader(PendingResponse {
                     key,
                     requests: &self.inflight,
+                    completion: FlightCompletion::CheckCache,
                 })
             }
         }
+    }
+
+    #[cfg(feature = "inflight-dedup")]
+    pub(crate) async fn shared_response(&self, key: CacheKey) -> Result<SharedResponse<'_>> {
+        if let Some(output) = self.get_response(key).await? {
+            return Ok(SharedResponse::Cached(output));
+        }
+
+        // A miss after the first flight permits one shared handoff. Callers
+        // still make their own attempts if both flights fail to cache a value.
+        for _ in 0..2 {
+            match self.register_inflight(key) {
+                InflightResponse::Leader(pending) => {
+                    // Another flight may have filled the cache before registration.
+                    return Ok(match self.get_response(key).await? {
+                        Some(output) => SharedResponse::Cached(output),
+                        None => SharedResponse::Leader(pending),
+                    });
+                }
+                InflightResponse::Follower(mut finished) => {
+                    let _ = finished.changed().await;
+                    if *finished.borrow() == FlightCompletion::Uncacheable {
+                        return Ok(SharedResponse::Independent);
+                    }
+                    if let Some(output) = self.get_response(key).await? {
+                        return Ok(SharedResponse::Cached(output));
+                    }
+                }
+            }
+        }
+        Ok(SharedResponse::Independent)
     }
 
     /// Fetches the full cached entry (including raw output) for a key.

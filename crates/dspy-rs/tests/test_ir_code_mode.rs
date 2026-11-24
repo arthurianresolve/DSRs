@@ -10,8 +10,9 @@ use dspy_rs::ir::{
     self, Budget, FieldType as T, Interpreter, LoadError, Program, ProgramBuilder, RuntimeEnv,
     SignatureDef,
 };
-use dspy_rs::trace::{SpanEvent, capture};
+use dspy_rs::trace::{ReplayMode, SpanEvent, capture, replay};
 use dspy_rs::{LM, LMClient, LMConfig, RUN_JS_TOOL_NAME, SandboxConfig, TestCompletionModel};
+use dsrs_tools::Executor as _;
 use rig::completion::{AssistantContent, ToolDefinition};
 use rig::message::{Text, ToolCall, ToolFunction};
 use serde_json::json;
@@ -274,8 +275,11 @@ async fn agent_loop_code_mode_chains_two_tools_in_one_run_js() {
     assert!(description.contains("{city: string}"), "{description}");
 }
 
+#[rstest::rstest]
+#[case::mixed(true)]
+#[case::only_stop_tools(false)]
 #[tokio::test]
-async fn stop_tools_stay_individual_next_to_run_js() {
+async fn stop_tools_stay_individual_next_to_run_js(#[case] with_counter: bool) {
     let mut b = ProgramBuilder::new("stoppable");
     b.cap("net:tools");
     b.model("m", config());
@@ -316,7 +320,11 @@ async fn stop_tools_stay_individual_next_to_run_js() {
     );
     let researcher = ir::agent("researcher", research)
         .bind("question", ir::input("question"))
-        .tools([counter, submit])
+        .tools(if with_counter {
+            vec![counter, submit]
+        } else {
+            vec![submit]
+        })
         .stop_tools([submit])
         .max_turns(4);
     let program = b
@@ -328,11 +336,17 @@ async fn stop_tools_stay_individual_next_to_run_js() {
 
     let counter_tool = CounterTool::default();
     let counter_calls = Arc::clone(&counter_tool.calls);
-    let (lm, client) = canned_lm(vec![
-        tool_call(RUN_JS_TOOL_NAME, json!({"code": "return counter({}).n;"})),
-        tool_call("submit", json!({"answer": "counter says 1"})),
-    ])
-    .await;
+    let calls = usize::from(with_counter);
+    let answer = format!("counter says {calls}");
+    let mut responses = Vec::new();
+    if with_counter {
+        responses.push(tool_call(
+            RUN_JS_TOOL_NAME,
+            json!({"code": "return counter({}).n;"}),
+        ));
+    }
+    responses.push(tool_call("submit", json!({"answer":answer})));
+    let (lm, client) = canned_lm(responses).await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
         .bind_host_tool("counter", Arc::new(counter_tool), &[])
@@ -352,15 +366,18 @@ async fn stop_tools_stay_individual_next_to_run_js() {
         .await
         .unwrap();
     // The stop tool's args became the raw final output.
-    assert_eq!(result["answer"], "counter says 1");
-    assert_eq!(counter_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(result["answer"], answer);
+    assert_eq!(counter_calls.load(Ordering::SeqCst), calls);
 
     // The advertised surface was run_js + the individual stop tool.
     let last = client.last_request().unwrap();
     let advertised: Vec<&str> = last.tools.iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(advertised, vec![RUN_JS_TOOL_NAME, "submit"]);
-    // The stop tool is not part of the JS API.
-    assert!(!last.tools[0].description.contains("submit(args)"));
+    if with_counter {
+        assert_eq!(advertised, vec![RUN_JS_TOOL_NAME, "submit"]);
+        assert!(!last.tools[0].description.contains("submit(args)"));
+    } else {
+        assert_eq!(advertised, vec!["submit"]);
+    }
 }
 
 #[tokio::test]
@@ -422,7 +439,8 @@ async fn sandboxed_tools_join_the_js_api() {
 
     let weather_tool = WeatherTool::default();
     let weather_calls = Arc::clone(&weather_tool.calls);
-    let (lm, _client) = canned_lm(vec![
+    let sandbox = Arc::new(dsrs_tools::QuickJsExecutor::new());
+    let (lm, client) = canned_lm(vec![
         tool_call(
             RUN_JS_TOOL_NAME,
             json!({"code": "const w = get_weather({city: 'Oslo'});\n\
@@ -436,7 +454,7 @@ async fn sandboxed_tools_join_the_js_api() {
         .bind_model("m", lm)
         .bind_host_tool("get-weather", Arc::new(weather_tool), &[])
         .grant("net:tools")
-        .with_sandbox(Arc::new(dsrs_tools::QuickJsExecutor::new()))
+        .with_sandbox(sandbox.clone())
         .with_code_mode(SandboxConfig::default());
     let interp = Interpreter::load(program, env).await.unwrap();
 
@@ -460,6 +478,38 @@ async fn sandboxed_tools_join_the_js_api() {
         })
         .expect("run_js ToolRun recorded");
     assert_eq!(run.as_str(), "42");
+
+    let program = interp.program();
+    let code = program.param_id("tool.double.code").unwrap();
+    let mut overlay = ir::Overlay::new(program);
+    overlay
+        .set(
+            program,
+            code,
+            ir::ParamValue::code(ir::CodeLang::Js, "(args) => args.n * 3"),
+        )
+        .unwrap();
+    let overlay = Arc::new(overlay);
+    let registered = sandbox.tools().len();
+    let input = || obj(&[("question", json!("double Oslo's temperature"))]);
+    let (replayed, report) = replay(&trace, ReplayMode::Strict, || {
+        interp.run(input(), Some(overlay.clone()), Budget::unlimited())
+    })
+    .await;
+    assert_eq!(replayed.unwrap()["answer"], "doubled to 42");
+    assert_eq!(report.served, 1);
+    assert_eq!(client.call_count(), 2);
+    assert_eq!(sandbox.tools().len(), registered);
+
+    client.push_response(text(fields(&[("answer", "live output")])));
+    client.push_response(text(fields(&[("answer", "live output")])));
+    let (first, second) = tokio::join!(
+        interp.run(input(), Some(overlay.clone()), Budget::unlimited()),
+        interp.run(input(), Some(overlay), Budget::unlimited()),
+    );
+    assert_eq!(first.unwrap()["answer"], "live output");
+    assert_eq!(second.unwrap()["answer"], "live output");
+    assert_eq!(sandbox.tools().len(), registered + 1);
 }
 
 #[tokio::test]

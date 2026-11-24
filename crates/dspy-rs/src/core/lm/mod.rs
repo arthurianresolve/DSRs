@@ -27,8 +27,10 @@ use crate::core::history::{CallProgress, HistoryCall};
 use crate::trace::SpanEvent;
 #[cfg(feature = "cache")]
 use crate::utils::cache::CacheEntry;
-#[cfg(feature = "inflight-dedup")]
+#[cfg(all(test, feature = "inflight-dedup"))]
 use crate::utils::cache::InflightResponse;
+#[cfg(feature = "inflight-dedup")]
+use crate::utils::cache::SharedResponse;
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
@@ -1305,7 +1307,7 @@ impl LM {
         } else {
             None
         };
-        #[cfg(feature = "cache")]
+        #[cfg(all(feature = "cache", not(feature = "inflight-dedup")))]
         if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref())
             && let Some(raw_output) = cache.get_response(key).await?
         {
@@ -1315,20 +1317,14 @@ impl LM {
 
         #[cfg(feature = "inflight-dedup")]
         let pending = if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref()) {
-            let pending = match cache.register_inflight(key) {
-                InflightResponse::Leader(pending) => Some(pending),
-                InflightResponse::Follower(mut finished) => {
-                    let _ = finished.changed().await;
-                    None
+            match cache.shared_response(key).await? {
+                SharedResponse::Cached(raw_output) => {
+                    debug!("lm response shared from cache");
+                    return Ok(Self::response_from_cache(messages, raw_output));
                 }
-            };
-
-            // The first caller can fill the cache between the miss and registration.
-            if let Some(raw_output) = cache.get_response(key).await? {
-                debug!("lm response shared with an in-flight identical call");
-                return Ok(Self::response_from_cache(messages, raw_output));
+                SharedResponse::Leader(pending) => Some(pending),
+                SharedResponse::Independent => None,
             }
-            pending
         } else {
             None
         };
@@ -1457,9 +1453,10 @@ impl LM {
         // `returned_tool_calls` covers caller-managed tool responses. This runs
         // before `messages` is moved into the returned chat below.
         #[cfg(feature = "cache")]
+        let cacheable = returned_tool_calls.is_empty() && !append_output_after_history;
+        #[cfg(feature = "cache")]
         if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref())
-            && returned_tool_calls.is_empty()
-            && !append_output_after_history
+            && cacheable
         {
             let entry = CacheEntry {
                 prompt: messages.to_json().to_string(),
@@ -1470,7 +1467,11 @@ impl LM {
             trace!("lm response cached");
         }
         #[cfg(feature = "inflight-dedup")]
-        drop(pending);
+        if cacheable {
+            drop(pending);
+        } else if let Some(pending) = pending {
+            pending.finish_uncached();
+        }
 
         let mut full_chat = if let Some(result) = tool_loop_result.as_ref() {
             Self::chat_from_rig_history(&system_prompt, &result.chat_history)
@@ -2197,9 +2198,10 @@ pub(crate) mod tests {
 
     #[cfg(feature = "inflight-dedup")]
     struct DelayedFirstFailure {
-        calls: AtomicUsize,
+        calls: Arc<AtomicUsize>,
         started: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
+        recover: Arc<tokio::sync::Notify>,
         model: TestCompletionModel,
     }
 
@@ -2216,6 +2218,7 @@ pub(crate) mod tests {
                     "in-flight leader failed".into(),
                 ));
             }
+            self.recover.notified().await;
             self.model.completion(request).await
         }
     }
@@ -2226,14 +2229,18 @@ pub(crate) mod tests {
     #[case::cancellation(true)]
     #[tokio::test]
     async fn identical_call_falls_back_when_inflight_produces_no_response(#[case] cancel: bool) {
+        const WAITERS: usize = 8;
         let model = TestCompletionModel::new([make_text("fresh")]);
+        let calls = Arc::new(AtomicUsize::new(0));
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
+        let recover = Arc::new(tokio::sync::Notify::new());
         let mut lm = cached_test_lm(model.clone()).await;
         lm.client = Some(Arc::new(LMClient::custom(DelayedFirstFailure {
-            calls: AtomicUsize::new(0),
+            calls: Arc::clone(&calls),
             started: started.clone(),
             release: release.clone(),
+            recover: Arc::clone(&recover),
             model: model.clone(),
         })));
         let chat = Chat::new(vec![Message::user("hi")]);
@@ -2245,9 +2252,11 @@ pub(crate) mod tests {
         tokio::time::timeout(Duration::from_secs(5), started.notified())
             .await
             .expect("leader did not reach the provider");
-        let mut waiter = tokio::spawn(async move { lm.call(chat, vec![]).await });
+        let mut waiters = std::pin::pin!(futures::future::join_all(
+            (0..WAITERS).map(|_| lm.call(chat.clone(), vec![]))
+        ));
         assert!(
-            tokio::time::timeout(Duration::from_millis(50), &mut waiter)
+            tokio::time::timeout(Duration::from_millis(50), &mut waiters)
                 .await
                 .is_err()
         );
@@ -2260,14 +2269,40 @@ pub(crate) mod tests {
             assert!(leader.await.unwrap().is_err());
         }
 
-        let response = tokio::time::timeout(Duration::from_secs(5), waiter)
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut waiters)
+                .await
+                .is_err()
+        );
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        recover.notify_waiters();
+        let responses = tokio::time::timeout(Duration::from_secs(5), waiters)
             .await
-            .expect("waiter did not finish")
-            .unwrap()
-            .unwrap();
-        assert_eq!(response.output.content(), "fresh");
-        assert!(!response.cache_hit);
+            .expect("waiters did not finish");
+        let mut cache_hits = 0;
+        for response in responses {
+            let response = response.unwrap();
+            assert_eq!(response.output.content(), "fresh");
+            if response.cache_hit {
+                assert_eq!(response.usage.total_tokens, 0);
+                cache_hits += 1;
+            }
+        }
+        assert_eq!(cache_hits, WAITERS - 1);
         assert_eq!(model.call_count(), 1);
+    }
+
+    #[cfg(feature = "inflight-dedup")]
+    #[tokio::test]
+    async fn uncacheable_flight_releases_waiters_for_independent_calls() {
+        let cache = ResponseCache::memory_only_for_test().await;
+        let InflightResponse::Leader(pending) = cache.register_inflight(17) else {
+            panic!("first caller should lead");
+        };
+        let mut waiter = std::pin::pin!(cache.shared_response(17));
+        assert!(futures::poll!(&mut waiter).is_pending());
+        pending.finish_uncached();
+        assert!(matches!(waiter.await.unwrap(), SharedResponse::Independent));
     }
 
     #[tokio::test]

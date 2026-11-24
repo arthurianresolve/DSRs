@@ -512,7 +512,7 @@ pub struct Interpreter {
     /// At most one rendered demo set per leaf. The overlay is never kept alive by the cache.
     demo_messages: RwLock<HashMap<NodeId, CachedDemos>>,
     input_templates: SecondaryMap<SigId, Option<Arc<PreparedInputTemplates>>>,
-    output_schemas: PrimaryMap<SigId, PreparedOutputSchemas>,
+    schemas: PrimaryMap<SigId, PreparedSchemas>,
     models: SecondaryMap<ModelId, Option<Arc<LM>>>,
     tool_exec: SecondaryMap<ToolId, Option<ToolExec>>,
     /// Extern-hole bindings by leaf name, verified complete at load.
@@ -693,9 +693,9 @@ impl Interpreter {
         }
 
         let mut input_templates = SecondaryMap::new();
-        let mut output_schemas = PrimaryMap::new();
+        let mut schemas = PrimaryMap::new();
         for (sig, def) in program.sigs.iter() {
-            output_schemas.push(PreparedOutputSchemas::new(def));
+            schemas.push(PreparedSchemas::new(def));
             if let Some(templates) = PreparedInputTemplates::new(def) {
                 input_templates[sig] = Some(Arc::new(templates));
             }
@@ -705,7 +705,7 @@ impl Interpreter {
             system_prompts: RwLock::new(HashMap::new()),
             demo_messages: RwLock::new(HashMap::new()),
             input_templates,
-            output_schemas,
+            schemas,
             models,
             tool_exec,
             host_holes,
@@ -720,7 +720,7 @@ impl Interpreter {
     }
 
     fn output_format(&self, sig: SigId, lm: &LM, allow_scalar: bool) -> OutputFormat {
-        let prepared = &self.output_schemas[sig];
+        let prepared = &self.schemas[sig];
         if prepared.tool_calls {
             return OutputFormat::Delimited;
         }
@@ -752,7 +752,7 @@ impl Interpreter {
             json_mode: true,
             force_output_schema: false,
         };
-        let prepared = &self.output_schemas[sig];
+        let prepared = &self.schemas[sig];
         let options = match format {
             OutputFormat::Delimited => return &DELIMITED,
             OutputFormat::JsonMode => return &JSON_MODE,
@@ -769,6 +769,15 @@ impl Interpreter {
                 output_schema: Some(schema),
                 ..LMCallOptions::default()
             })
+        })
+    }
+
+    fn tool_input_schema(&self, sig: SigId) -> &Value {
+        self.schemas[sig].tool_input.get_or_init(|| {
+            Box::new(input_schema_of(
+                &self.program.sigs[sig],
+                &self.program.types,
+            ))
         })
     }
 
@@ -2280,29 +2289,27 @@ impl Interpreter {
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
         }
-        let surface = self.build_agent_surface(&at, n, cx, true).await?;
-
-        let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
-
-        let guard = begin_span_lazy(|| SpanRequest {
-            component: &at,
-            prefix: Some(&prefix),
-            suffix: &suffix,
-            input: Some(input.clone()),
-            model: &lm.config,
-            request_hash: None,
-        });
-
         let prefix_len = prefix.len();
         let mut messages = prefix;
         messages.extend(suffix);
         let chat = Chat::new(messages);
+        let open_span = || {
+            begin_span_lazy(|| SpanRequest {
+                component: &at,
+                prefix: Some(&chat.messages[..prefix_len]),
+                suffix: &chat.messages[prefix_len..],
+                input: Some(input.clone()),
+                model: &lm.config,
+                request_hash: None,
+            })
+        };
 
         // Replay (RFC 0003 M-1): an agent loop is one span keyed on its
         // opening prompt; serving it returns the recorded final output with
         // every tool effect baked in — nothing re-executes.
         match crate::trace::replay::intercept(&at, &lm.config, &chat.messages) {
             Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
+                let guard = open_span();
                 let output = span
                     .output
                     .clone()
@@ -2348,7 +2355,7 @@ impl Interpreter {
                 return Ok(output);
             }
             Some(crate::trace::replay::ReplayDirective::Refuse(err)) => {
-                if let Some(guard) = guard {
+                if let Some(guard) = open_span() {
                     guard.finish(span_error(
                         crate::trace::SpanErrorKind::Lm,
                         err.to_string(),
@@ -2365,6 +2372,9 @@ impl Interpreter {
             Some(crate::trace::replay::ReplayDirective::Live) | None => {}
         }
 
+        let surface = self.build_agent_surface(&at, n, cx, true).await?;
+        let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
+        let guard = open_span();
         let loop_cx = AgentLoopCx {
             at: &at,
             n,
@@ -2733,7 +2743,7 @@ impl Interpreter {
             definitions.push(rig::completion::ToolDefinition {
                 name: name.clone(),
                 description: self.p_text(cx, tool.desc),
-                parameters: input_schema_of(&p.sigs[tool.sig], &p.types),
+                parameters: self.tool_input_schema(tool.sig).clone(),
             });
             by_name.insert(name, tool_id);
             if let ToolKind::Sandboxed { code } = tool.kind
@@ -2795,9 +2805,9 @@ impl Interpreter {
         let mut capabilities = Vec::new();
         // `definitions[i]` was built from `tools[i]` (the ToolSet-selected
         // surface) — same order.
-        for (&tool_id, definition) in tools.iter().zip(definitions.iter()) {
+        for (&tool_id, definition) in tools.iter().zip(std::mem::take(definitions)) {
             if stop_names.contains(&definition.name) {
-                kept.push(definition.clone());
+                kept.push(definition);
                 continue;
             }
             // Collisions were refused at load; names here are unique.
@@ -2858,12 +2868,13 @@ impl Interpreter {
             };
             apis.push(dsrs_tools::ToolApi {
                 js_name,
-                description: definition.description.clone(),
-                parameters: definition.parameters.clone(),
+                description: definition.description,
+                parameters: definition.parameters,
             });
             capabilities.push(capability);
         }
         if apis.is_empty() {
+            *definitions = kept;
             return Ok(None);
         }
         let run_js = rig::completion::ToolDefinition {
@@ -3182,15 +3193,16 @@ impl CachedDemos {
     }
 }
 
-struct PreparedOutputSchemas {
+struct PreparedSchemas {
     tool_calls: bool,
     scalar: bool,
     compatible: OnceLock<bool>,
     object_options: OnceLock<Box<LMCallOptions>>,
     scalar_options: OnceLock<Box<LMCallOptions>>,
+    tool_input: OnceLock<Box<Value>>,
 }
 
-impl PreparedOutputSchemas {
+impl PreparedSchemas {
     fn new(def: &SignatureDef) -> Self {
         Self {
             tool_calls: def
@@ -3202,6 +3214,7 @@ impl PreparedOutputSchemas {
             compatible: OnceLock::new(),
             object_options: OnceLock::new(),
             scalar_options: OnceLock::new(),
+            tool_input: OnceLock::new(),
         }
     }
 }
@@ -3568,8 +3581,15 @@ async fn register_code(
         source,
     );
     let allowed: Vec<String> = caps.iter().map(str::to_string).collect();
-    sandbox.register_scoped(tool_source, &allowed).await?;
-    Ok(name)
+    match sandbox.register_scoped(tool_source, &allowed).await {
+        Ok(_) => Ok(name),
+        Err(dsrs_tools::RegisterError::Duplicate { name: registered })
+            if registered == name && sandbox.tool(&name).is_some() =>
+        {
+            Ok(name)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -444,18 +444,15 @@ impl ScoreMatrix {
 
     /// Mean over the cells this candidate has been scored on (`None` if none).
     pub fn mean(&self, candidate: usize) -> Option<f64> {
-        let filled: Vec<f64> = self
+        let mut count = 0;
+        let sum: f64 = self
             .rows
             .get(candidate)?
             .iter()
             .flatten()
-            .copied()
-            .collect();
-        if filled.is_empty() {
-            None
-        } else {
-            Some(filled.iter().sum::<f64>() / filled.len() as f64)
-        }
+            .inspect(|_| count += 1)
+            .sum();
+        (count != 0).then(|| sum / count as f64)
     }
 
     /// The fully-scored candidate with the highest mean.
@@ -767,6 +764,12 @@ pub(crate) enum CandidatePayload {
     Overlay(std::sync::Arc<crate::ir::Overlay>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum CandidateKind {
+    Params,
+    Overlay,
+}
+
 /// A candidate bound against a concrete target, ready to inject per rollout.
 #[derive(Clone)]
 pub(crate) enum BoundCandidate {
@@ -789,6 +792,7 @@ pub(crate) enum BoundCandidate {
 pub struct Engine {
     config: EngineConfig,
     candidates: Vec<(u64, CandidatePayload)>,
+    candidate_indices: HashMap<(CandidateKind, u64), usize>,
     matrix: ScoreMatrix,
     matrix_scope: Option<ScoreScope>,
     cache: RolloutCache,
@@ -822,6 +826,7 @@ impl Engine {
         Self {
             config,
             candidates: Vec::new(),
+            candidate_indices: HashMap::new(),
             matrix: ScoreMatrix::new(0),
             matrix_scope: None,
             cache: RolloutCache::default(),
@@ -891,16 +896,10 @@ impl Engine {
     /// Returns its index.
     pub fn register(&mut self, candidate: Candidate) -> usize {
         let hash = candidate.stable_hash();
-        if let Some(existing) = self.candidates.iter().position(|(h, payload)| {
-            *h == hash && matches!(payload, CandidatePayload::Params { .. })
-        }) {
-            return existing;
-        }
-        let params = std::sync::Arc::new(candidate.to_params());
-        self.candidates
-            .push((hash, CandidatePayload::Params { candidate, params }));
-        self.matrix.ensure_rows(self.candidates.len());
-        self.candidates.len() - 1
+        self.register_candidate(CandidateKind::Params, hash, || {
+            let params = std::sync::Arc::new(candidate.to_params());
+            CandidatePayload::Params { candidate, params }
+        })
     }
 
     /// Registers a program-lane [`ir::Overlay`](crate::ir::Overlay) candidate,
@@ -908,19 +907,29 @@ impl Engine {
     /// its index.
     pub fn register_overlay(&mut self, overlay: crate::ir::Overlay) -> usize {
         let hash = overlay.hash();
-        if let Some(existing) = self
-            .candidates
-            .iter()
-            .position(|(h, payload)| *h == hash && matches!(payload, CandidatePayload::Overlay(_)))
-        {
-            return existing;
+        self.register_candidate(CandidateKind::Overlay, hash, || {
+            CandidatePayload::Overlay(std::sync::Arc::new(overlay))
+        })
+    }
+
+    fn register_candidate(
+        &mut self,
+        kind: CandidateKind,
+        hash: u64,
+        payload: impl FnOnce() -> CandidatePayload,
+    ) -> usize {
+        use std::collections::hash_map::Entry;
+
+        match self.candidate_indices.entry((kind, hash)) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
+                let index = self.candidates.len();
+                self.candidates.push((hash, payload()));
+                self.matrix.ensure_rows(self.candidates.len());
+                entry.insert(index);
+                index
+            }
         }
-        self.candidates.push((
-            hash,
-            CandidatePayload::Overlay(std::sync::Arc::new(overlay)),
-        ));
-        self.matrix.ensure_rows(self.candidates.len());
-        self.candidates.len() - 1
     }
 
     /// The registered module-lane candidate at `index`, if it is one.
@@ -1035,8 +1044,10 @@ impl Engine {
 
         let mut cached = HashMap::new();
         let mut pending = Vec::new();
+        let mut needs_binding = Vec::new();
         for &candidate in &unique_candidates {
             let candidate_hash = self.candidates[candidate].0;
+            let previous_pending = pending.len();
             for &idx in &unique_indices {
                 match self
                     .cache
@@ -1048,6 +1059,10 @@ impl Engine {
                     None => pending.push((candidate, idx)),
                 }
             }
+            // Empty batches still validate candidate compatibility.
+            if pending.len() > previous_pending || unique_indices.is_empty() {
+                needs_binding.push(candidate);
+            }
         }
 
         if !self.budget_allows(pending.len()) {
@@ -1057,9 +1072,9 @@ impl Engine {
             });
         }
 
-        // Bind each requested candidate against the target once.
-        let mut bound: HashMap<usize, BoundCandidate> = HashMap::new();
-        for &candidate in &unique_candidates {
+        // Cached scores already belong to this target's baseline.
+        let mut bound = HashMap::with_capacity(needs_binding.len());
+        for candidate in needs_binding {
             tracing::debug!(target: "dsrs::content", candidate,
                 params = ?self.candidate(candidate), "optimizer candidate parameters");
             bound.insert(candidate, target.bind(&self.candidates[candidate].1)?);

@@ -230,8 +230,7 @@ impl ReplaySession {
                     .spans
                     .iter()
                     .find(|span| span.component == id && span.seq == seq),
-            })
-            .cloned();
+            });
         let span = match recorded {
             Some(span) => span,
             None => {
@@ -246,32 +245,36 @@ impl ReplaySession {
         };
 
         if !span.complete || span.output.is_none() {
+            let id = span.id;
             return inner.mismatch(
-                Some(span.id),
+                Some(id),
                 ReplayError::Incomplete {
                     component: component.to_string(),
                     seq,
-                    span: span.id,
+                    span: id,
                 },
             );
         }
 
         if got_hash != span.request_hash {
+            let id = span.id;
+            let expected_hash = span.request_hash;
             return inner.mismatch(
-                Some(span.id),
+                Some(id),
                 ReplayError::Divergence {
                     component: component.to_string(),
                     seq,
-                    expected_span: span.id,
-                    expected_hash: span.request_hash,
+                    expected_span: id,
+                    expected_hash,
                     got_hash,
                 },
             );
         }
 
+        let span = Box::new(span.clone());
         inner.cursors.insert(component.to_string(), seq + 1);
         inner.report.served += 1;
-        ReplayDirective::Serve(Box::new(span))
+        ReplayDirective::Serve(span)
     }
 }
 

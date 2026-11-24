@@ -15,7 +15,7 @@ use futures::future::join_all;
 use serde_json::Value;
 
 mod runtime;
-use runtime::{CellOutput, Session};
+use runtime::{BlockingTask, CellOutput, Session};
 
 /// Limits for one reasoning session.
 struct RlmConfig {
@@ -40,6 +40,8 @@ impl Default for RlmConfig {
 ///
 /// The cells run in embedded CPython with the application's permissions. Use this
 /// module with code and data sources that you trust to run in the host process.
+/// Cancelling a call aborts queued work. An already-running CPython cell can
+/// remain active until it returns.
 pub struct Rlm<S: Signature> {
     config: RlmConfig,
     lm: Option<Arc<LM>>,
@@ -96,7 +98,8 @@ impl<S: Signature> Module for Rlm<S> {
         );
         let output_limit = self.config.max_output_chars;
         let (mut session, preview) =
-            tokio::task::spawn_blocking(move || Session::new(input_json, output_limit))
+            BlockingTask::spawn(move || Session::new(input_json, output_limit))
+                .join()
                 .await
                 .map_err(internal_error)?
                 .map_err(internal_error)?;
@@ -258,7 +261,7 @@ async fn run_cell(
     remaining: &mut usize,
     metadata: &mut CallMetadata,
 ) -> Result<CellOutput, Box<dyn Error + Send + Sync>> {
-    let mut worker = session.execute(source);
+    let mut worker = std::pin::pin!(session.execute(source).join());
     loop {
         tokio::select! {
             result = &mut worker => return Ok(result??),

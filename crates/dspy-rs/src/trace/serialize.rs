@@ -53,36 +53,38 @@ struct HeaderOwned {
 }
 
 #[derive(Serialize, Deserialize)]
-struct Footer {
-    f: TraceOutcome,
+struct Footer<T> {
+    f: T,
 }
 
 impl Trace {
     /// Serializes to canonical JSONL: one header line, one line per span, one
     /// footer line when an outcome is recorded.
     pub fn to_jsonl(&self) -> Result<String> {
-        let mut out = String::new();
-        out.push_str(&serde_json::to_string(&HeaderRef {
-            h: &self.meta,
-            components: &self.components,
-            param_ids: &self.param_ids,
-            models: &self.models,
-            prefixes: &self.prefixes,
-        })?);
-        out.push('\n');
+        let mut out = Vec::new();
+        serde_json::to_writer(
+            &mut out,
+            &HeaderRef {
+                h: &self.meta,
+                components: &self.components,
+                param_ids: &self.param_ids,
+                models: &self.models,
+                prefixes: &self.prefixes,
+            },
+        )?;
+        out.push(b'\n');
         for span in &self.spans {
-            let line = match truncated_span(span) {
-                Some(truncated) => serde_json::to_string(&truncated)?,
-                None => serde_json::to_string(span)?,
-            };
-            out.push_str(&line);
-            out.push('\n');
+            match truncated_span(span) {
+                Some(truncated) => serde_json::to_writer(&mut out, &truncated)?,
+                None => serde_json::to_writer(&mut out, span)?,
+            }
+            out.push(b'\n');
         }
         if let Some(outcome) = &self.outcome {
-            out.push_str(&serde_json::to_string(&Footer { f: outcome.clone() })?);
-            out.push('\n');
+            serde_json::to_writer(&mut out, &Footer { f: outcome })?;
+            out.push(b'\n');
         }
-        Ok(out)
+        Ok(String::from_utf8(out)?)
     }
 
     /// Parses JSONL produced by [`to_jsonl`](Trace::to_jsonl). Unknown fields
@@ -112,7 +114,7 @@ impl Trace {
         };
 
         for line in lines {
-            if let Ok(footer) = serde_json::from_str::<Footer>(line) {
+            if let Ok(footer) = serde_json::from_str::<Footer<TraceOutcome>>(line) {
                 trace.outcome = Some(footer.f);
                 continue;
             }
@@ -262,6 +264,34 @@ mod tests {
         assert!(text.len() < big.len());
         assert!(text.contains("truncated fnv1a="));
         assert!(text.contains(&format!("len={}", big.len())));
+    }
+
+    #[test]
+    fn jsonl_writes_the_canonical_header_span_and_footer_bytes() {
+        let mut trace = test_trace(test_span("Zürich\nquoted \"value\""));
+        trace.outcome = Some(TraceOutcome {
+            output: Some(serde_json::Map::from_iter([(
+                "answer".to_string(),
+                serde_json::Value::String("東京".to_string()),
+            )])),
+            error: None,
+            eval: Some(crate::Eval::score(1.0)),
+            duration_us: 12,
+        });
+        let header = serde_json::to_string(&HeaderRef {
+            h: &trace.meta,
+            components: &trace.components,
+            param_ids: &trace.param_ids,
+            models: &trace.models,
+            prefixes: &trace.prefixes,
+        })
+        .unwrap();
+        let span = serde_json::to_string(&trace.spans[0]).unwrap();
+        let footer = serde_json::to_string(trace.outcome.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            trace.to_jsonl().unwrap(),
+            format!("{header}\n{span}\n{{\"f\":{footer}}}\n")
+        );
     }
 
     #[test]

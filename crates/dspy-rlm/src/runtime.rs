@@ -6,7 +6,26 @@ use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 use pyo3::types::PyModule;
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinError, JoinHandle};
+
+pub(crate) struct BlockingTask<T>(JoinHandle<T>);
+
+impl<T: Send + 'static> BlockingTask<T> {
+    pub(crate) fn spawn(work: impl FnOnce() -> T + Send + 'static) -> Self {
+        Self(tokio::task::spawn_blocking(work))
+    }
+
+    pub(crate) async fn join(mut self) -> Result<T, JoinError> {
+        (&mut self.0).await
+    }
+}
+
+impl<T> Drop for BlockingTask<T> {
+    fn drop(&mut self) {
+        // Tokio can abort a blocking task until its closure starts.
+        self.0.abort();
+    }
+}
 
 pub(crate) struct Query {
     pub prompts: Vec<String>,
@@ -73,9 +92,9 @@ impl Session {
         ))
     }
 
-    pub fn execute(&self, source: String) -> JoinHandle<PyResult<CellOutput>> {
+    pub fn execute(&self, source: String) -> BlockingTask<PyResult<CellOutput>> {
         let python = Arc::clone(&self.python);
-        tokio::task::spawn_blocking(move || {
+        BlockingTask::spawn(move || {
             Python::attach(|py| {
                 let result = python.bind(py).call_method1("run", (source,))?;
                 let (stdout, error, submission) = result.extract()?;
@@ -86,5 +105,49 @@ impl Session {
                 })
             })
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn dropping_the_join_future_skips_queued_work() {
+        tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let (started, occupied) = oneshot::channel();
+                let (release, held) = std::sync::mpsc::channel();
+                let blocker = tokio::task::spawn_blocking(move || {
+                    started.send(()).unwrap();
+                    held.recv().unwrap();
+                });
+                occupied.await.unwrap();
+
+                let ran = Arc::new(AtomicBool::new(false));
+                let (finished, dropped) = oneshot::channel::<()>();
+                let queued = BlockingTask::spawn({
+                    let ran = Arc::clone(&ran);
+                    move || {
+                        ran.store(true, Ordering::Relaxed);
+                        drop(finished);
+                    }
+                });
+                drop(queued.join());
+                release.send(()).unwrap();
+                blocker.await.unwrap();
+                assert!(
+                    tokio::time::timeout(std::time::Duration::from_secs(5), dropped)
+                        .await
+                        .unwrap()
+                        .is_err()
+                );
+                assert!(!ran.load(Ordering::Relaxed));
+            });
     }
 }
