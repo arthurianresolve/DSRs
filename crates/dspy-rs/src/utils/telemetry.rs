@@ -59,14 +59,25 @@ fn resolve_filter() -> Result<EnvFilter, TelemetryInitError> {
 }
 
 pub fn truncate(value: &str, max_chars: usize) -> &str {
-    if value.chars().count() <= max_chars {
-        value
-    } else {
-        let cutoff = value
-            .char_indices()
-            .nth(max_chars)
-            .map(|(idx, _)| idx)
-            .unwrap_or(value.len());
-        &value[..cutoff]
+    if value.len() <= max_chars {
+        return value;
+    }
+    let cutoff = value
+        .char_indices()
+        .nth(max_chars)
+        .map_or(value.len(), |(index, _)| index);
+    &value[..cutoff]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate;
+
+    #[test]
+    fn truncate_uses_unicode_scalar_boundaries() {
+        assert_eq!(truncate("a🌱界é", 0), "");
+        assert_eq!(truncate("a🌱界é", 2), "a🌱");
+        assert_eq!(truncate("a🌱界é", 4), "a🌱界é");
+        assert_eq!(truncate("a🌱界é", usize::MAX), "a🌱界é");
     }
 }

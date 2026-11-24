@@ -324,6 +324,58 @@ async fn persistence_failure_is_returned_to_the_caller() {
     );
 }
 
+#[tokio::test]
+async fn persistence_keeps_the_first_error_and_counts_later_failures() {
+    let result = with_interaction_store(Arc::new(Broken), async {
+        for _ in 0..5 {
+            dspy_rs::capture(|| async {}).await;
+        }
+    })
+    .await
+    .unwrap_err();
+    assert!(matches!(
+        result,
+        dspy_rs::StorageError::Session { source, additional: 4 }
+            if source.to_string().contains("disk full")
+    ));
+}
+
+#[tokio::test]
+async fn v1_journal_keeps_legacy_envelope_precedence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("calls.jsonl");
+    let store = Arc::new(JsonlInteractionStore::open(&path).unwrap());
+    let lm = lm(vec![answer("red")]).await;
+    with_interaction_store(
+        store.clone(),
+        lm.call(Chat::new(vec![Message::user("?")]), vec![]),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let entry = store.recent(1).unwrap().pop().unwrap();
+    drop(store);
+
+    let mut trace = dspy_rs::Trace::default();
+    trace.meta.trace_id = "legacy-trace".into();
+    let trace = serde_json::to_string(&trace).unwrap();
+    let record = format!(
+        "{{\"version\":1,\"trace\":{trace},\"entry\":{},\"extra\":true}}\n",
+        serde_json::to_string(&entry).unwrap()
+    );
+    let with_reordered_trace =
+        format!("{record}{{\"extra\":true,\"trace\":{trace},\"version\":1}}\n");
+    std::fs::write(&path, record).unwrap();
+    let reader = JsonlInteractionStore::open(&path).unwrap();
+    assert_eq!(reader.recent(1).unwrap()[0].id, entry.id);
+    assert!(reader.get_trace("legacy-trace").unwrap().is_none());
+    drop(reader);
+
+    std::fs::write(&path, with_reordered_trace).unwrap();
+    let reader = JsonlInteractionStore::open(&path).unwrap();
+    assert!(reader.get_trace("legacy-trace").unwrap().is_some());
+}
+
 struct Pending;
 impl dspy_rs::CompletionProvider for Pending {
     async fn completion(

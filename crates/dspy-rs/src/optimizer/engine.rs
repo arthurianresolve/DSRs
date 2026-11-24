@@ -328,53 +328,149 @@ pub struct Spend {
 /// In-memory rollout cache: `(baseline, candidate, example, salt)` → [`Eval`].
 ///
 /// A candidate re-evaluated on a seen example returns the cached `Eval` with
-/// no LM call and no metric call. (Disk-backed storage can layer on later —
-/// the key is already a stable string.)
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+/// no LM or metric call. The serialized map uses stable hexadecimal keys.
+#[derive(Clone, Debug, Default)]
 pub struct RolloutCache {
-    entries: BTreeMap<String, Eval>,
+    entries: BTreeMap<[u64; 4], CachedRollout>,
+    opaque_entries: BTreeMap<String, Eval>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedRollout {
+    wire_key: Box<str>,
+    eval: Eval,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename = "RolloutCache")]
+struct RolloutCacheWire<T> {
+    entries: T,
+}
+
+fn parse_rollout_key(key: &str) -> Option<[u64; 4]> {
+    let mut encoded = key.split(':');
+    let mut words = [0; 4];
+    for word in &mut words {
+        let part = encoded.next()?;
+        if part.len() != 16
+            || !part
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return None;
+        }
+        *word = u64::from_str_radix(part, 16).ok()?;
+    }
+    encoded.next().is_none().then_some(words)
+}
+
+fn encode_rollout_key(words: [u64; 4]) -> Box<str> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut key = [b':'; 67];
+    for (mut word, block) in words.into_iter().zip(key.chunks_mut(17)) {
+        for digit in block[..16].iter_mut().rev() {
+            *digit = HEX[(word & 15) as usize];
+            word >>= 4;
+        }
+    }
+    String::from_utf8(key.to_vec())
+        .expect("ASCII rollout key")
+        .into_boxed_str()
+}
+
+struct RolloutCacheEntries<'a>(&'a RolloutCache);
+
+impl Serialize for RolloutCacheEntries<'_> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+
+        let mut out = serializer.serialize_map(Some(self.0.len()))?;
+        let mut opaque = self.0.opaque_entries.iter().peekable();
+        // Fixed-width hexadecimal keys sort in the same order as their words.
+        for CachedRollout { wire_key, eval } in self.0.entries.values() {
+            let key = wire_key.as_ref();
+            while opaque.peek().is_some_and(|(name, _)| name.as_str() < key) {
+                let (name, eval) = opaque.next().expect("peeked legacy key");
+                out.serialize_entry(name, eval)?;
+            }
+            out.serialize_entry(key, eval)?;
+        }
+        for (name, eval) in opaque {
+            out.serialize_entry(name, eval)?;
+        }
+        out.end()
+    }
+}
+
+impl Serialize for RolloutCache {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        RolloutCacheWire {
+            entries: RolloutCacheEntries(self),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RolloutCache {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let wire = RolloutCacheWire::<BTreeMap<String, Eval>>::deserialize(deserializer)?;
+        let mut cache = Self::default();
+        for (key, eval) in wire.entries {
+            match parse_rollout_key(&key) {
+                Some(words) => {
+                    cache.entries.insert(
+                        words,
+                        CachedRollout {
+                            wire_key: key.into_boxed_str(),
+                            eval,
+                        },
+                    );
+                }
+                None => {
+                    cache.opaque_entries.insert(key, eval);
+                }
+            }
+        }
+        Ok(cache)
+    }
 }
 
 impl RolloutCache {
-    fn key(baseline: u64, candidate: u64, example: u64, salt: u64) -> [u8; 67] {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        // Preserve the serialized key's four zero-padded words and separators.
-        let mut key = [b':'; 67];
-        for (mut word, block) in [baseline, candidate, example, salt]
-            .into_iter()
-            .zip(key.chunks_mut(17))
-        {
-            for digit in block[..16].iter_mut().rev() {
-                *digit = HEX[(word & 15) as usize];
-                word >>= 4;
-            }
-        }
-        key
-    }
-
     pub fn get(&self, baseline: u64, candidate: u64, example: u64, salt: u64) -> Option<&Eval> {
-        if self.entries.is_empty() {
-            return None;
-        }
-        let key = Self::key(baseline, candidate, example, salt);
         self.entries
-            .get(std::str::from_utf8(&key).expect("ASCII cache key"))
+            .get(&[baseline, candidate, example, salt])
+            .map(|entry| &entry.eval)
     }
 
     pub fn insert(&mut self, baseline: u64, candidate: u64, example: u64, salt: u64, eval: Eval) {
-        let key = Self::key(baseline, candidate, example, salt);
-        self.entries.insert(
-            String::from_utf8(key.to_vec()).expect("ASCII cache key"),
-            eval,
-        );
+        use std::collections::btree_map::Entry;
+
+        let words = [baseline, candidate, example, salt];
+        match self.entries.entry(words) {
+            Entry::Occupied(mut entry) => entry.get_mut().eval = eval,
+            Entry::Vacant(entry) => {
+                entry.insert(CachedRollout {
+                    wire_key: encode_rollout_key(words),
+                    eval,
+                });
+            }
+        }
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.len() + self.opaque_entries.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.opaque_entries.is_empty()
     }
 }
 

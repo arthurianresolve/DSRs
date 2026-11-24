@@ -160,6 +160,9 @@ impl Message {
     /// For text-only messages, returns the text. For multi-content messages,
     /// returns all blocks formatted and joined with newlines.
     pub fn content(&self) -> String {
+        if let [ContentBlock::Text { text }] = self.content.as_slice() {
+            return text.clone();
+        }
         let parts: Vec<String> = self
             .content
             .iter()

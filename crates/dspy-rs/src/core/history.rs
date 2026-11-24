@@ -243,7 +243,8 @@ pub(crate) struct HistoryCall {
 
 impl HistoryCall {
     pub(crate) fn begin(config: &LMConfig, chat: &Chat, lm_history: &HistoryBuffer) -> Self {
-        let enabled = !super::storage::current_stores().is_empty()
+        let stores = super::storage::current_stores();
+        let enabled = !stores.is_empty()
             || lm_history.is_enabled()
             || GLOBAL.is_enabled()
             || CALLERS
@@ -276,7 +277,7 @@ impl HistoryCall {
                 events: Vec::new(),
                 error: None,
             })),
-            stores: super::storage::current_stores(),
+            stores,
         };
         let mut sinks = vec![lm_history.clone(), GLOBAL.clone()];
         for caller in callers {

@@ -6,8 +6,6 @@ use crate::core::PredictState;
 use crate::trace::JsonMap;
 use crate::{Facet, PredictError, Predicted, Schema, SignatureSchema};
 
-type IndexedForwardResult<T> = (usize, Result<Predicted<T>, PredictError>);
-
 /// What optimizers read from — and, at explicit boundaries, write to — a
 /// [`Predict`](crate::Predict) leaf.
 ///
@@ -325,6 +323,7 @@ impl<M: Predictors> Predictors for WithLM<M> {
 ///
 /// Returns `Vec<Result<...>>`, not `Result<Vec<...>>` — individual failures don't
 /// abort the batch. Results preserve input order regardless of completion order.
+/// A concurrency of zero is treated as one.
 ///
 /// ```no_run
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -350,7 +349,7 @@ impl<M: Predictors> Predictors for WithLM<M> {
     name = "dsrs.forward_all",
     level = "debug",
     skip(module, inputs),
-    fields(total_inputs = inputs.len(), max_concurrency)
+    fields(total_inputs = inputs.len(), max_concurrency = max_concurrency.max(1))
 )]
 pub async fn forward_all<M>(
     module: &M,
@@ -360,19 +359,19 @@ pub async fn forward_all<M>(
 where
     M: Module + ?Sized,
 {
-    let mut indexed_results: Vec<IndexedForwardResult<M::Output>> =
-        stream::iter(inputs.into_iter().enumerate())
-            .map(|(idx, input)| async move { (idx, module.call(input).await) })
-            .buffer_unordered(max_concurrency)
-            .collect()
-            .await;
-
-    indexed_results.sort_by_key(|(idx, _)| *idx);
-
-    let mut outcomes = Vec::with_capacity(indexed_results.len());
-    for (_, outcome) in indexed_results {
-        outcomes.push(outcome);
+    let count = inputs.len();
+    let mut pending = stream::iter(inputs.into_iter().enumerate())
+        .map(|(idx, input)| async move { (idx, module.call(input).await) })
+        .buffer_unordered(max_concurrency.max(1));
+    let mut ordered = Vec::with_capacity(count);
+    ordered.resize_with(count, || None);
+    while let Some((index, outcome)) = pending.next().await {
+        ordered[index] = Some(outcome);
     }
+    let outcomes: Vec<_> = ordered
+        .into_iter()
+        .map(|slot| slot.expect("the batch produced one result per input"))
+        .collect();
     debug!(outcomes = outcomes.len(), "forward_all completed");
     outcomes
 }

@@ -426,18 +426,29 @@ async fn empty_cache_budget_rejection_counts_distinct_pairs() {
 #[test]
 fn rollout_cache_updates_existing_serialized_keys() {
     let key = "ffffffffffffffff:0000000000000000:0123456789abcdef:0000000000000009";
+    let opaque = "FFFFFFFFFFFFFFFF:0000000000000000:0123456789abcdef:0000000000000009";
     let example = 0x0123456789abcdef;
     let mut cache: RolloutCache = serde_json::from_value(serde_json::json!({
-        "entries": { (key): Eval::score(0.5) }
+        "entries": { (key): Eval::score(0.5), (opaque): Eval::score(0.25) }
     }))
     .unwrap();
 
     assert_eq!(cache.get(u64::MAX, 0, example, 9).unwrap().score, 0.5);
     cache.insert(u64::MAX, 0, example, 9, Eval::score(0.75));
 
-    assert_eq!(cache.len(), 1);
+    assert_eq!(cache.len(), 2);
     let serialized = serde_json::to_value(cache).unwrap();
     assert_eq!(serialized["entries"][key]["score"], 0.75);
+    assert_eq!(serialized["entries"][opaque]["score"], 0.25);
+    assert_eq!(
+        serialized["entries"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [opaque, key]
+    );
 }
 
 struct SamplingMetric {

@@ -2139,9 +2139,9 @@ impl Interpreter {
         cx: &mut Cx<'_>,
     ) -> Result<JsonMap, RunError> {
         let p = &*self.program;
-        let at = p.syms.get(n.name).to_string();
+        let at = p.syms.get(n.name);
         let def = &p.sigs[n.sig];
-        let input = self.resolve_bindings(&at, Some(id), &n.binding, cx)?;
+        let input = self.resolve_bindings(at, Some(id), &n.binding, cx)?;
 
         // Resolve the implementation up front — its hash is part of the
         // replay preimage (RFC 0003 §4.4).
@@ -2149,7 +2149,7 @@ impl Interpreter {
             HoleImpl::Sandboxed { code } => match self.p_value(cx, *code) {
                 ParamValue::Code { source, hash, .. } => ResolvedHoleImpl::Sandboxed {
                     code: *code,
-                    source: source.clone(),
+                    source,
                     hash: *hash,
                 },
                 other => {
@@ -2161,28 +2161,34 @@ impl Interpreter {
             },
             HoleImpl::Host { hash } => ResolvedHoleImpl::Host { hash: *hash },
         };
-        let request_hash = hole_request_hash(&imp, &input, &n.caps);
-
-        let pseudo_model = LMConfig {
-            model: match &imp {
-                ResolvedHoleImpl::Sandboxed { .. } => "sandbox:quickjs".to_string(),
-                ResolvedHoleImpl::Host { .. } => "host:extern".to_string(),
-            },
-            ..LMConfig::default()
+        let (guard, replay) = {
+            let hash = std::cell::OnceCell::new();
+            let request_hash = || *hash.get_or_init(|| hole_request_hash(&imp, &input, &n.caps));
+            let model = std::cell::OnceCell::new();
+            let guard = begin_span_lazy(|| SpanRequest {
+                component: at,
+                prefix: None,
+                suffix: &[],
+                input: Some(input.clone()),
+                model: model.get_or_init(|| LMConfig {
+                    model: match &imp {
+                        ResolvedHoleImpl::Sandboxed { .. } => "sandbox:quickjs".into(),
+                        ResolvedHoleImpl::Host { .. } => "host:extern".into(),
+                    },
+                    ..LMConfig::default()
+                }),
+                request_hash: Some(request_hash()),
+            });
+            (
+                guard,
+                crate::trace::replay::intercept_hashed(at, request_hash),
+            )
         };
-        let guard = begin_span_lazy(|| SpanRequest {
-            component: &at,
-            prefix: None,
-            suffix: &[],
-            input: Some(input.clone()),
-            model: &pseudo_model,
-            request_hash: Some(request_hash),
-        });
 
         // Replay (RFC 0003 M-1): a hole keys on (impl ++ input ++ caps); a
         // served span returns the recorded, already-coerced output without
         // touching the sandbox or the host fn.
-        match crate::trace::replay::intercept_hashed(&at, request_hash) {
+        match replay {
             Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
                 let span = span.span();
                 let output = span
@@ -2218,54 +2224,50 @@ impl Interpreter {
             Some(crate::trace::replay::ReplayDirective::Live) | None => {}
         }
 
-        let started = Instant::now();
+        let observation = guard.map(|guard| (guard, Value::Object(input.clone()), Instant::now()));
         let result = in_span(
-            guard.as_ref(),
-            pin!(self.execute_hole_impl(&at, &imp, &input, def, &n.caps)),
+            observation.as_ref().map(|(guard, _, _)| guard),
+            pin!(self.execute_hole_impl(at, &imp, input, def, &n.caps)),
         )
         .await;
-        let duration_us = started.elapsed().as_micros() as u64;
+        let observation = observation
+            .map(|(guard, args, started)| (guard, args, started.elapsed().as_micros() as u64));
 
         match result {
             Ok((invoked_as, value)) => {
                 let raw = value.to_string();
-                let event = SpanEvent::ToolRun {
+                let output = coerce_outputs(at, def, &p.types, value, &raw);
+                let Some((guard, args, duration_us)) = observation else {
+                    return output;
+                };
+                let events = vec![SpanEvent::ToolRun {
                     id: String::new(),
                     name: invoked_as,
-                    args: Value::Object(input.clone()),
+                    args,
                     result: raw.clone(),
                     duration_us,
                     error: None,
-                };
-                match coerce_outputs(&at, def, &p.types, value, &raw) {
-                    Ok(output) => {
-                        if let Some(guard) = guard {
-                            guard.finish(SpanOutcome {
-                                events: vec![event],
-                                raw_output: Some(raw),
-                                output: Some(output.clone()),
-                                usage: LmUsage::default(),
-                                error: None,
-                            });
-                        }
-                        Ok(output)
-                    }
-                    Err(err) => {
-                        if let Some(guard) = guard {
-                            guard.finish(span_error(
-                                crate::trace::SpanErrorKind::Parse,
-                                err.to_string(),
-                                vec![event],
-                                Some(raw),
-                                LmUsage::default(),
-                            ));
-                        }
-                        Err(err)
-                    }
-                }
+                }];
+                guard.finish(match &output {
+                    Ok(output) => SpanOutcome {
+                        events,
+                        raw_output: Some(raw),
+                        output: Some(output.clone()),
+                        usage: LmUsage::default(),
+                        error: None,
+                    },
+                    Err(error) => span_error(
+                        crate::trace::SpanErrorKind::Parse,
+                        error.to_string(),
+                        events,
+                        Some(raw),
+                        LmUsage::default(),
+                    ),
+                });
+                output
             }
             Err(err) => {
-                if let Some(guard) = guard {
+                if let Some((guard, _, _)) = observation {
                     guard.finish(span_error(
                         crate::trace::SpanErrorKind::Tool,
                         err.to_string(),
@@ -2285,8 +2287,8 @@ impl Interpreter {
     async fn execute_hole_impl(
         &self,
         at: &str,
-        imp: &ResolvedHoleImpl,
-        input: &JsonMap,
+        imp: &ResolvedHoleImpl<'_>,
+        input: JsonMap,
         def: &SignatureDef,
         caps: &CapSet,
     ) -> Result<(String, Value), RunError> {
@@ -2304,7 +2306,7 @@ impl Interpreter {
                     .await?;
                 let value = sandbox
                     .execute_scoped(
-                        dsrs_tools::ToolInvocation::new(name.clone(), Value::Object(input.clone())),
+                        dsrs_tools::ToolInvocation::new(name.clone(), Value::Object(input)),
                         &caps.iter().map(str::to_string).collect::<Vec<_>>(),
                     )
                     .await
@@ -2319,12 +2321,10 @@ impl Interpreter {
                     at: at.into(),
                     message: "host hole not bound (load should have refused)".into(),
                 })?;
-                let value = host(input.clone())
-                    .await
-                    .map_err(|message| RunError::Hole {
-                        at: at.into(),
-                        source: dsrs_tools::ExecError::Internal { message },
-                    })?;
+                let value = host(input).await.map_err(|message| RunError::Hole {
+                    at: at.into(),
+                    source: dsrs_tools::ExecError::Internal { message },
+                })?;
                 Ok((at.to_string(), value))
             }
         }
@@ -3643,10 +3643,10 @@ fn tool_result_block(call: &rig::message::ToolCall, result: String) -> crate::Co
 
 /// A hole's implementation, resolved through the overlay (sandboxed code may
 /// be a candidate's Code gene; host holes are fixed by their content hash).
-enum ResolvedHoleImpl {
+enum ResolvedHoleImpl<'a> {
     Sandboxed {
         code: ParamId,
-        source: String,
+        source: &'a str,
         hash: u64,
     },
     Host {
@@ -3659,7 +3659,7 @@ enum ResolvedHoleImpl {
 /// prompt, so the config+prompt hash every other leaf uses would be identical
 /// for every hole in every program — this preimage is what makes hole spans
 /// individually addressable by replay and divergence detection.
-fn hole_request_hash(imp: &ResolvedHoleImpl, input: &JsonMap, caps: &CapSet) -> u64 {
+fn hole_request_hash(imp: &ResolvedHoleImpl<'_>, input: &JsonMap, caps: &CapSet) -> u64 {
     use std::hash::Hasher as _;
     let mut hasher = crate::utils::hash::StableHasher::new();
     let (discriminant, hash) = match imp {

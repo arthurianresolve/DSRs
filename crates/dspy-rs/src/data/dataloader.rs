@@ -232,11 +232,9 @@ impl DataLoader {
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
-        let examples = if lines && !is_url(path) {
-            Self::load_local_typed_jsonl(path, &opts)?
-        } else {
-            Self::rows_to_typed(Self::load_json_rows(path, lines, limits)?, &opts)?
-        };
+        let mut projection = TypedProjection::new::<E>(&opts);
+        Self::visit_json_rows(path, lines, limits, |row| projection.push(row))?;
+        let examples: Vec<E> = projection.finish()?;
         debug!(examples = examples.len(), "typed json examples loaded");
         Ok(examples)
     }
@@ -279,7 +277,8 @@ impl DataLoader {
     where
         F: Fn(&RowRecord) -> Result<E>,
     {
-        let rows = Self::load_json_rows(path, lines, limits)?;
+        let mut rows = Vec::new();
+        Self::visit_json_rows(path, lines, limits, |row| rows.push(row))?;
         let examples = Self::rows_with_mapper(rows, mapper)?;
         debug!(
             examples = examples.len(),
@@ -481,8 +480,11 @@ impl DataLoader {
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
-        let rows = Self::load_hf_rows(dataset_name, subset, split, verbose)?;
-        let examples = Self::rows_to_typed::<E>(rows, &opts)?;
+        let mut projection = TypedProjection::new::<E>(&opts);
+        Self::visit_hf_rows(dataset_name, subset, split, verbose, |row| {
+            projection.push(row)
+        })?;
+        let examples: Vec<E> = projection.finish()?;
         debug!(examples = examples.len(), "typed hf examples loaded");
         Ok(examples)
     }
@@ -517,7 +519,8 @@ impl DataLoader {
         F: Fn(&RowRecord) -> Result<E>,
     {
         let _ = opts;
-        let rows = Self::load_hf_rows(dataset_name, subset, split, verbose)?;
+        let mut rows = Vec::new();
+        Self::visit_hf_rows(dataset_name, subset, split, verbose, |row| rows.push(row))?;
         let examples = Self::rows_with_mapper(rows, mapper)?;
         debug!(
             examples = examples.len(),
@@ -556,16 +559,6 @@ impl DataLoader {
             "typed hf parquet examples loaded"
         );
         Ok(examples)
-    }
-
-    fn rows_to_typed<E>(rows: Vec<RowRecord>, opts: &TypedLoadOptions) -> Result<Vec<E>>
-    where
-        E: DeserializeOwned + for<'f> Facet<'f>,
-    {
-        let fields = projection_fields::<E>(opts)?;
-        rows.into_iter()
-            .map(|row| Ok(project_row(row, &fields, opts.unknown_fields)?.deserialize()?))
-            .collect()
     }
 
     fn rows_with_mapper<E, F>(rows: Vec<RowRecord>, mapper: F) -> Result<Vec<E>>
@@ -667,40 +660,41 @@ impl DataLoader {
         }
     }
 
-    fn load_json_rows(
+    fn visit_json_rows(
         path: &str,
         lines: bool,
         limits: RemoteLoadLimits,
-    ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
+        mut visit: impl FnMut(RowRecord),
+    ) -> std::result::Result<(), DataLoadError> {
         let remote = is_url(path);
         if lines && !remote {
-            let mut rows = Vec::new();
-            Self::visit_local_jsonl(path, |row| rows.push(row))?;
-            return Ok(rows);
+            return Self::visit_local_jsonl(path, visit);
         }
         let data = Self::fetch_text(path, limits)?;
 
         if lines {
-            let mut rows = Vec::new();
+            let mut rows = 0;
             for (idx, line) in data.lines().enumerate() {
                 if line.trim().is_empty() {
                     continue;
                 }
-                if rows.len() >= limits.max_rows {
+                if rows >= limits.max_rows {
                     return Err(remote_limit("rows", limits.max_rows));
                 }
-                rows.push(row_from_jsonl_line(line, idx + 1)?);
+                visit(row_from_jsonl_line(line, idx + 1)?);
+                rows += 1;
             }
-            debug!(rows = rows.len(), "jsonl rows loaded");
-            return Ok(rows);
+            debug!(rows, "jsonl rows loaded");
+            return Ok(());
         }
 
-        let rows = if remote && data.trim_start().starts_with('[') {
+        let rows = if data.trim_start().starts_with('[') {
             let limit_hit = Cell::new(false);
             let mut deserializer = serde_json::Deserializer::from_str(&data);
-            let items = LimitedJsonArray {
-                max_rows: limits.max_rows,
+            let (rows, shape_error) = JsonArrayRows {
+                max_rows: remote.then_some(limits.max_rows),
                 limit_hit: &limit_hit,
+                visit,
             }
             .deserialize(&mut deserializer)
             .map_err(|err| {
@@ -713,36 +707,22 @@ impl DataLoader {
             deserializer
                 .end()
                 .map_err(|err| DataLoadError::Json(anyhow!(err)))?;
-            items
-        } else {
-            let value: serde_json::Value =
-                serde_json::from_str(&data).map_err(|err| DataLoadError::Json(anyhow!(err)))?;
-            match value {
-                serde_json::Value::Array(items) => items
-                    .into_iter()
-                    .enumerate()
-                    .map(|(idx, item)| row_from_json_value(item, idx + 1))
-                    .collect::<std::result::Result<Vec<_>, _>>()?,
-                other => {
-                    if remote && limits.max_rows == 0 {
-                        return Err(remote_limit("rows", limits.max_rows));
-                    }
-                    vec![row_from_json_value(other, 1)?]
-                }
+            if let Some(error) = shape_error {
+                return Err(error);
             }
+            rows
+        } else {
+            let value: Value =
+                serde_json::from_str(&data).map_err(|err| DataLoadError::Json(anyhow!(err)))?;
+            if remote && limits.max_rows == 0 {
+                return Err(remote_limit("rows", limits.max_rows));
+            }
+            visit(row_from_json_value(value, 1)?);
+            1
         };
 
-        debug!(rows = rows.len(), "json rows loaded");
-        Ok(rows)
-    }
-
-    fn load_local_typed_jsonl<E>(path: &str, opts: &TypedLoadOptions) -> Result<Vec<E>>
-    where
-        E: DeserializeOwned + for<'f> Facet<'f>,
-    {
-        let mut projection = TypedProjection::new::<E>(opts);
-        Self::visit_local_jsonl(path, |row| projection.push(row))?;
-        projection.finish()
+        debug!(rows, "json rows loaded");
+        Ok(())
     }
 
     fn visit_local_jsonl(
@@ -943,39 +923,50 @@ impl DataLoader {
     }
 
     #[cfg(feature = "data")]
-    fn load_hf_rows(
+    fn visit_hf_rows(
         dataset_name: &str,
         subset: &str,
         split: &str,
         verbose: bool,
-    ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
+        visit: impl FnMut(RowRecord),
+    ) -> std::result::Result<(), DataLoadError> {
         let api = Api::new().map_err(|err| DataLoadError::Hf(err.into()))?;
         let repo = api.dataset(dataset_name.to_string());
         let metadata = repo.info().map_err(|err| DataLoadError::Hf(err.into()))?;
 
-        let mut rows = Vec::new();
-        let mut next_index = 1usize;
-
-        for sibling in metadata.siblings {
+        let files = metadata.siblings.into_iter().filter_map(|sibling| {
             let file = sibling.rfilename;
 
             if (!subset.is_empty() && !file.contains(subset))
                 || (!split.is_empty() && !file.contains(split))
             {
-                continue;
+                return None;
             }
 
-            let supported = file.ends_with(".parquet")
-                || file.ends_with(".json")
-                || file.ends_with(".jsonl")
-                || file.ends_with(".csv");
-            if !supported {
-                continue;
-            }
+            let format = HfFileFormat::from_name(&file)?;
+            Some(
+                repo.get(&file)
+                    .map(|path| (format, path))
+                    .map_err(|err| DataLoadError::Hf(err.into())),
+            )
+        });
+        Self::visit_hf_files(files, verbose, visit)
+    }
 
-            let file_path = repo
-                .get(&file)
-                .map_err(|err| DataLoadError::Hf(err.into()))?;
+    #[cfg(feature = "data")]
+    fn visit_hf_files(
+        files: impl IntoIterator<Item = std::result::Result<(HfFileFormat, PathBuf), DataLoadError>>,
+        verbose: bool,
+        mut visit: impl FnMut(RowRecord),
+    ) -> std::result::Result<(), DataLoadError> {
+        let mut rows = 0;
+        let mut emit = |mut row: RowRecord| {
+            rows += 1;
+            row.row_index = rows;
+            visit(row);
+        };
+        for file in files {
+            let (format, file_path) = file?;
             let path_str = file_path
                 .to_str()
                 .ok_or_else(|| DataLoadError::Io(anyhow!("invalid UTF-8 file path")))?;
@@ -984,32 +975,72 @@ impl DataLoader {
                 println!("Loading file: {path_str}");
             }
 
-            let mut file_rows = if file.ends_with(".parquet") {
-                Self::load_parquet_rows(&file_path)?
-            } else if file.ends_with(".json") || file.ends_with(".jsonl") {
-                Self::load_json_rows(
-                    path_str,
-                    file.ends_with(".jsonl"),
-                    RemoteLoadLimits::default(),
-                )?
-            } else {
-                Self::load_csv_rows(path_str, ',', true, RemoteLoadLimits::default())?
-            };
-
-            for row in &mut file_rows {
-                row.row_index = next_index;
-                next_index += 1;
+            let limits = RemoteLoadLimits::default();
+            match format {
+                HfFileFormat::Parquet => Self::visit_parquet_rows(&file_path, &mut emit)?,
+                HfFileFormat::Json { lines } => {
+                    Self::visit_json_rows(path_str, lines, limits, &mut emit)?
+                }
+                HfFileFormat::Csv => Self::visit_csv_rows(path_str, ',', true, limits, &mut emit)?,
             }
-
-            rows.extend(file_rows);
         }
 
         if verbose {
-            println!("Loaded {} rows", rows.len());
+            println!("Loaded {rows} rows");
         }
 
-        debug!(rows = rows.len(), "hf rows loaded");
-        Ok(rows)
+        debug!(rows, "hf rows loaded");
+        Ok(())
+    }
+}
+
+#[cfg(feature = "data")]
+enum HfFileFormat {
+    Parquet,
+    Json { lines: bool },
+    Csv,
+}
+
+#[cfg(feature = "data")]
+impl HfFileFormat {
+    fn from_name(name: &str) -> Option<Self> {
+        match name.rsplit_once('.')?.1 {
+            "parquet" => Some(Self::Parquet),
+            "json" => Some(Self::Json { lines: false }),
+            "jsonl" => Some(Self::Json { lines: true }),
+            "csv" => Some(Self::Csv),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(all(test, feature = "data"))]
+mod hf_tests {
+    use super::*;
+
+    #[test]
+    #[cfg_attr(miri, ignore = "mixed shard fixture uses native temporary files")]
+    fn local_shards_share_dense_row_numbers_across_formats() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = [
+            ("split-0.json", r#"[{"value":"one"}]"#),
+            ("split-1.jsonl", "\n{\"value\":\"two\"}\n"),
+            ("split-2.csv", "value\nthree\n"),
+        ];
+        let files = paths.map(|(name, data)| {
+            let path = dir.path().join(name);
+            fs::write(&path, data).unwrap();
+            Ok((HfFileFormat::from_name(name).unwrap(), path))
+        });
+        let mut observed = Vec::new();
+        DataLoader::visit_hf_files(files, false, |row| {
+            observed.push((row.row_index, row.get::<String>("value").unwrap()));
+        })
+        .unwrap();
+        assert_eq!(
+            observed,
+            [(1, "one".into()), (2, "two".into()), (3, "three".into())]
+        );
     }
 }
 
@@ -1212,13 +1243,14 @@ fn remote_timeout(timeout: Duration) -> DataLoadError {
     DataLoadError::Io(anyhow!("remote dataset timed out after {timeout:?}"))
 }
 
-struct LimitedJsonArray<'a> {
-    max_rows: usize,
+struct JsonArrayRows<'a, F> {
+    max_rows: Option<usize>,
     limit_hit: &'a Cell<bool>,
+    visit: F,
 }
 
-impl<'de> DeserializeSeed<'de> for LimitedJsonArray<'_> {
-    type Value = Vec<RowRecord>;
+impl<'de, F: FnMut(RowRecord)> DeserializeSeed<'de> for JsonArrayRows<'_, F> {
+    type Value = (usize, Option<DataLoadError>);
 
     fn deserialize<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
     where
@@ -1228,32 +1260,38 @@ impl<'de> DeserializeSeed<'de> for LimitedJsonArray<'_> {
     }
 }
 
-impl<'de> Visitor<'de> for LimitedJsonArray<'_> {
-    type Value = Vec<RowRecord>;
+impl<'de, F: FnMut(RowRecord)> Visitor<'de> for JsonArrayRows<'_, F> {
+    type Value = (usize, Option<DataLoadError>);
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("a JSON array")
     }
 
-    fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+    fn visit_seq<A>(mut self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
     where
         A: SeqAccess<'de>,
     {
-        let mut items = Vec::new();
-        while items.len() < self.max_rows {
-            match seq.next_element()? {
-                Some(item) => {
-                    let row_index = items.len() + 1;
-                    items.push(row_from_json_value(item, row_index).map_err(A::Error::custom)?);
+        let mut rows = 0;
+        let mut shape_error = None;
+        while self.max_rows.is_none_or(|limit| rows < limit) {
+            let Some(item) = seq.next_element()? else {
+                return Ok((rows, shape_error));
+            };
+            rows += 1;
+            if shape_error.is_none() {
+                match row_from_json_value(item, rows) {
+                    Ok(row) => (self.visit)(row),
+                    Err(error) if self.max_rows.is_some() => return Err(A::Error::custom(error)),
+                    // For a local file, any later JSON syntax error takes precedence.
+                    Err(error) => shape_error = Some(error),
                 }
-                None => return Ok(items),
             }
         }
         if seq.next_element::<IgnoredAny>()?.is_some() {
             self.limit_hit.set(true);
             return Err(A::Error::custom("remote row limit exceeded"));
         }
-        Ok(items)
+        Ok((rows, shape_error))
     }
 }
 

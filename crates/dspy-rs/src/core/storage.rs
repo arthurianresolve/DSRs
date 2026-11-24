@@ -59,6 +59,20 @@ enum Record<E = HistoryEntry, T = crate::Trace> {
     Execution { trace: T },
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InvocationRevision {
+    version: u32,
+    entry: HistoryEntry,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TraceRevision {
+    version: u32,
+    trace: crate::Trace,
+}
+
 enum RecordKey {
     Invocation { id: String, timestamp: u64 },
     Execution { id: String },
@@ -109,6 +123,19 @@ struct RecordLocation {
 }
 
 fn decode_record(line: &[u8]) -> Result<Record, StorageError> {
+    // The writer emits these envelopes in a fixed order. A direct decode
+    // avoids buffering their payloads as content for the untagged enum.
+    if line.starts_with(b"{\"version\":1,\"entry\":")
+        && let Ok(InvocationRevision { version: 1, entry }) = serde_json::from_slice(line)
+    {
+        return Ok(Record::Invocation { entry });
+    }
+    if line.starts_with(b"{\"version\":1,\"trace\":")
+        && let Ok(TraceRevision { version: 1, trace }) = serde_json::from_slice(line)
+    {
+        return Ok(Record::Execution { trace });
+    }
+    // Older or externally written envelopes keep the existing decode rules.
     let revision: Revision<HistoryEntry, crate::Trace> = serde_json::from_slice(line)?;
     if revision.version != 1 {
         return Err(StorageError::Version(revision.version));
@@ -291,25 +318,35 @@ impl InteractionStore for JsonlInteractionStore {
 #[derive(Debug)]
 pub(crate) struct StoreSession {
     store: Arc<dyn InteractionStore>,
-    errors: Mutex<Vec<StorageError>>,
+    errors: Mutex<SessionErrors>,
 }
+
+#[derive(Debug, Default)]
+struct SessionErrors {
+    first: Option<StorageError>,
+    additional: usize,
+}
+
 impl StoreSession {
+    fn record_error(&self, error: StorageError) {
+        let mut errors = self.errors.lock().unwrap_or_else(|p| p.into_inner());
+        if errors.first.is_none() {
+            errors.first = Some(error);
+        } else {
+            errors.additional += 1;
+        }
+    }
+
     fn persist_trace(&self, trace: &crate::Trace) {
         if let Err(error) = self.store.upsert_trace(trace) {
             tracing::error!(%error, trace_id = %trace.meta.trace_id, "trace persistence failed");
-            self.errors
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .push(error);
+            self.record_error(error);
         }
     }
     pub(crate) fn persist(&self, entry: &HistoryEntry) {
         if let Err(error) = self.store.upsert(entry) {
             tracing::error!(%error, call_id = %entry.id, "interaction persistence failed");
-            self.errors
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .push(error);
+            self.record_error(error);
         }
     }
 }
@@ -334,19 +371,17 @@ pub async fn with_interaction_store<T>(
 ) -> Result<T, StorageError> {
     let session = Arc::new(StoreSession {
         store,
-        errors: Mutex::new(Vec::new()),
+        errors: Mutex::default(),
     });
     let mut stores = current_stores();
     stores.push(session.clone());
     let output = STORES.scope(stores, future).await;
     let mut errors = session.errors.lock().unwrap_or_else(|p| p.into_inner());
-    if errors.is_empty() {
-        Ok(output)
-    } else {
-        let additional = errors.len() - 1;
-        Err(StorageError::Session {
-            source: Box::new(errors.remove(0)),
-            additional,
-        })
+    match errors.first.take() {
+        Some(source) => Err(StorageError::Session {
+            source: Box::new(source),
+            additional: errors.additional,
+        }),
+        None => Ok(output),
     }
 }

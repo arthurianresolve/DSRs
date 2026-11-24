@@ -371,7 +371,10 @@ pub(crate) fn intercept(
 
 /// [`intercept`] with a caller-computed `request_hash` — used by leaves whose
 /// replay identity is not prompt-shaped (interpreter holes, RFC 0003 §4.4).
-pub(crate) fn intercept_hashed(component: &str, got_hash: u64) -> Option<ReplayDirective> {
+pub(crate) fn intercept_hashed(
+    component: &str,
+    hash: impl FnOnce() -> u64,
+) -> Option<ReplayDirective> {
     let session = ACTIVE.try_with(|session| session.clone()).ok()?;
-    Some(session.decide_hashed(component, got_hash))
+    Some(session.decide_hashed(component, hash()))
 }

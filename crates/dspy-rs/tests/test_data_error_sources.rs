@@ -125,6 +125,23 @@ fn json_and_mapper_failures_keep_the_typed_original_cause() {
     );
 }
 
+#[test]
+fn local_json_array_validates_its_tail_before_reporting_a_row_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rows.json");
+    let load =
+        || DataLoader::load_json::<Row>(path.to_str().unwrap(), false, TypedLoadOptions::default());
+    for invalid in ["[null, {", "[null] trailing"] {
+        std::fs::write(&path, invalid).unwrap();
+        let error = load().unwrap_err();
+        assert!(error.chain().any(|cause| cause.is::<serde_json::Error>()));
+    }
+
+    std::fs::write(&path, r#" [{"value":"ok"},null] "#).unwrap();
+    let error = load().unwrap_err();
+    assert!(error.to_string().contains("row 2: expected JSON object"));
+}
+
 #[cfg(feature = "data")]
 #[test]
 fn typed_csv_reports_late_source_errors_before_projection_errors() {
