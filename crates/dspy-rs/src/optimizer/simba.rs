@@ -12,9 +12,10 @@ use rand::{Rng, seq::SliceRandom};
 use serde::{Deserialize, Serialize};
 
 use crate::core::ToInput;
-use crate::evaluate::{Eval, TypedMetric};
+use crate::evaluate::TypedMetric;
 use crate::optimizer::engine::{
-    Candidate, Engine, EngineConfig, EvalOutcome, GateOutcome, Spend, canonical_hash,
+    Candidate, Engine, EngineConfig, EvalOutcome, GateOutcome, SampledRolloutOutcome, Spend,
+    canonical_hash,
 };
 use crate::optimizer::harvest::{collect_demo_candidates, select_demos};
 use crate::optimizer::target::LeafInfo;
@@ -213,9 +214,11 @@ impl SIMBA {
 
     /// Formats one rollout (score, feedback, per-span I/O) for the reflection
     /// prompt.
-    fn summarize_rollout(eval: &Eval, trace: Option<&Trace>) -> String {
+    fn summarize_rollout(rollout: &SampledRolloutOutcome) -> String {
         use std::fmt::Write as _;
 
+        let eval = &rollout.eval;
+        let trace = &rollout.trace;
         let mut text = String::new();
         let _ = writeln!(
             text,
@@ -223,18 +226,15 @@ impl SIMBA {
             eval.score,
             eval.feedback.as_deref().unwrap_or("-")
         );
-        let Some(trace) = trace else {
-            return text.trim_end().to_string();
-        };
         for span in &trace.spans {
             let name = trace.component_name(span.component);
             let input = span
                 .input
                 .as_ref()
-                .map(|map| serde_json::Value::Object(map.clone()).to_string())
+                .map(|map| serde_json::to_string(map).expect("JSON map serializes"))
                 .unwrap_or_else(|| "-".to_string());
             let output = match (&span.output, &span.error) {
-                (Some(map), _) => serde_json::Value::Object(map.clone()).to_string(),
+                (Some(map), _) => serde_json::to_string(map).expect("JSON map serializes"),
                 (None, Some(error)) => format!(
                     "<{}: {}>",
                     error.kind.as_str(),
@@ -248,7 +248,8 @@ impl SIMBA {
                 span.seq
             );
         }
-        text.trim_end().to_string()
+        text.truncate(text.trim_end().len());
+        text
     }
 
     /// The predictor an append-rule move targets: the one with the most spans
@@ -326,16 +327,15 @@ impl SIMBA {
         &self,
         leaf: &LeafInfo,
         current_instruction: &str,
-        better_rollout: String,
-        worse_rollout: String,
-        worst_eval: &Eval,
+        better: &SampledRolloutOutcome,
+        worse: &SampledRolloutOutcome,
         reflector: Option<&Predict<IntrospectRollouts>>,
     ) -> (String, usize) {
         let fallback = || {
-            worst_eval.feedback.clone().unwrap_or_else(|| {
+            worse.eval.feedback.clone().unwrap_or_else(|| {
                 format!(
                     "Avoid the failure mode of the lowest-scoring rollout (score {:.3}).",
-                    worst_eval.score
+                    worse.eval.score
                 )
             })
         };
@@ -347,8 +347,8 @@ impl SIMBA {
         let input = IntrospectRolloutsInput {
             task_description: leaf.schema_for_reflection(),
             current_instruction: current_instruction.to_string(),
-            better_rollout,
-            worse_rollout,
+            better_rollout: Self::summarize_rollout(better),
+            worse_rollout: Self::summarize_rollout(worse),
         };
 
         match reflector.call(input).await {
@@ -526,14 +526,7 @@ impl Optimizer for SIMBA {
                         None => leaf.instruction.clone(),
                     };
                     let (rule, reflection_calls) = self
-                        .propose_rule(
-                            leaf,
-                            &base_instruction,
-                            Self::summarize_rollout(&best.eval, Some(&best.trace)),
-                            Self::summarize_rollout(&worst.eval, Some(&worst.trace)),
-                            &worst.eval,
-                            reflector.as_ref(),
-                        )
+                        .propose_rule(leaf, &base_instruction, &best, &worst, reflector.as_ref())
                         .await;
                     engine.charge(0, reflection_calls);
 

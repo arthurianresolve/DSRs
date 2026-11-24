@@ -114,8 +114,8 @@ impl BudgetMeter {
         self.check_soft()?;
         if let Some(max) = self.limits.max_lm_calls {
             self.lm_calls
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
-                    (calls < max).then_some(calls + 1)
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
+                    (calls < max).then(|| calls + 1)
                 })
                 .map_err(|_| Exhausted)?;
         } else {
@@ -132,7 +132,11 @@ impl BudgetMeter {
 
     /// Records observed usage on this meter and every ancestor.
     pub fn record_usage(&self, usage: &LmUsage) {
-        self.tokens.fetch_add(usage.total_tokens, Ordering::Relaxed);
+        let _ = self
+            .tokens
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |tokens| {
+                Some(tokens.saturating_add(usage.total_tokens))
+            });
         if let Some(parent) = &self.parent {
             parent.record_usage(usage);
         }
@@ -3496,6 +3500,52 @@ mod output_constraint_tests {
         let valid = serde_json::json!({"score":{"value":1}});
         let raw = valid.to_string();
         assert!(coerce_outputs("stop", &def, &types, valid, &raw).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod budget_meter_tests {
+    use super::*;
+
+    #[test]
+    fn oversized_usage_keeps_the_parent_token_budget_exhausted() {
+        let parent = Arc::new(BudgetMeter::new(Budget {
+            max_tokens: Some(u64::MAX),
+            ..Budget::unlimited()
+        }));
+        let child = BudgetMeter::child(&parent, Budget::unlimited());
+        let first = LmUsage {
+            prompt_tokens: u64::MAX,
+            completion_tokens: u64::MAX,
+            total_tokens: u64::MAX - 1,
+        };
+        let second = LmUsage {
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            total_tokens: 2,
+        };
+        child.record_usage(&first);
+        child.record_usage(&second);
+        assert_eq!(child.tokens(), u64::MAX);
+        assert_eq!(parent.tokens(), u64::MAX);
+        assert_eq!(child.try_reserve_call(), Err(Exhausted));
+        assert_eq!(child.lm_calls(), 0);
+
+        let combined = first + second;
+        assert_eq!(combined.total_tokens, u64::MAX);
+        assert_eq!(combined.prompt_tokens, u64::MAX);
+        assert_eq!(combined.completion_tokens, u64::MAX);
+    }
+
+    #[test]
+    fn maximum_call_cap_rejects_an_exhausted_reservation() {
+        let meter = BudgetMeter::new(Budget {
+            max_lm_calls: Some(u32::MAX),
+            ..Budget::unlimited()
+        });
+        meter.lm_calls.store(u32::MAX, Ordering::Relaxed);
+        assert_eq!(meter.try_reserve_call(), Err(Exhausted));
+        assert_eq!(meter.lm_calls(), u32::MAX);
     }
 }
 

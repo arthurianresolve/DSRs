@@ -330,11 +330,21 @@ impl GEPA {
     /// tool behavior from the execution trace — the `pred_trace` contract.
     /// Cache-served rollouts carry no trace; their score and feedback still
     /// appear.
-    fn summarize_feedback(module_name: &str, eval: &CandidateEval) -> String {
+    fn summarize_feedback(module_name: &str, eval: &CandidateEval, fallback_only: bool) -> String {
         use std::fmt::Write as _;
 
         let mut text = String::new();
         for (idx, rollout) in eval.rollouts.iter().enumerate() {
+            if fallback_only && text.len() > CONCAT_FEEDBACK_BUDGET {
+                let trimmed = text.trim_end();
+                let prefix = truncate(trimmed, CONCAT_FEEDBACK_BUDGET);
+                if prefix.len() < trimmed.len() {
+                    // The capped prefix now ends before any trailing whitespace
+                    // that later rollouts could make significant.
+                    text.truncate(prefix.len());
+                    return text;
+                }
+            }
             let _ = writeln!(
                 text,
                 "{}: score={:.3}; {}",
@@ -613,7 +623,8 @@ impl Optimizer for GEPA {
                 break;
             }
 
-            let feedback_summary = Self::summarize_feedback(&parent.module_name, &parent_eval);
+            let feedback_summary =
+                Self::summarize_feedback(&parent.module_name, &parent_eval, reflector.is_none());
             let parent_score = parent_eval.mean();
             let (child_instruction, reflection_calls) = self
                 .propose_child_instruction(
@@ -793,6 +804,32 @@ mod tests {
             PredictorInfo::instruction(&module.predictor),
             "seed-instruction"
         );
+    }
+
+    #[test]
+    fn fallback_feedback_preserves_the_prefix_across_trailing_whitespace() {
+        use crate::optimizer::engine::RolloutOutcome;
+
+        let eval = CandidateEval {
+            candidate: 0,
+            rollouts: [
+                " ".repeat(CONCAT_FEEDBACK_BUDGET + 10),
+                "東京".into(),
+                "late".into(),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(example, feedback)| RolloutOutcome {
+                example,
+                eval: Eval::with_feedback(1.0, feedback),
+                trace: None,
+            })
+            .collect(),
+        };
+        let complete = GEPA::summarize_feedback("predictor", &eval, false);
+        let bounded = GEPA::summarize_feedback("predictor", &eval, true);
+        assert!(complete.ends_with("late"));
+        assert_eq!(bounded, truncate(&complete, CONCAT_FEEDBACK_BUDGET));
     }
 
     #[test]

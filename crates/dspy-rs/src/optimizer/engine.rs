@@ -74,8 +74,9 @@ pub struct RolloutError {
 /// Hashes a JSON value structurally with object keys visited in sorted order,
 /// so values that differ only in map iteration order (e.g. `HashMap`-backed
 /// demo rows under serde_json's `preserve_order`) hash identically.
-fn hash_json_canonical(value: &serde_json::Value, hasher: &mut StableHasher) {
+fn hash_json_canonical(value: &serde_json::Value, hasher: &mut StableHasher, number: &mut String) {
     use serde_json::Value;
+    use std::fmt::Write as _;
     use std::hash::Hasher as _;
 
     fn write_str(hasher: &mut StableHasher, s: &str) {
@@ -92,7 +93,9 @@ fn hash_json_canonical(value: &serde_json::Value, hasher: &mut StableHasher) {
         }
         Value::Number(n) => {
             hasher.write(b"#");
-            write_str(hasher, &n.to_string());
+            number.clear();
+            let _ = write!(number, "{n}");
+            write_str(hasher, number);
         }
         Value::String(s) => {
             hasher.write(b"s");
@@ -101,7 +104,7 @@ fn hash_json_canonical(value: &serde_json::Value, hasher: &mut StableHasher) {
         Value::Array(items) => {
             hasher.write(b"[");
             for item in items {
-                hash_json_canonical(item, hasher);
+                hash_json_canonical(item, hasher, number);
             }
             hasher.write(b"]");
         }
@@ -110,7 +113,7 @@ fn hash_json_canonical(value: &serde_json::Value, hasher: &mut StableHasher) {
             let hash_entry = |(key, value): (&String, &Value)| {
                 hasher.write(b"k");
                 write_str(hasher, key);
-                hash_json_canonical(value, hasher);
+                hash_json_canonical(value, hasher, number);
             };
             if map.keys().is_sorted() {
                 map.iter().for_each(hash_entry);
@@ -129,7 +132,7 @@ pub(crate) fn canonical_hash<T: Serialize>(value: &T) -> u64 {
     use std::hash::Hasher as _;
     let mut hasher = StableHasher::new();
     match serde_json::to_value(value) {
-        Ok(json) => hash_json_canonical(&json, &mut hasher),
+        Ok(json) => hash_json_canonical(&json, &mut hasher, &mut String::new()),
         Err(_) => hasher.write(b"<unserializable>"),
     }
     hasher.finish()
@@ -289,13 +292,13 @@ impl Budget {
         }
         if self
             .max_metric_calls
-            .is_some_and(|max| spend.metric_calls.saturating_add(upcoming_rollouts) > max)
+            .is_some_and(|max| upcoming_rollouts > max.saturating_sub(spend.metric_calls))
         {
             return false;
         }
         if self
             .max_lm_calls
-            .is_some_and(|max| spend.lm_calls.saturating_add(upcoming_rollouts) > max)
+            .is_some_and(|max| upcoming_rollouts > max.saturating_sub(spend.lm_calls))
         {
             return false;
         }
@@ -1986,6 +1989,28 @@ mod tests {
 
         assert_eq!(matrix.best_by_mean(), Some(1));
         assert_eq!(matrix.mean(0), Some((0.9 + 0.5 + 0.5) / 3.0));
+    }
+
+    #[test]
+    fn maximum_budget_cap_rejects_an_overflowing_charge() {
+        let spend = Spend {
+            metric_calls: usize::MAX,
+            lm_calls: usize::MAX,
+            ..Spend::default()
+        };
+        for budget in [
+            Budget {
+                max_metric_calls: Some(usize::MAX),
+                ..Budget::unlimited()
+            },
+            Budget {
+                max_lm_calls: Some(usize::MAX),
+                ..Budget::unlimited()
+            },
+        ] {
+            assert!(budget.allows(&spend, 0));
+            assert!(!budget.allows(&spend, 1));
+        }
     }
 
     #[test]

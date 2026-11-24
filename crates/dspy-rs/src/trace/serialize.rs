@@ -116,7 +116,14 @@ impl Trace {
         };
 
         for line in lines {
-            if let Ok(footer) = serde_json::from_str::<Footer<TraceOutcome>>(line) {
+            // The footer decoder takes precedence. Objects without a literal
+            // or escaped `f` key can go straight to the span decoder.
+            let could_be_footer = !line.trim_start().starts_with('{')
+                || line.contains("\"f\"")
+                || line.contains(r"\u0066");
+            if could_be_footer
+                && let Ok(footer) = serde_json::from_str::<Footer<TraceOutcome>>(line)
+            {
                 trace.outcome = Some(footer.f);
                 continue;
             }
@@ -270,6 +277,29 @@ mod tests {
             spans: vec![span],
             ..Trace::default()
         }
+    }
+
+    #[test]
+    fn trace_reader_prefers_a_valid_escaped_footer_over_span_fields() {
+        let jsonl = test_trace(test_span("hello")).to_jsonl().unwrap();
+        let mut lines = jsonl.lines();
+        let header = lines.next().unwrap();
+        let span = lines.next().unwrap().strip_suffix('}').unwrap();
+        let footer = serde_json::to_string(&TraceOutcome {
+            duration_us: 5,
+            ..TraceOutcome::default()
+        })
+        .unwrap();
+
+        let mixed = format!("{header}\n{span},\"\\u0066\":{footer}}}\n");
+        let parsed = Trace::from_jsonl(&mixed).unwrap();
+        assert!(parsed.spans.is_empty());
+        assert_eq!(parsed.outcome.unwrap().duration_us, 5);
+
+        let malformed_footer = format!("{header}\n{span},\"f\":false}}\n");
+        let parsed = Trace::from_jsonl(&malformed_footer).unwrap();
+        assert_eq!(parsed.spans.len(), 1);
+        assert!(parsed.outcome.is_none());
     }
 
     #[test]

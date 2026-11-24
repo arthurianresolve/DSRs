@@ -499,43 +499,41 @@ impl<'p> Validator<'p> {
                 at: self.p.node_display(id),
             });
         }
-        // Clone the node handle so `self` stays borrowable; nodes are cheap
-        // relative to a validation pass and this runs once at load.
-        let node = self.p.nodes[id].clone();
-        let iface = match &node {
+        let program = self.p;
+        let iface = match &program.nodes[id] {
             Node::Predict(n) => {
                 let at = self.leaf(n.name)?;
                 self.check_param_ref(
-                    &at,
+                    at,
                     n.instruction,
                     ParamKind::Instruction,
                     ParamOwner::Node(id),
                 )?;
-                self.check_param_ref(&at, n.demos, ParamKind::Demos, ParamOwner::Node(id))?;
-                self.check_param_ref(&at, n.model, ParamKind::ModelRef, ParamOwner::Node(id))?;
-                self.check_leaf_bindings(&at, n.sig, &n.binding, scope)?;
+                self.check_param_ref(at, n.demos, ParamKind::Demos, ParamOwner::Node(id))?;
+                self.check_param_ref(at, n.model, ParamKind::ModelRef, ParamOwner::Node(id))?;
+                self.check_leaf_bindings(at, n.sig, &n.binding, scope)?;
                 sig_outputs(&self.p.sigs[n.sig])
             }
             Node::AgentLoop(n) => {
                 let at = self.leaf(n.name)?;
                 self.check_param_ref(
-                    &at,
+                    at,
                     n.instruction,
                     ParamKind::Instruction,
                     ParamOwner::Node(id),
                 )?;
-                self.check_param_ref(&at, n.demos, ParamKind::Demos, ParamOwner::Node(id))?;
-                self.check_param_ref(&at, n.model, ParamKind::ModelRef, ParamOwner::Node(id))?;
-                self.check_param_ref(&at, n.tool_set, ParamKind::ToolSet, ParamOwner::Node(id))?;
+                self.check_param_ref(at, n.demos, ParamKind::Demos, ParamOwner::Node(id))?;
+                self.check_param_ref(at, n.model, ParamKind::ModelRef, ParamOwner::Node(id))?;
+                self.check_param_ref(at, n.tool_set, ParamKind::ToolSet, ParamOwner::Node(id))?;
                 self.check_param_ref(
-                    &at,
+                    at,
                     n.context_policy,
                     ParamKind::ContextPolicy,
                     ParamOwner::Node(id),
                 )?;
                 for stop in n.stop.stop_tools.iter() {
                     if !n.tools.contains(stop) {
-                        return Err(ValidateError::StopToolNotDeclared { at: at.clone() });
+                        return Err(ValidateError::StopToolNotDeclared { at: at.to_owned() });
                     }
                 }
                 // The tool_set gene's alphabet is the declared table (RFC
@@ -549,33 +547,33 @@ impl<'p> Validator<'p> {
                         let tool = self.p.syms.get(self.p.tools[*t].name).to_string();
                         if !n.tools.contains(t) {
                             return Err(ValidateError::ToolSetUndeclared {
-                                at: at.clone(),
+                                at: at.to_owned(),
                                 tool,
                             });
                         }
                         if !seen.insert(*t) {
                             return Err(ValidateError::ToolSetDuplicate {
-                                at: at.clone(),
+                                at: at.to_owned(),
                                 tool,
                             });
                         }
                     }
                 }
-                self.check_leaf_bindings(&at, n.sig, &n.binding, scope)?;
+                self.check_leaf_bindings(at, n.sig, &n.binding, scope)?;
                 sig_outputs(&self.p.sigs[n.sig])
             }
             Node::Hole(n) => {
                 let at = self.leaf(n.name)?;
                 if !n.caps.is_subset(&self.p.caps) {
                     return Err(ValidateError::CapsExceedProgram {
-                        at: at.clone(),
+                        at: at.to_owned(),
                         missing: n.caps.missing_from(&self.p.caps),
                     });
                 }
                 if let crate::ir::graph::HoleImpl::Sandboxed { code } = n.imp {
-                    self.check_param_ref(&at, code, ParamKind::Code, ParamOwner::Node(id))?;
+                    self.check_param_ref(at, code, ParamKind::Code, ParamOwner::Node(id))?;
                 }
-                self.check_leaf_bindings(&at, n.sig, &n.binding, scope)?;
+                self.check_leaf_bindings(at, n.sig, &n.binding, scope)?;
                 sig_outputs(&self.p.sigs[n.sig])
             }
             Node::Seq(n) => {
@@ -738,14 +736,14 @@ impl<'p> Validator<'p> {
         Ok(iface)
     }
 
-    fn leaf(&mut self, name: Sym) -> Result<String, ValidateError> {
+    fn leaf(&mut self, name: Sym) -> Result<&'p str, ValidateError> {
         let name = self.p.syms.get(name);
         if !self.leaf_names.insert(name) {
             return Err(ValidateError::DuplicateLeafName {
                 name: name.to_string(),
             });
         }
-        Ok(name.to_string())
+        Ok(name)
     }
 
     /// Leaf rule: every signature input bound exactly once, types compatible.
@@ -795,21 +793,21 @@ impl<'p> Validator<'p> {
     ) -> Result<Interface, ValidateError> {
         let mut iface = Interface::new();
         for b in binds {
-            let dst = self.p.syms.get(b.dst).to_string();
+            let dst = self.p.syms.get(b.dst);
             let ty = match &b.src {
                 PortRef::Lit(value) => {
                     infer_lit_type(value).ok_or_else(|| ValidateError::LiteralTypeMismatch {
                         at: at.to_string(),
-                        field: dst.clone(),
+                        field: dst.to_owned(),
                         expected: "an inferable literal type".to_string(),
                     })?
                 }
                 src => self.port_type(at, src, scope)?,
             };
-            if iface.insert(dst.clone(), ty).is_some() {
+            if iface.insert(dst.to_owned(), ty).is_some() {
                 return Err(ValidateError::DuplicateBinding {
                     at: at.to_string(),
-                    field: dst,
+                    field: dst.to_owned(),
                 });
             }
         }

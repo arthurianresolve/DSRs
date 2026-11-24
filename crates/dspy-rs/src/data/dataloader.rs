@@ -99,8 +99,7 @@ impl RowRecord {
     /// Returns [`DataLoadError::MissingField`] if the key is absent.
     ///
     /// Returns [`DataLoadError::TypeMismatch`] on deserialization failure.
-    /// For ergonomic CSV mapping, `String` reads will coerce scalar JSON values
-    /// (number/bool) into strings.
+    /// `String` reads return string values as-is and format other values as JSON.
     pub fn get<T: serde::de::DeserializeOwned + 'static>(
         &self,
         key: &str,
@@ -113,31 +112,21 @@ impl RowRecord {
                 field: key.to_string(),
             })?;
 
-        match serde_json::from_value::<T>(value.clone()) {
-            Ok(parsed) => Ok(parsed),
-            Err(err) => {
-                if TypeId::of::<T>() == TypeId::of::<String>() {
-                    let coerced = match value {
-                        serde_json::Value::String(text) => text.clone(),
-                        serde_json::Value::Number(number) => number.to_string(),
-                        serde_json::Value::Bool(flag) => flag.to_string(),
-                        other => other.to_string(),
-                    };
-                    return serde_json::from_value::<T>(serde_json::Value::String(coerced))
-                        .map_err(|fallback_err| DataLoadError::TypeMismatch {
-                            row: self.row_index,
-                            field: key.to_string(),
-                            message: fallback_err.to_string(),
-                        });
-                }
-
-                Err(DataLoadError::TypeMismatch {
-                    row: self.row_index,
-                    field: key.to_string(),
-                    message: err.to_string(),
-                })
+        let value = if TypeId::of::<T>() == TypeId::of::<String>() {
+            match value {
+                Value::String(_) => value.clone(),
+                Value::Number(number) => Value::String(number.to_string()),
+                Value::Bool(flag) => Value::String(flag.to_string()),
+                other => Value::String(other.to_string()),
             }
-        }
+        } else {
+            value.clone()
+        };
+        serde_json::from_value(value).map_err(|err| DataLoadError::TypeMismatch {
+            row: self.row_index,
+            field: key.to_string(),
+            message: err.to_string(),
+        })
     }
 }
 

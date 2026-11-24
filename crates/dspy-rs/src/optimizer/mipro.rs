@@ -268,7 +268,7 @@ impl MIPROv2 {
     async fn instruction_sets(
         &self,
         leaves: &[LeafInfo],
-        observations: &str,
+        observations: impl FnOnce() -> Result<String>,
         engine: &mut Engine,
         limit: NonZeroUsize,
     ) -> Result<Vec<Vec<String>>> {
@@ -279,6 +279,8 @@ impl MIPROv2 {
                 .map(|leaf| vec![leaf.instruction.clone()])
                 .collect());
         }
+        let observations = observations()?;
+        let observations = crate::utils::truncate(&observations, 24000);
         let proposals = if leaves.len() > 1 && limit.get() > 1 {
             // Charge at admission, so cancellation preserves the cost of
             // requests that have started. No borrow crosses the LM await.
@@ -404,16 +406,17 @@ impl MIPROv2 {
             self.max_bootstrapped_demos,
         );
         // Only training traces enter the proposal prompt or demo pool.
-        let observations = if self.share_full_training_traces {
-            baseline_eval
-                .rollouts
-                .iter()
-                .filter_map(|r| r.trace.as_ref().map(Trace::to_jsonl))
-                .take(8)
-                .collect::<Result<Vec<_>>>()?
-                .join("\n")
-        } else {
-            let observations = baseline_eval
+        let observations = || {
+            if self.share_full_training_traces {
+                return Ok(baseline_eval
+                    .rollouts
+                    .iter()
+                    .filter_map(|r| r.trace.as_ref().map(Trace::to_jsonl))
+                    .take(8)
+                    .collect::<Result<Vec<_>>>()?
+                    .join("\n"));
+            }
+            let observed = baseline_eval
                 .rollouts
                 .iter()
                 .filter_map(|r| {
@@ -428,9 +431,8 @@ impl MIPROv2 {
                 })
                 .take(8)
                 .collect::<Result<Vec<_>>>()?;
-            serde_json::to_string(&observations)?
+            Ok(serde_json::to_string(&observed)?)
         };
-        let observations = crate::utils::truncate(&observations, 24000);
         let budget = &engine.config().budget;
         let capped = budget.max_metric_calls.is_some()
             || budget.max_lm_calls.is_some()
@@ -690,8 +692,12 @@ mod tests {
             .collect();
         let mut engine = Engine::new(optimizer.engine_config());
         {
-            let proposals =
-                optimizer.instruction_sets(&leaves, "", &mut engine, NonZeroUsize::new(2).unwrap());
+            let proposals = optimizer.instruction_sets(
+                &leaves,
+                || Ok(String::new()),
+                &mut engine,
+                NonZeroUsize::new(2).unwrap(),
+            );
             tokio::pin!(proposals);
             tokio::select! {
                 () = limit_reached.notified() => {}
