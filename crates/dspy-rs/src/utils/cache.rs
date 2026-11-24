@@ -207,6 +207,35 @@ impl ResponseCache {
         }
     }
 
+    #[cfg(all(test, feature = "inflight-dedup"))]
+    pub(crate) async fn drive_until_waiting(
+        &self,
+        key: CacheKey,
+        mut calls: std::pin::Pin<&mut impl Future>,
+        count: usize,
+    ) {
+        use std::task::Poll;
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            std::future::poll_fn(|cx| {
+                assert!(calls.as_mut().poll(cx).is_pending());
+                // The initial cache lookup can yield before registration.
+                let flights = self.inflight.lock().unwrap();
+                if flights
+                    .get(&key)
+                    .is_some_and(|sender| sender.receiver_count() >= count)
+                {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            }),
+        )
+        .await
+        .expect("callers should subscribe to the current flight");
+    }
+
     #[cfg(feature = "inflight-dedup")]
     pub(crate) fn register_inflight(&self, key: CacheKey) -> InflightResponse<'_> {
         let mut requests = self
@@ -296,10 +325,6 @@ impl ResponseCache {
 #[cfg(all(test, feature = "inflight-dedup"))]
 mod tests {
     use super::*;
-    use std::future::{Future, poll_fn};
-    use std::pin::Pin;
-    use std::task::Poll;
-    use std::time::Duration;
 
     const KEY: CacheKey = 17;
 
@@ -310,33 +335,12 @@ mod tests {
         pending
     }
 
-    async fn subscribed(cache: &ResponseCache, mut waiter: Pin<&mut impl Future>) {
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            poll_fn(|cx| {
-                assert!(waiter.as_mut().poll(cx).is_pending());
-                // The initial cache lookup can yield before registration.
-                let flights = cache.inflight.lock().unwrap();
-                if flights
-                    .get(&KEY)
-                    .is_some_and(|sender| sender.receiver_count() > 0)
-                {
-                    Poll::Ready(())
-                } else {
-                    Poll::Pending
-                }
-            }),
-        )
-        .await
-        .expect("waiter should subscribe to the current flight");
-    }
-
     #[tokio::test]
     async fn uncacheable_flight_releases_waiters_for_independent_calls() {
         let cache = ResponseCache::memory_only_for_test().await;
         let pending = lead(&cache);
         let mut waiter = std::pin::pin!(cache.shared_response(KEY));
-        subscribed(&cache, waiter.as_mut()).await;
+        cache.drive_until_waiting(KEY, waiter.as_mut(), 1).await;
         pending.finish_uncached();
         assert!(matches!(waiter.await.unwrap(), SharedResponse::Independent));
     }
@@ -346,11 +350,11 @@ mod tests {
         let cache = ResponseCache::memory_only_for_test().await;
         let initial = lead(&cache);
         let mut waiter = std::pin::pin!(cache.shared_response(KEY));
-        subscribed(&cache, waiter.as_mut()).await;
+        cache.drive_until_waiting(KEY, waiter.as_mut(), 1).await;
         drop(initial);
 
         let replacement = lead(&cache);
-        subscribed(&cache, waiter.as_mut()).await;
+        cache.drive_until_waiting(KEY, waiter.as_mut(), 1).await;
         drop(replacement);
         assert!(matches!(waiter.await.unwrap(), SharedResponse::Independent));
     }

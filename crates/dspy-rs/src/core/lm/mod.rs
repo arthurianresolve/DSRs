@@ -2201,6 +2201,7 @@ pub(crate) mod tests {
         calls: Arc<AtomicUsize>,
         started: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
+        recovery_started: Arc<tokio::sync::Notify>,
         recover: Arc<tokio::sync::Notify>,
         model: TestCompletionModel,
     }
@@ -2218,6 +2219,7 @@ pub(crate) mod tests {
                     "in-flight leader failed".into(),
                 ));
             }
+            self.recovery_started.notify_one();
             self.recover.notified().await;
             self.model.completion(request).await
         }
@@ -2234,16 +2236,20 @@ pub(crate) mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
+        let recovery_started = Arc::new(tokio::sync::Notify::new());
         let recover = Arc::new(tokio::sync::Notify::new());
         let mut lm = cached_test_lm(model.clone()).await;
         lm.client = Some(Arc::new(LMClient::custom(DelayedFirstFailure {
             calls: Arc::clone(&calls),
             started: started.clone(),
             release: release.clone(),
+            recovery_started: Arc::clone(&recovery_started),
             recover: Arc::clone(&recover),
             model: model.clone(),
         })));
         let chat = Chat::new(vec![Message::user("hi")]);
+        let key = lm.cache_key_for(&chat, &LMCallOptions::default());
+        let cache = lm.cache_handler.as_ref().unwrap();
         let leader = tokio::spawn({
             let lm = lm.clone();
             let chat = chat.clone();
@@ -2255,11 +2261,9 @@ pub(crate) mod tests {
         let mut waiters = std::pin::pin!(futures::future::join_all(
             (0..WAITERS).map(|_| lm.call(chat.clone(), vec![]))
         ));
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), &mut waiters)
-                .await
-                .is_err()
-        );
+        cache
+            .drive_until_waiting(key, waiters.as_mut(), WAITERS)
+            .await;
 
         if cancel {
             leader.abort();
@@ -2269,11 +2273,14 @@ pub(crate) mod tests {
             assert!(leader.await.unwrap().is_err());
         }
 
-        assert!(
-            tokio::time::timeout(Duration::from_millis(50), &mut waiters)
-                .await
-                .is_err()
-        );
+        cache
+            .drive_until_waiting(key, waiters.as_mut(), WAITERS - 1)
+            .await;
+        tokio::select! {
+            () = recovery_started.notified() => {}
+            _ = &mut waiters => panic!("waiters completed before recovery was released"),
+            _ = tokio::time::sleep(Duration::from_secs(10)) => panic!("recovery did not start"),
+        }
         assert_eq!(calls.load(Ordering::Relaxed), 2);
         recover.notify_waiters();
         let responses = tokio::time::timeout(Duration::from_secs(5), waiters)
