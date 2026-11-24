@@ -14,6 +14,50 @@ use dsrs_tools::{
 use rig::completion::ToolDefinition;
 use serde_json::json;
 
+#[test]
+fn cancelling_a_queued_script_skips_its_capability() {
+    tokio::runtime::Builder::new_current_thread()
+        .max_blocking_threads(1)
+        .enable_time()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (started, occupied) = tokio::sync::oneshot::channel();
+            let (release, held) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                started.send(()).unwrap();
+                held.recv().unwrap();
+            });
+            occupied.await.unwrap();
+
+            let calls = Arc::new(AtomicUsize::new(0));
+            let capability = Capability::new("mark", "Count executions", {
+                let calls = Arc::clone(&calls);
+                move |_| {
+                    let calls = Arc::clone(&calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        Ok(serde_json::Value::Null)
+                    }
+                }
+            });
+            let mut queued = Box::pin(run_script(
+                "return await mark({});",
+                vec![capability],
+                SandboxConfig {
+                    deadline: Duration::from_secs(5),
+                    ..SandboxConfig::default()
+                },
+            ));
+            assert!(futures::poll!(&mut queued).is_pending());
+            drop(queued);
+            release.send(()).unwrap();
+            blocker.await.unwrap();
+            tokio::task::spawn_blocking(|| {}).await.unwrap();
+            assert_eq!(calls.load(Ordering::Relaxed), 0);
+        });
+}
+
 // ---------------------------------------------------------------- canned rig tools
 
 #[derive(Debug)]

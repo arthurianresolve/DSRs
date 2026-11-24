@@ -14,8 +14,8 @@ use dspy_rs::ir::{
 use dspy_rs::optimizer::engine::{BatchEvalOutcome, EvalOutcome, GateOutcome};
 use dspy_rs::trace::JsonMap;
 use dspy_rs::{
-    Budget, Engine, EngineConfig, Eval, LM, LMClient, LMConfig, OptimizeTarget, ProgramMetric,
-    TestCompletionModel, Trace,
+    Budget, Candidate, Engine, EngineConfig, Eval, LM, LMClient, LMConfig, OptimizeTarget,
+    ProgramMetric, TestCompletionModel, Trace,
 };
 use rig::completion::{AssistantContent, Usage};
 use rig::message::Text;
@@ -148,6 +148,37 @@ impl ProgramMetric for ExactMatch {
         };
         Ok(Eval::score(score))
     }
+}
+
+#[tokio::test]
+async fn candidate_outputs_reject_invalid_indices_before_running_valid_examples() {
+    let (program, _, _) = two_model_program();
+    let (lm, client) = canned_lm(vec![text(fields(&[("answer", "ok")]))]).await;
+    let interp = Interpreter::load(
+        program,
+        RuntimeEnv::new()
+            .bind_model("m1", lm.clone())
+            .bind_model("m2", lm),
+    )
+    .await
+    .unwrap();
+    let examples = [example("q", "ok")];
+    let target = OptimizeTarget::program(&interp, &examples, &ExactMatch);
+    let candidate = Candidate::new();
+
+    let error = target
+        .candidate_outputs(&[0, 1], &candidate)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "example index 1 out of range (1 examples)"
+    );
+    assert_eq!(client.call_count(), 0);
+
+    let output = target.candidate_outputs(&[0], &candidate).await.unwrap();
+    assert_eq!(output, [json!({"answer": "ok"})]);
+    assert_eq!(client.call_count(), 1);
 }
 
 // ---------------------------------------------------------------------------

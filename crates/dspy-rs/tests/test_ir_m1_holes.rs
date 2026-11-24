@@ -318,6 +318,60 @@ async fn distinct_holes_record_distinct_request_hashes() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+async fn identical_hole_source_keeps_each_declarations_input_schema() {
+    let mut b = ProgramBuilder::new("shared-code");
+    let main = b.sig(
+        SignatureDef::build("Main")
+            .input("text", T::String)
+            .output("a", T::String)
+            .output("b", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let question = b.sig(
+        SignatureDef::build("Question")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let statement = b.sig(
+        SignatureDef::build("Statement")
+            .input("statement", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let source = "(x) => ({answer: x.question ?? x.statement})";
+    let first = ir::hole("first", question, source, &[]).bind("question", ir::input("text"));
+    let second = ir::hole("second", statement, source, &[]).bind("statement", ir::input("text"));
+    let program = b
+        .main(
+            main,
+            ir::seq([first, second])
+                .out("a", ir::out("first", "answer"))
+                .out("b", ir::out("second", "answer")),
+        )
+        .unwrap();
+    let interp = Interpreter::load(
+        program,
+        RuntimeEnv::new().with_sandbox(Arc::new(dsrs_tools::QuickJsExecutor::new())),
+    )
+    .await
+    .unwrap();
+    let result = interp
+        .run(
+            obj(&[("text", json!("same code"))]),
+            None,
+            Budget::unlimited(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["a"], "same code");
+    assert_eq!(result["b"], "same code");
+}
+
+#[tokio::test]
 async fn strict_replay_serves_predicts_and_holes_with_zero_live_calls() {
     let js = "(x) => ({shout: x.answer.toUpperCase()})";
 

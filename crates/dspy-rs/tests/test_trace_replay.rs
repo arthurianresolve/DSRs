@@ -4,10 +4,11 @@
 
 use dspy_rs::{
     LM, LMClient, Predict, PredictError, Predicted, ReplayError, ReplayMode, Signature,
-    TestCompletionModel, Trace, capture, is_replaying, replay,
+    TestCompletionModel, Trace, capture, is_replaying, replay, replay_shared,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
+use std::sync::Arc;
 
 fn response_with_fields(fields: &[(&str, &str)]) -> String {
     let mut response = String::new();
@@ -121,6 +122,30 @@ async fn strict_replay_serves_pipeline_with_zero_live_calls() {
     assert_eq!(report.live, 0, "zero live calls");
     assert!(report.diverged_at.is_none());
     assert!(report.divergence.is_none());
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
+async fn shared_recording_keeps_concurrent_replay_cursors_independent() {
+    let (trace, expected, drafter, refiner) = record_pipeline().await;
+    let trace = Arc::new(trace);
+    let (left, right) = tokio::join!(
+        replay_shared(Arc::clone(&trace), ReplayMode::Strict, || {
+            capture(|| run_pipeline(&drafter, &refiner))
+        }),
+        replay_shared(Arc::clone(&trace), ReplayMode::Strict, || {
+            run_pipeline(&drafter, &refiner)
+        }),
+    );
+    let ((output, captured), first) = left;
+    let (other, second) = right;
+    assert_eq!(output.unwrap().answer, expected);
+    assert_eq!(other.unwrap().answer, expected);
+    assert_eq!((first.served, second.served), (3, 3));
+    assert_eq!((first.live, second.live), (0, 0));
+    assert_eq!(captured.spans.len(), trace.spans.len());
+    assert_eq!(captured.spans[2].raw_output, trace.spans[2].raw_output);
+    assert_eq!(Arc::strong_count(&trace), 1);
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]

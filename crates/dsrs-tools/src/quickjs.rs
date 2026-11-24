@@ -33,6 +33,7 @@ use rquickjs::{
 };
 use serde_json::Value;
 use tokio::runtime::Handle;
+use tokio::task::{JoinError, JoinHandle};
 
 use crate::capability::Capability;
 use crate::error::{ExecError, RegisterError};
@@ -117,11 +118,10 @@ impl Default for SandboxConfig {
     }
 }
 
-#[derive(Clone)]
 struct ToolEntry {
     meta: RegisteredTool,
     bytecode: Arc<Vec<u8>>,
-    required: Arc<Vec<String>>,
+    required: Vec<String>,
     /// Raw BLAKE3 source hash: the bytecode-cache key, kept so
     /// [`Executor::deregister`] can evict the tool's cache entry.
     hash: [u8; 32],
@@ -186,7 +186,7 @@ pub struct CacheStats {
 pub struct QuickJsExecutor {
     config: SandboxConfig,
     capabilities: RwLock<Vec<Capability>>,
-    tools: RwLock<HashMap<String, ToolEntry>>,
+    tools: RwLock<HashMap<String, Arc<ToolEntry>>>,
     cache: BytecodeCache,
 }
 
@@ -327,7 +327,7 @@ impl QuickJsExecutor {
     fn prepare(
         &self,
         invocation: ToolInvocation,
-    ) -> Result<(String, ToolEntry, String), ExecError> {
+    ) -> Result<(String, Arc<ToolEntry>, String), ExecError> {
         let ToolInvocation { name, args } = invocation;
         let entry = self
             .tools
@@ -374,23 +374,22 @@ impl QuickJsExecutor {
         let self_tested = self_test.is_some();
         let validation_bytecode = Arc::clone(&bytecode);
         let validation_handle = handle.clone();
-        handle
-            .spawn_blocking(move || {
-                run_validation(
-                    &name,
-                    &validation_bytecode,
-                    self_test.as_deref(),
-                    &capabilities,
-                    config,
-                    validation_handle,
-                )
+        run_blocking(&handle, move || {
+            run_validation(
+                &name,
+                &validation_bytecode,
+                self_test.as_deref(),
+                &capabilities,
+                config,
+                validation_handle,
+            )
+        })
+        .await
+        .map_err(|e| {
+            RegisterError::Execution(ExecError::Internal {
+                message: format!("sandbox validation task failed: {e}"),
             })
-            .await
-            .map_err(|e| {
-                RegisterError::Execution(ExecError::Internal {
-                    message: format!("sandbox validation task failed: {e}"),
-                })
-            })??;
+        })??;
 
         let meta = RegisteredTool {
             name: source.name.clone(),
@@ -402,14 +401,14 @@ impl QuickJsExecutor {
         let entry = ToolEntry {
             meta: meta.clone(),
             bytecode,
-            required: Arc::new(source.required_params()),
+            required: source.required_params(),
             hash,
         };
         let mut tools = self.tools.write().expect("tool lock poisoned");
         if tools.contains_key(&source.name) {
             return Err(RegisterError::Duplicate { name: source.name });
         }
-        tools.insert(source.name, entry);
+        tools.insert(source.name, Arc::new(entry));
         Ok(meta)
     }
 
@@ -422,24 +421,22 @@ impl QuickJsExecutor {
         let (name, entry, args_json) = self.prepare(invocation)?;
         let handle = current_handle()?;
         let config = self.config;
-        let bytecode = Arc::clone(&entry.bytecode);
         let cap_handle = handle.clone();
-        handle
-            .spawn_blocking(move || {
-                run_tool(
-                    &name,
-                    &bytecode,
-                    &args_json,
-                    &capabilities,
-                    config,
-                    Some(cap_handle),
-                    deadline,
-                )
-            })
-            .await
-            .map_err(|e| ExecError::Internal {
-                message: format!("sandbox task failed: {e}"),
-            })?
+        run_blocking(&handle, move || {
+            run_tool(
+                &name,
+                &entry.bytecode,
+                &args_json,
+                &capabilities,
+                config,
+                Some(cap_handle),
+                deadline,
+            )
+        })
+        .await
+        .map_err(|e| ExecError::Internal {
+            message: format!("sandbox task failed: {e}"),
+        })?
     }
 
     /// Compile `js_source` (wrapped as an ES module) to bytecode, reusing the
@@ -599,14 +596,30 @@ pub async fn run_script(
     let handle = current_handle()?;
     let source = source.to_string();
     let cap_handle = handle.clone();
-    handle
-        .spawn_blocking(move || {
-            run_script_blocking(&source, &capabilities, config, Some(cap_handle), deadline)
-        })
-        .await
-        .map_err(|e| ExecError::Internal {
-            message: format!("sandbox task failed: {e}"),
-        })?
+    run_blocking(&handle, move || {
+        run_script_blocking(&source, &capabilities, config, Some(cap_handle), deadline)
+    })
+    .await
+    .map_err(|e| ExecError::Internal {
+        message: format!("sandbox task failed: {e}"),
+    })?
+}
+
+struct BlockingTask<T>(JoinHandle<T>);
+
+impl<T> Drop for BlockingTask<T> {
+    fn drop(&mut self) {
+        // Tokio can cancel blocking work until its closure starts.
+        self.0.abort();
+    }
+}
+
+async fn run_blocking<T: Send + 'static>(
+    handle: &Handle,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, JoinError> {
+    let mut task = BlockingTask(handle.spawn_blocking(work));
+    (&mut task.0).await
 }
 
 fn run_script_blocking(

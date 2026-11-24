@@ -155,7 +155,7 @@ pub use trace::{
     CompId, Eval, JsonMap, ModelEntry, ModelId, PrefixEntry, PrefixId, ReplayError, ReplayMode,
     ReplayReport, Span, SpanError, SpanErrorKind, SpanEvent, SpanGuard, SpanId, SpanOutcome,
     SpanRequest, Trace, TraceMeta, TraceOutcome, begin_span, capture, capture_with_meta,
-    is_capturing, is_replaying, replay,
+    is_capturing, is_replaying, replay, replay_shared,
 };
 #[cfg(feature = "cache")]
 pub use utils::{CacheEntry, CacheError, CacheKey, ResponseCache};
@@ -224,7 +224,7 @@ pub mod prelude {
     // Trace capture and replay entry points.
     pub use crate::trace::{
         ReplayMode, ReplayReport, Trace, capture, capture_with_meta, is_capturing, is_replaying,
-        replay,
+        replay, replay_shared,
     };
 
     // The IR: programs as data.

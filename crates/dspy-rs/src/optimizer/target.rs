@@ -140,7 +140,8 @@ trait Lane {
     fn example_uid(&self, idx: usize) -> u64;
     fn leaves(&self) -> &[LeafInfo];
     fn baseline(&self) -> u64;
-    fn bind(&self, payload: &CandidatePayload) -> Result<BoundCandidate>;
+    fn bind_params(&self, params: &Arc<crate::fx::Params>) -> Result<BoundCandidate>;
+    fn bind_overlay(&self, overlay: &Arc<Overlay>) -> Result<BoundCandidate>;
     fn run<'s>(
         &'s self,
         idx: usize,
@@ -227,16 +228,15 @@ where
         self.snapshot.baseline
     }
 
-    fn bind(&self, payload: &CandidatePayload) -> Result<BoundCandidate> {
-        match payload {
-            CandidatePayload::Params { params, .. } => {
-                Ok(BoundCandidate::Params(Arc::clone(params)))
-            }
-            CandidatePayload::Overlay(_) => Err(anyhow!(
-                "an ir::Overlay candidate cannot be evaluated on a module target; \
-                 register a Candidate instead"
-            )),
-        }
+    fn bind_params(&self, params: &Arc<crate::fx::Params>) -> Result<BoundCandidate> {
+        Ok(BoundCandidate::Params(Arc::clone(params)))
+    }
+
+    fn bind_overlay(&self, _overlay: &Arc<Overlay>) -> Result<BoundCandidate> {
+        Err(anyhow!(
+            "an ir::Overlay candidate cannot be evaluated on a module target; \
+             register a Candidate instead"
+        ))
     }
 
     fn run<'s>(
@@ -395,16 +395,15 @@ impl<'a, MT: ProgramMetric> Lane for ProgramLane<'a, MT> {
         self.interp.program().meta.program_hash
     }
 
-    fn bind(&self, payload: &CandidatePayload) -> Result<BoundCandidate> {
-        match payload {
-            CandidatePayload::Overlay(overlay) => Ok(BoundCandidate::Overlay(Arc::clone(overlay))),
-            CandidatePayload::Params { params, .. } => {
-                let overlay = params
-                    .bind(self.interp.program())
-                    .map_err(|err| anyhow!("failed to bind candidate against program: {err}"))?;
-                Ok(BoundCandidate::Overlay(Arc::new(overlay)))
-            }
-        }
+    fn bind_params(&self, params: &Arc<crate::fx::Params>) -> Result<BoundCandidate> {
+        let overlay = params
+            .bind(self.interp.program())
+            .map_err(|err| anyhow!("failed to bind candidate against program: {err}"))?;
+        Ok(BoundCandidate::Overlay(Arc::new(overlay)))
+    }
+
+    fn bind_overlay(&self, overlay: &Arc<Overlay>) -> Result<BoundCandidate> {
+        Ok(BoundCandidate::Overlay(Arc::clone(overlay)))
     }
 
     fn run<'s>(
@@ -713,7 +712,20 @@ impl<'a> OptimizeTarget<'a> {
     }
 
     pub(crate) fn bind(&self, payload: &CandidatePayload) -> Result<BoundCandidate> {
-        self.lane.bind(payload)
+        match payload {
+            CandidatePayload::Params { params, .. } => self.lane.bind_params(params),
+            CandidatePayload::Overlay(overlay) => self.lane.bind_overlay(overlay),
+        }
+    }
+
+    pub(super) fn validate_example_indices(&self, indices: &[usize]) -> Result<()> {
+        let num_examples = self.num_examples();
+        if let Some(&bad) = indices.iter().find(|&&idx| idx >= num_examples) {
+            return Err(anyhow!(
+                "example index {bad} out of range ({num_examples} examples)"
+            ));
+        }
+        Ok(())
     }
 
     pub(super) async fn run(
@@ -737,11 +749,8 @@ impl<'a> OptimizeTarget<'a> {
         indices: &[usize],
         candidate: &Candidate,
     ) -> Result<Vec<Value>> {
-        let payload = CandidatePayload::Params {
-            candidate: candidate.clone(),
-            params: Arc::new(candidate.to_params()),
-        };
-        let bound = self.lane.bind(&payload)?;
+        self.validate_example_indices(indices)?;
+        let bound = self.lane.bind_params(&Arc::new(candidate.to_params()))?;
         let mut outputs = Vec::with_capacity(indices.len());
         for &idx in indices {
             outputs.push(self.lane.output(idx, bound.clone()).await?);

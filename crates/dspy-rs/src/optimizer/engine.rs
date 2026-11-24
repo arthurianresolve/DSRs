@@ -37,6 +37,7 @@
 //!   seam: sampling params live on LM configs outside the candidate, so
 //!   callers that change them must bump the salt.
 
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -1037,28 +1038,30 @@ impl Engine {
                 return Err(anyhow!("candidate index {candidate} is not registered"));
             }
         }
-        let num_examples = target.num_examples();
-        let indices: Vec<usize> = match subset {
-            Some(subset) => subset.to_vec(),
-            None => (0..num_examples).collect(),
+        let indices = match subset {
+            Some(subset) => {
+                target.validate_example_indices(subset)?;
+                Cow::Borrowed(subset)
+            }
+            None => Cow::Owned((0..target.num_examples()).collect()),
         };
-        if let Some(&bad) = indices.iter().find(|&&idx| idx >= num_examples) {
-            return Err(anyhow!(
-                "example index {bad} out of range ({num_examples} examples)"
-            ));
-        }
 
         let scope = self.score_scope(target);
         let ScoreScope { baseline, salt, .. } = scope;
 
         // Deduplicate each axis once, retaining first-seen order for scheduling.
-        let [unique_candidates, unique_indices] = [candidates, indices.as_slice()].map(|items| {
+        let [unique_candidates, unique_indices] = [candidates, indices.as_ref()].map(|items| {
+            if items.windows(2).all(|pair| pair[0] < pair[1]) {
+                return Cow::Borrowed(items);
+            }
             let mut seen = HashSet::new();
-            items
-                .iter()
-                .copied()
-                .filter(|&index| seen.insert(index))
-                .collect::<Vec<_>>()
+            Cow::Owned(
+                items
+                    .iter()
+                    .copied()
+                    .filter(|&index| seen.insert(index))
+                    .collect(),
+            )
         });
         let repeats =
             unique_candidates.len() != candidates.len() || unique_indices.len() != indices.len();
@@ -1077,10 +1080,10 @@ impl Engine {
         let mut cached = HashMap::new();
         let mut pending = Vec::new();
         let mut needs_binding = Vec::new();
-        for &candidate in &unique_candidates {
+        for &candidate in unique_candidates.iter() {
             let candidate_hash = self.candidates[candidate].0;
             let previous_pending = pending.len();
-            for &idx in &unique_indices {
+            for &idx in unique_indices.iter() {
                 match self
                     .cache
                     .get(baseline, candidate_hash, target.example_uid(idx), salt)

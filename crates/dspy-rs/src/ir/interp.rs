@@ -17,13 +17,14 @@
 use std::collections::{HashMap, HashSet};
 use std::pin::pin;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, RwLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::Instant;
 
 use cranelift_entity::{PrimaryMap, SecondaryMap};
 use futures::future::BoxFuture;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
+use tokio::sync::OnceCell;
 
 use crate::adapter::chat::{ChatAdapter, PreparedInputTemplates};
 use crate::core::FieldMeta;
@@ -31,7 +32,7 @@ use crate::ir::graph::{
     AgentLoopNode, Binding, BudgetPolicy, CapSet, HoleImpl, HoleNode, ModelId, Node, NodeId,
     PortRef, PredictNode, Program, SigId, ToolId, ToolKind,
 };
-use crate::ir::params::{ContextPolicy, DemoRow, Overlay, ParamId, ParamValue};
+use crate::ir::params::{ContextPolicy, DemoRow, Overlay, ParamId, ParamOwner, ParamValue};
 use crate::ir::sig::SignatureDef;
 use crate::ir::validate::{ValidateError, json_matches_type};
 use crate::trace::capture::{begin_span_lazy, in_span};
@@ -494,7 +495,64 @@ impl RuntimeEnv {
 #[derive(Clone)]
 enum ToolExec {
     Host(Arc<dyn rig::tool::ToolDyn>),
-    Sandboxed,
+    Sandboxed(ParamId),
+}
+
+type SandboxRegistrationKey = (ParamId, u64);
+type SandboxRegistrationResult = Result<String, dsrs_tools::RegisterError>;
+type SandboxRegistrationCell = Arc<OnceCell<SandboxRegistrationResult>>;
+
+#[derive(Default)]
+struct SandboxRegistrations(Mutex<HashMap<SandboxRegistrationKey, SandboxRegistrationCell>>);
+
+impl SandboxRegistrations {
+    async fn get_or_register(
+        &self,
+        key: SandboxRegistrationKey,
+        register: impl Future<Output = SandboxRegistrationResult>,
+    ) -> SandboxRegistrationResult {
+        let cell = {
+            let mut entries = self.0.lock().unwrap();
+            let cell = entries.entry(key).or_default();
+            if let Some(result) = cell.get() {
+                return result.clone();
+            }
+            Arc::clone(cell)
+        };
+        let pending = SandboxRegistration {
+            registry: self,
+            key,
+            cell: Some(cell),
+        };
+        pending
+            .cell
+            .as_ref()
+            .unwrap()
+            .get_or_init(|| register)
+            .await
+            .clone()
+    }
+}
+
+struct SandboxRegistration<'a> {
+    registry: &'a SandboxRegistrations,
+    key: SandboxRegistrationKey,
+    cell: Option<SandboxRegistrationCell>,
+}
+
+impl Drop for SandboxRegistration<'_> {
+    fn drop(&mut self) {
+        let cell = self.cell.take().unwrap();
+        if matches!(cell.get(), Some(Ok(_))) {
+            return;
+        }
+        let mut entries = self.registry.0.lock().unwrap();
+        // Only the map and this caller still own the failed or cancelled cell.
+        if Arc::strong_count(&cell) == 2 && !matches!(cell.get(), Some(Ok(_))) {
+            entries.remove(&self.key);
+        }
+        drop(cell);
+    }
 }
 
 /// A native extern-hole implementation: resolved input map in, JSON value out
@@ -518,9 +576,8 @@ pub struct Interpreter {
     /// Extern-hole bindings by leaf name, verified complete at load.
     host_holes: HashMap<String, HostHoleFn>,
     sandbox: Option<Arc<dyn dsrs_tools::Executor>>,
-    /// Code-hash → registered sandbox tool name. Seeded at load with every
-    /// default code gene; overlay code variants register on first use.
-    registered: tokio::sync::Mutex<HashMap<u64, String>>,
+    /// Registrations are shared within a declared code slot and source hash.
+    registered: SandboxRegistrations,
     /// Code Mode sandbox config (see [`RuntimeEnv::code_mode`]).
     code_mode: Option<dsrs_tools::SandboxConfig>,
 }
@@ -608,7 +665,7 @@ impl Interpreter {
                 }
                 ToolKind::Sandboxed { code } => {
                     sandboxed.push((name, code, tool.sig, tool.caps.clone()));
-                    tool_exec[id] = Some(ToolExec::Sandboxed);
+                    tool_exec[id] = Some(ToolExec::Sandboxed(code));
                 }
             }
         }
@@ -688,7 +745,7 @@ impl Interpreter {
                     at: base.clone(),
                     source,
                 })?;
-                registered.insert(*hash, name);
+                registered.insert((code, *hash), Arc::new(OnceCell::new_with(Some(Ok(name)))));
             }
         }
 
@@ -710,7 +767,7 @@ impl Interpreter {
             tool_exec,
             host_holes,
             sandbox,
-            registered: tokio::sync::Mutex::new(registered),
+            registered: SandboxRegistrations(Mutex::new(registered)),
             code_mode: env.code_mode,
         })
     }
@@ -1129,7 +1186,7 @@ impl Interpreter {
         // are baked in, so caller-managed turns never suspend under replay.
         match crate::trace::replay::intercept(&at, &lm.config, &messages) {
             Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
-                return self.serve_conversation_turn(&at, &lm, *span, messages, guard);
+                return self.serve_conversation_turn(&at, &lm, span.span(), messages, guard);
             }
             Some(crate::trace::replay::ReplayDirective::Refuse(err)) => {
                 if let Some(guard) = guard {
@@ -1360,7 +1417,7 @@ impl Interpreter {
         &self,
         at: &str,
         lm: &Arc<LM>,
-        span: crate::trace::Span,
+        span: &crate::trace::Span,
         messages: Vec<Message>,
         guard: Option<crate::trace::SpanGuard>,
     ) -> Result<ConversationTurn, RunError> {
@@ -1998,6 +2055,7 @@ impl Interpreter {
         // reaches no provider.
         match crate::trace::replay::intercept(&at, &lm.config, &messages) {
             Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
+                let span = span.span();
                 let output = span
                     .output
                     .clone()
@@ -2090,6 +2148,7 @@ impl Interpreter {
         let imp = match &n.imp {
             HoleImpl::Sandboxed { code } => match self.p_value(cx, *code) {
                 ParamValue::Code { source, hash, .. } => ResolvedHoleImpl::Sandboxed {
+                    code: *code,
                     source: source.clone(),
                     hash: *hash,
                 },
@@ -2125,6 +2184,7 @@ impl Interpreter {
         // touching the sandbox or the host fn.
         match crate::trace::replay::intercept_hashed(&at, request_hash) {
             Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
+                let span = span.span();
                 let output = span
                     .output
                     .clone()
@@ -2231,7 +2291,7 @@ impl Interpreter {
         caps: &CapSet,
     ) -> Result<(String, Value), RunError> {
         match imp {
-            ResolvedHoleImpl::Sandboxed { source, hash } => {
+            ResolvedHoleImpl::Sandboxed { code, source, hash } => {
                 // The capability gate is constructive (§3.5): caps were
                 // checked at build/load and the sandbox only carries granted
                 // host functions — undeclared authority is unreachable here.
@@ -2240,7 +2300,7 @@ impl Interpreter {
                     message: "hole evaluated without a sandbox (load should have refused)".into(),
                 })?;
                 let name = self
-                    .ensure_registered(at, sandbox.as_ref(), source, *hash, def, caps)
+                    .ensure_registered(at, sandbox.as_ref(), *code, (source, *hash), def, caps)
                     .await?;
                 let value = sandbox
                     .execute_scoped(
@@ -2310,6 +2370,7 @@ impl Interpreter {
         match crate::trace::replay::intercept(&at, &lm.config, &chat.messages) {
             Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
                 let guard = open_span();
+                let span = span.span();
                 let output = span
                     .output
                     .clone()
@@ -2671,7 +2732,9 @@ impl Interpreter {
                     .call(call.function.arguments.to_string())
                     .await
                     .map_err(|err| format!("tool `{name}` failed: {err}")),
-                Some(ToolExec::Sandboxed) => self.execute_sandboxed_tool(lc, tool_id, call).await,
+                Some(ToolExec::Sandboxed(code)) => {
+                    self.execute_sandboxed_tool(lc, tool_id, *code, call).await
+                }
                 None => Err(format!("tool `{name}` is not bound")),
             },
         }
@@ -2681,6 +2744,7 @@ impl Interpreter {
         &self,
         lc: &AgentLoopCx<'_>,
         tool_id: ToolId,
+        code: ParamId,
         call: &rig::message::ToolCall,
     ) -> Result<String, String> {
         let sandbox = self
@@ -2696,8 +2760,8 @@ impl Interpreter {
             .ensure_registered(
                 lc.at,
                 sandbox.as_ref(),
-                source,
-                *hash,
+                code,
+                (source, *hash),
                 &self.program.sigs[tool.sig],
                 &tool.caps,
             )
@@ -2819,7 +2883,7 @@ impl Interpreter {
                     definition.name.clone(),
                     Arc::clone(tool),
                 ),
-                Some(ToolExec::Sandboxed) => {
+                Some(ToolExec::Sandboxed(code)) => {
                     let sandbox = Arc::clone(self.sandbox.as_ref().ok_or_else(|| {
                         internal("sandbox unavailable (load should have refused)".to_string())
                     })?);
@@ -2830,8 +2894,8 @@ impl Interpreter {
                         .ensure_registered(
                             at,
                             sandbox.as_ref(),
-                            source,
-                            *hash,
+                            *code,
+                            (source, *hash),
                             &p.sigs[p.tools[tool_id].sig],
                             &p.tools[tool_id].caps,
                         )
@@ -2957,27 +3021,26 @@ impl Interpreter {
         &self,
         at: &str,
         sandbox: &dyn dsrs_tools::Executor,
-        source: &str,
-        hash: u64,
+        code: ParamId,
+        (source, hash): (&str, u64),
         sig: &SignatureDef,
         caps: &CapSet,
     ) -> Result<String, RunError> {
-        {
-            let registered = self.registered.lock().await;
-            if let Some(name) = registered.get(&hash) {
-                return Ok(name.clone());
-            }
-        }
-        let name = register_code(sandbox, at, source, hash, sig, &self.program.types, caps)
+        self.registered
+            .get_or_register((code, hash), async {
+                let base = match self.program.params[code].owner {
+                    ParamOwner::Node(_) => at,
+                    ParamOwner::Tool(id) => self.program.syms.get(self.program.tools[id].name),
+                };
+                register_code(sandbox, base, source, hash, sig, &self.program.types, caps).await
+            })
             .await
             .map_err(|err| RunError::Hole {
                 at: at.into(),
                 source: dsrs_tools::ExecError::Internal {
                     message: format!("overlay code failed to register: {err}"),
                 },
-            })?;
-        self.registered.lock().await.insert(hash, name.clone());
-        Ok(name)
+            })
     }
 
     fn resolve_bindings(
@@ -3335,6 +3398,71 @@ fn coerce_outputs(
 }
 
 #[cfg(test)]
+mod sandbox_registration_tests {
+    use super::*;
+    use cranelift_entity::EntityRef;
+
+    #[tokio::test]
+    async fn waiters_share_a_failure_and_later_calls_can_retry() {
+        let registry = SandboxRegistrations::default();
+        let key = (ParamId::new(0), 42);
+        let (finish, wait) = tokio::sync::oneshot::channel();
+        let mut leader = Box::pin(registry.get_or_register(key, async {
+            wait.await.unwrap();
+            Err(dsrs_tools::RegisterError::Compile {
+                message: "fixture failure".into(),
+            })
+        }));
+        assert!(futures::poll!(&mut leader).is_pending());
+        let mut follower = Box::pin(registry.get_or_register(key, async {
+            panic!("the existing registration should report the shared failure")
+        }));
+        assert!(futures::poll!(&mut follower).is_pending());
+        finish.send(()).unwrap();
+        let (first, second) = tokio::join!(leader, follower);
+        for result in [first, second] {
+            assert!(matches!(
+                result,
+                Err(dsrs_tools::RegisterError::Compile { message }) if message == "fixture failure"
+            ));
+        }
+        assert!(registry.0.lock().unwrap().is_empty());
+        assert_eq!(
+            registry
+                .get_or_register(key, async { Ok("retry".into()) })
+                .await
+                .unwrap(),
+            "retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_releases_registration_and_other_slots_progress() {
+        let registry = SandboxRegistrations::default();
+        let key = (ParamId::new(0), 42);
+        let other_key = (ParamId::new(1), 42);
+        let mut leader = Box::pin(registry.get_or_register(key, std::future::pending()));
+        let mut waiter = Box::pin(registry.get_or_register(key, async { Ok("successor".into()) }));
+        let mut other = Box::pin(registry.get_or_register(other_key, async { Ok("other".into()) }));
+        assert!(futures::poll!(&mut leader).is_pending());
+        assert!(futures::poll!(&mut waiter).is_pending());
+        assert!(matches!(
+            futures::poll!(&mut other),
+            std::task::Poll::Ready(Ok(name)) if name == "other"
+        ));
+        drop(leader);
+        assert_eq!(waiter.await.unwrap(), "successor");
+
+        let abandoned_key = (key.0, 43);
+        let mut abandoned =
+            Box::pin(registry.get_or_register(abandoned_key, std::future::pending()));
+        assert!(futures::poll!(&mut abandoned).is_pending());
+        drop(abandoned);
+        assert!(!registry.0.lock().unwrap().contains_key(&abandoned_key));
+    }
+}
+
+#[cfg(test)]
 mod output_constraint_tests {
     use super::*;
     use crate::typesys::{ClassDef, Constraint, ConstraintKind, FieldDef as TypeFieldDef};
@@ -3516,8 +3644,14 @@ fn tool_result_block(call: &rig::message::ToolCall, result: String) -> crate::Co
 /// A hole's implementation, resolved through the overlay (sandboxed code may
 /// be a candidate's Code gene; host holes are fixed by their content hash).
 enum ResolvedHoleImpl {
-    Sandboxed { source: String, hash: u64 },
-    Host { hash: u64 },
+    Sandboxed {
+        code: ParamId,
+        source: String,
+        hash: u64,
+    },
+    Host {
+        hash: u64,
+    },
 }
 
 /// The hole replay preimage (RFC 0003 §4.4): impl discriminant ++ impl/code

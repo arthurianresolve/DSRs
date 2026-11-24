@@ -4,7 +4,7 @@
 
 use anyhow::{Result, anyhow};
 mod support;
-use arrow::array::{ArrayRef, Int64Array, StringArray};
+use arrow::array::{ArrayRef, BinaryArray, Float64Array, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bon::Builder;
@@ -492,6 +492,77 @@ fn parquet_numeric_round_trip_for_typed_conversion() -> Result<()> {
 
     assert_eq!(examples.len(), 3);
     assert_eq!(examples[2].doubled, 6);
+    Ok(())
+}
+
+#[test]
+fn parquet_omits_null_and_unsupported_cells_without_renumbering_rows() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("nullable.parquet");
+    let batch = RecordBatch::try_from_iter([
+        (
+            "text",
+            Arc::new(StringArray::from(vec![None, Some("kept"), None])) as ArrayRef,
+        ),
+        (
+            "fraction",
+            Arc::new(Float64Array::from(vec![None, Some(1.25), None])) as ArrayRef,
+        ),
+        (
+            "binary",
+            Arc::new(BinaryArray::from_vec(vec![b"x", b"y", b"z"])) as ArrayRef,
+        ),
+    ])?;
+    let mut writer = ArrowWriter::try_new(fs::File::create(&path)?, batch.schema(), None)?;
+    writer.write(&batch)?;
+    writer.close()?;
+
+    let rows = DataLoader::load_parquet_with(
+        path.to_str().unwrap(),
+        TypedLoadOptions::default(),
+        |row| Ok((row.row_index, row.values.clone())),
+    )?;
+    assert_eq!(
+        rows,
+        [(
+            2,
+            [
+                ("text".to_string(), serde_json::json!("kept")),
+                ("fraction".to_string(), serde_json::json!(1.25)),
+            ]
+            .into()
+        )]
+    );
+    Ok(())
+}
+
+#[test]
+fn reused_csv_record_preserves_cells_and_row_order() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("cells.csv");
+    let mut writer = csv::Writer::from_path(&path)?;
+    writer.write_record(["text", "literal", "compound", "number"])?;
+    writer.write_record(["  plain text  ", " true ", "[1,2]", "-8.5"])?;
+    writer.write_record(["[invalid", "null", r#""quoted""#, ""])?;
+    writer.flush()?;
+    let rows = DataLoader::load_csv_with(
+        path.to_str().unwrap(),
+        ',',
+        true,
+        TypedLoadOptions::default(),
+        |row| Ok((row.row_index, row.values.clone())),
+    )?;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].0, 1);
+    assert_eq!(rows[0].1["text"], serde_json::json!("  plain text  "));
+    assert_eq!(rows[0].1["literal"], serde_json::json!(true));
+    assert_eq!(rows[0].1["compound"], serde_json::json!([1, 2]));
+    assert_eq!(rows[0].1["number"], serde_json::json!(-8.5));
+    assert_eq!(rows[1].0, 2);
+    assert_eq!(rows[1].1["text"], serde_json::json!("[invalid"));
+    assert_eq!(rows[1].1["literal"], serde_json::Value::Null);
+    assert_eq!(rows[1].1["compound"], serde_json::json!("quoted"));
+    assert_eq!(rows[1].1["number"], serde_json::json!(""));
     Ok(())
 }
 

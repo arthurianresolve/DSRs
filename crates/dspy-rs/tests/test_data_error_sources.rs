@@ -8,6 +8,44 @@ struct Row {
 }
 
 #[test]
+fn typed_projection_consumes_a_source_after_its_final_alias() {
+    #[derive(Debug, serde::Deserialize, facet::Facet)]
+    struct AliasedRow {
+        text: String,
+        number: i64,
+        optional: Option<String>,
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rows.jsonl");
+    let load = || {
+        DataLoader::load_json::<AliasedRow>(
+            path.to_str().unwrap(),
+            true,
+            TypedLoadOptions {
+                field_map: [
+                    ("text".to_string(), "source".to_string()),
+                    ("number".to_string(), "source".to_string()),
+                ]
+                .into(),
+                unknown_fields: dspy_rs::UnknownFieldPolicy::Error,
+            },
+        )
+    };
+    std::fs::write(&path, r#"{"source":" 0042 "}"#).unwrap();
+    let rows = load().unwrap();
+    assert_eq!(rows[0].text, " 0042 ");
+    assert_eq!(rows[0].number, 42);
+    assert_eq!(rows[0].optional, None);
+
+    std::fs::write(&path, r#"{"source":" 0042 ","unused":true}"#).unwrap();
+    assert!(matches!(
+        load().unwrap_err().downcast_ref::<DataLoadError>(),
+        Some(DataLoadError::UnknownField { row: 1, field }) if field == "unused"
+    ));
+}
+
+#[test]
 fn remote_http_failures_keep_status_in_the_source_chain() {
     use std::io::{BufRead, BufReader, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

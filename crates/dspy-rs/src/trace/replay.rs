@@ -149,11 +149,11 @@ pub struct ReplayReport {
 pub(crate) struct ReplaySession(Arc<Mutex<ReplayInner>>);
 
 struct ReplayInner {
-    trace: Trace,
+    trace: Arc<Trace>,
     span_index: Option<HashMap<(CompId, u32), usize>>,
     mode: ReplayMode,
-    /// Per-component next-seq cursors, keyed by component name.
-    cursors: HashMap<String, u32>,
+    /// Per-component next-seq cursors in the recording's component table.
+    cursors: HashMap<CompId, u32>,
     /// `UntilDivergence` only: once true, every call goes live.
     diverged: bool,
     report: ReplayReport,
@@ -162,15 +162,26 @@ struct ReplayInner {
 /// What `Predict` should do with an intercepted call.
 pub(crate) enum ReplayDirective {
     /// Serve this recorded span verbatim — no client, no provider, no tools.
-    Serve(Box<Span>),
+    Serve(RecordedSpan),
     /// Call the live LM (post-divergence `UntilDivergence`).
     Live,
     /// Refuse the call (`Strict`): surface the typed error.
     Refuse(ReplayError),
 }
 
+pub(crate) struct RecordedSpan {
+    trace: Arc<Trace>,
+    position: usize,
+}
+
+impl RecordedSpan {
+    pub(crate) fn span(&self) -> &Span {
+        &self.trace.spans[self.position]
+    }
+}
+
 impl ReplaySession {
-    fn new(trace: Trace, mode: ReplayMode) -> Self {
+    fn new(trace: Arc<Trace>, mode: ReplayMode) -> Self {
         // Small fixtures are cheaper to scan than to index.
         const INDEX_MIN_SPANS: usize = 1024;
         let span_index = (trace.spans.len() >= INDEX_MIN_SPANS).then(|| {
@@ -219,20 +230,23 @@ impl ReplaySession {
             return ReplayDirective::Live;
         }
 
-        let seq = inner.cursors.get(component).copied().unwrap_or(0);
-        let recorded = inner
-            .trace
-            .component_id(component)
-            .and_then(|id| match &inner.span_index {
-                Some(index) => index.get(&(id, seq)).map(|&i| &inner.trace.spans[i]),
+        let component_id = inner.trace.component_id(component);
+        let seq = component_id
+            .and_then(|id| inner.cursors.get(&id).copied())
+            .unwrap_or(0);
+        let recorded = component_id.and_then(|id| {
+            let position = match &inner.span_index {
+                Some(index) => index.get(&(id, seq)).copied(),
                 None => inner
                     .trace
                     .spans
                     .iter()
-                    .find(|span| span.component == id && span.seq == seq),
-            });
-        let span = match recorded {
-            Some(span) => span,
+                    .position(|span| span.component == id && span.seq == seq),
+            }?;
+            Some((id, position))
+        });
+        let (id, position) = match recorded {
+            Some(recorded) => recorded,
             None => {
                 return inner.mismatch(
                     None,
@@ -243,6 +257,7 @@ impl ReplaySession {
                 );
             }
         };
+        let span = &inner.trace.spans[position];
 
         if !span.complete || span.output.is_none() {
             let id = span.id;
@@ -271,8 +286,11 @@ impl ReplaySession {
             );
         }
 
-        let span = Box::new(span.clone());
-        inner.cursors.insert(component.to_string(), seq + 1);
+        let span = RecordedSpan {
+            trace: Arc::clone(&inner.trace),
+            position,
+        };
+        inner.cursors.insert(id, seq + 1);
         inner.report.served += 1;
         ReplayDirective::Serve(span)
     }
@@ -310,7 +328,24 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = R>,
 {
-    let session = ReplaySession::new(trace.clone(), mode);
+    replay_shared(Arc::new(trace.clone()), mode, f).await
+}
+
+/// Runs a replay scope over an already owned recording.
+///
+/// Pass clones of the same `Arc<Trace>` to reuse a recording without copying
+/// its payload. Each call has its own cursors, mode, and report, with the same
+/// task-local scope as [`replay`].
+pub async fn replay_shared<F, Fut, R>(
+    trace: Arc<Trace>,
+    mode: ReplayMode,
+    f: F,
+) -> (R, ReplayReport)
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = R>,
+{
+    let session = ReplaySession::new(trace, mode);
     let result = ACTIVE.scope(session.clone(), f()).await;
     (result, session.finish())
 }

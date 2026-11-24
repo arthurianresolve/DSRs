@@ -562,9 +562,9 @@ impl DataLoader {
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
-        let fields = row_struct_fields::<E>()?;
+        let fields = projection_fields::<E>(opts)?;
         rows.into_iter()
-            .map(|row| Ok(project_row(&row, &fields, opts)?.deserialize()?))
+            .map(|row| Ok(project_row(row, &fields, opts.unknown_fields)?.deserialize()?))
             .collect()
     }
 
@@ -845,14 +845,19 @@ impl DataLoader {
         };
 
         let mut count = 0;
-        for (idx, record) in reader.records().enumerate() {
+        let mut record = StringRecord::new();
+        loop {
+            let read = reader.read_record(&mut record);
+            if matches!(&read, Ok(false)) {
+                break;
+            }
             if let Some(limit) = max_rows
-                && idx >= limit
+                && count >= limit
             {
                 return Err(remote_limit("rows", limit));
             }
-            let record = record.map_err(|err| DataLoadError::Csv(err.into()))?;
-            count = idx + 1;
+            read.map_err(|err| DataLoadError::Csv(err.into()))?;
+            count += 1;
             visit(csv_record_to_row_record(
                 &record,
                 count,
@@ -889,16 +894,21 @@ impl DataLoader {
         for batch_result in reader {
             let batch = batch_result.map_err(|err| DataLoadError::Parquet(err.into()))?;
             let schema = batch.schema();
+            let columns: Vec<_> = schema
+                .fields()
+                .iter()
+                .zip(batch.columns())
+                .filter_map(|(field, column)| {
+                    parquet_column_reader(column.as_ref()).map(|read| (field.name().as_str(), read))
+                })
+                .collect();
 
             for local_row in 0..batch.num_rows() {
                 let mut values = HashMap::new();
 
-                for col_idx in 0..batch.num_columns() {
-                    let column = batch.column(col_idx);
-                    let field_name = schema.field(col_idx).name().to_string();
-
-                    if let Some(value) = parquet_value_to_json(column.as_ref(), local_row) {
-                        values.insert(field_name, value);
+                for &(name, ref read) in &columns {
+                    if let Some(value) = read(local_row) {
+                        values.insert(name.to_owned(), value);
                     }
                 }
 
@@ -1010,9 +1020,16 @@ fn resolve_source_field<'a>(field: &'a str, opts: &'a TypedLoadOptions) -> &'a s
         .unwrap_or(field)
 }
 
-/// Enumerates a row struct's (field name, declared type) pairs from its Facet shape.
-fn row_struct_fields<E: for<'f> Facet<'f>>()
--> std::result::Result<Vec<(&'static str, FieldType)>, DataLoadError> {
+struct ProjectedField<'a> {
+    name: &'static str,
+    source: &'a str,
+    field_type: FieldType,
+    last_use: bool,
+}
+
+fn projection_fields<E: for<'f> Facet<'f>>(
+    opts: &TypedLoadOptions,
+) -> std::result::Result<Vec<ProjectedField<'_>>, DataLoadError> {
     let shape = E::SHAPE;
     let struct_type = match &shape.ty {
         Type::User(UserType::Struct(struct_type)) => struct_type,
@@ -1023,17 +1040,29 @@ fn row_struct_fields<E: for<'f> Facet<'f>>()
             )));
         }
     };
-    Ok(struct_type
+    let mut seen = HashSet::new();
+    let mut fields: Vec<_> = struct_type
         .fields
         .iter()
+        .rev()
         .filter(|field| !field.should_skip_deserializing())
-        .map(|field| (field.name, field_type_from_shape(field.shape())))
-        .collect())
+        .map(|field| {
+            let source = resolve_source_field(field.name, opts);
+            ProjectedField {
+                name: field.name,
+                source,
+                field_type: field_type_from_shape(field.shape()),
+                last_use: seen.insert(source),
+            }
+        })
+        .collect();
+    fields.reverse();
+    Ok(fields)
 }
 
 struct TypedProjection<'a> {
-    opts: &'a TypedLoadOptions,
-    fields: std::result::Result<Vec<(&'static str, FieldType)>, DataLoadError>,
+    unknown_fields: UnknownFieldPolicy,
+    fields: std::result::Result<Vec<ProjectedField<'a>>, DataLoadError>,
     rows: Vec<ProjectedRow>,
     error: Option<DataLoadError>,
 }
@@ -1041,8 +1070,8 @@ struct TypedProjection<'a> {
 impl<'a> TypedProjection<'a> {
     fn new<E: for<'f> Facet<'f>>(opts: &'a TypedLoadOptions) -> Self {
         Self {
-            opts,
-            fields: row_struct_fields::<E>(),
+            unknown_fields: opts.unknown_fields,
+            fields: projection_fields::<E>(opts),
             rows: Vec::new(),
             error: None,
         }
@@ -1052,7 +1081,7 @@ impl<'a> TypedProjection<'a> {
         if let Ok(fields) = &self.fields
             && self.error.is_none()
         {
-            match project_row(&row, fields, self.opts) {
+            match project_row(row, fields, self.unknown_fields) {
                 Ok(row) => self.rows.push(row),
                 Err(error) => self.error = Some(error),
             }
@@ -1093,42 +1122,43 @@ impl ProjectedRow {
 }
 
 fn project_row(
-    row: &RowRecord,
-    fields: &[(&'static str, FieldType)],
-    opts: &TypedLoadOptions,
+    mut row: RowRecord,
+    fields: &[ProjectedField<'_>],
+    unknown_fields: UnknownFieldPolicy,
 ) -> std::result::Result<ProjectedRow, DataLoadError> {
-    let mut used_source_fields = HashSet::new();
-    let mut map = Map::new();
+    let mut map = Map::with_capacity(fields.len());
 
-    for (name, type_ir) in fields {
-        let source_field = resolve_source_field(name, opts);
-        match row.values.get(source_field) {
+    for field in fields {
+        let value = if field.last_use {
+            row.values.remove(field.source)
+        } else {
+            row.values.get(field.source).cloned()
+        };
+        match value {
             Some(value) => {
-                map.insert(name.to_string(), coerce_row_value(value, type_ir));
-                if opts.unknown_fields == UnknownFieldPolicy::Error {
-                    used_source_fields.insert(source_field);
-                }
+                map.insert(
+                    field.name.to_string(),
+                    coerce_row_value(value, &field.field_type),
+                );
             }
             // Missing optional fields deserialize as `None`; anything else is an error.
-            None if type_ir.is_optional() => {}
+            None if field.field_type.is_optional() => {}
             None => {
                 return Err(DataLoadError::MissingField {
                     row: row.row_index,
-                    field: name.to_string(),
+                    field: field.name.to_string(),
                 });
             }
         }
     }
 
-    if opts.unknown_fields == UnknownFieldPolicy::Error {
-        for key in row.values.keys() {
-            if !used_source_fields.contains(key.as_str()) {
-                return Err(DataLoadError::UnknownField {
-                    row: row.row_index,
-                    field: key.clone(),
-                });
-            }
-        }
+    if unknown_fields == UnknownFieldPolicy::Error
+        && let Some((field, _)) = row.values.into_iter().next()
+    {
+        return Err(DataLoadError::UnknownField {
+            row: row.row_index,
+            field,
+        });
     }
 
     Ok(ProjectedRow {
@@ -1142,41 +1172,33 @@ fn project_row(
 /// tolerant loading behavior the vendored BAML stack used to provide: a `"4"` cell fills a
 /// `String` field as `"4"` and an `i64` field as `4`. Values that don't cleanly convert are
 /// passed through unchanged so serde surfaces a precise type-mismatch error.
-fn coerce_row_value(value: &Value, field_type: &FieldType) -> Value {
-    match field_type.peel() {
-        FieldType::String => match value {
-            Value::String(_) => value.clone(),
-            Value::Number(number) => Value::String(number.to_string()),
-            Value::Bool(flag) => Value::String(flag.to_string()),
-            _ => value.clone(),
-        },
-        FieldType::Int => match value {
-            Value::String(text) => text
-                .trim()
-                .parse::<i64>()
-                .map(|parsed| Value::Number(parsed.into()))
-                .unwrap_or_else(|_| value.clone()),
-            _ => value.clone(),
-        },
-        FieldType::Float => match value {
-            Value::String(text) => text
-                .trim()
-                .parse::<f64>()
-                .ok()
-                .and_then(serde_json::Number::from_f64)
-                .map(Value::Number)
-                .unwrap_or_else(|| value.clone()),
-            _ => value.clone(),
-        },
-        FieldType::Bool => match value {
-            Value::String(text) => match text.trim().to_ascii_lowercase().as_str() {
-                "true" => Value::Bool(true),
-                "false" => Value::Bool(false),
-                _ => value.clone(),
-            },
-            _ => value.clone(),
-        },
-        _ => value.clone(),
+fn coerce_row_value(value: Value, field_type: &FieldType) -> Value {
+    match (field_type.peel(), value) {
+        (FieldType::String, Value::Number(number)) => Value::String(number.to_string()),
+        (FieldType::String, Value::Bool(flag)) => Value::String(flag.to_string()),
+        (FieldType::Int, Value::String(text)) => text
+            .trim()
+            .parse::<i64>()
+            .map(|parsed| Value::Number(parsed.into()))
+            .unwrap_or_else(|_| Value::String(text)),
+        (FieldType::Float, Value::String(text)) => text
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map(Value::Number)
+            .unwrap_or(Value::String(text)),
+        (FieldType::Bool, Value::String(text)) => {
+            let trimmed = text.trim();
+            if trimmed.eq_ignore_ascii_case("true") {
+                Value::Bool(true)
+            } else if trimmed.eq_ignore_ascii_case("false") {
+                Value::Bool(false)
+            } else {
+                Value::String(text)
+            }
+        }
+        (_, value) => value,
     }
 }
 
@@ -1262,12 +1284,22 @@ fn row_from_json_value(
 #[cfg(feature = "data")]
 fn parse_csv_cell(cell: &str) -> serde_json::Value {
     let trimmed = cell.trim();
-    if trimmed.is_empty() {
-        return serde_json::Value::String(String::new());
+    match trimmed {
+        "" => return Value::String(String::new()),
+        "true" => return Value::Bool(true),
+        "false" => return Value::Bool(false),
+        "null" => return Value::Null,
+        _ => {}
     }
 
-    serde_json::from_str::<serde_json::Value>(trimmed)
-        .unwrap_or_else(|_| serde_json::Value::String(cell.to_string()))
+    if matches!(
+        trimmed.as_bytes()[0],
+        b'"' | b'{' | b'[' | b'-' | b'0'..=b'9'
+    ) && let Ok(value) = serde_json::from_str(trimmed)
+    {
+        return value;
+    }
+    Value::String(cell.to_string())
 }
 
 #[cfg(feature = "data")]
@@ -1290,43 +1322,35 @@ fn csv_record_to_row_record(
 }
 
 #[cfg(feature = "data")]
-fn parquet_value_to_json(column: &dyn Array, row_idx: usize) -> Option<serde_json::Value> {
-    if let Some(values) = column.as_any().downcast_ref::<StringArray>() {
-        return (!values.is_null(row_idx)).then(|| serde_json::json!(values.value(row_idx)));
-    }
-    if let Some(values) = column.as_any().downcast_ref::<BooleanArray>() {
-        return (!values.is_null(row_idx)).then(|| serde_json::json!(values.value(row_idx)));
-    }
-    if let Some(values) = column.as_any().downcast_ref::<Int64Array>() {
-        return (!values.is_null(row_idx)).then(|| serde_json::json!(values.value(row_idx)));
-    }
-    if let Some(values) = column.as_any().downcast_ref::<Int32Array>() {
-        return (!values.is_null(row_idx)).then(|| serde_json::json!(values.value(row_idx)));
-    }
-    if let Some(values) = column.as_any().downcast_ref::<Int16Array>() {
-        return (!values.is_null(row_idx)).then(|| serde_json::json!(values.value(row_idx)));
-    }
-    if let Some(values) = column.as_any().downcast_ref::<Int8Array>() {
-        return (!values.is_null(row_idx)).then(|| serde_json::json!(values.value(row_idx)));
-    }
-    if let Some(values) = column.as_any().downcast_ref::<UInt64Array>() {
-        return (!values.is_null(row_idx)).then(|| serde_json::json!(values.value(row_idx)));
-    }
-    if let Some(values) = column.as_any().downcast_ref::<UInt32Array>() {
-        return (!values.is_null(row_idx)).then(|| serde_json::json!(values.value(row_idx)));
-    }
-    if let Some(values) = column.as_any().downcast_ref::<UInt16Array>() {
-        return (!values.is_null(row_idx)).then(|| serde_json::json!(values.value(row_idx)));
-    }
-    if let Some(values) = column.as_any().downcast_ref::<UInt8Array>() {
-        return (!values.is_null(row_idx)).then(|| serde_json::json!(values.value(row_idx)));
-    }
-    if let Some(values) = column.as_any().downcast_ref::<Float64Array>() {
-        return (!values.is_null(row_idx)).then(|| serde_json::json!(values.value(row_idx)));
-    }
-    if let Some(values) = column.as_any().downcast_ref::<Float32Array>() {
-        return (!values.is_null(row_idx)).then(|| serde_json::json!(values.value(row_idx)));
-    }
+type ParquetColumnReader<'a> = Box<dyn Fn(usize) -> Option<Value> + 'a>;
 
+#[cfg(feature = "data")]
+fn parquet_column_reader(column: &dyn Array) -> Option<ParquetColumnReader<'_>> {
+    let array = column.as_any();
+    macro_rules! bind_columns {
+        ($($kind:ty),+ $(,)?) => {
+            $(
+                if let Some(values) = array.downcast_ref::<$kind>() {
+                    return Some(Box::new(move |row| {
+                        (!values.is_null(row)).then(|| serde_json::json!(values.value(row)))
+                    }));
+                }
+            )+
+        };
+    }
+    bind_columns!(
+        StringArray,
+        BooleanArray,
+        Int64Array,
+        Int32Array,
+        Int16Array,
+        Int8Array,
+        UInt64Array,
+        UInt32Array,
+        UInt16Array,
+        UInt8Array,
+        Float64Array,
+        Float32Array,
+    );
     None
 }
