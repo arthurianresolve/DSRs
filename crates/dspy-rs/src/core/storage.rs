@@ -46,17 +46,17 @@ pub struct JsonlInteractionStore {
 }
 
 #[derive(Serialize, Deserialize)]
-struct Revision {
+struct Revision<E, T> {
     version: u32,
     #[serde(flatten)]
-    record: Record,
+    record: Record<E, T>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
-enum Record {
-    Invocation { entry: HistoryEntry },
-    Execution { trace: crate::Trace },
+enum Record<E = HistoryEntry, T = crate::Trace> {
+    Invocation { entry: E },
+    Execution { trace: T },
 }
 
 struct LockedFile<'a>(&'a mut File);
@@ -90,7 +90,7 @@ struct RecordLocation {
 }
 
 fn decode_record(line: &[u8]) -> Result<Record, StorageError> {
-    let revision: Revision = serde_json::from_slice(line)?;
+    let revision: Revision<HistoryEntry, crate::Trace> = serde_json::from_slice(line)?;
     if revision.version != 1 {
         return Err(StorageError::Version(revision.version));
     }
@@ -199,7 +199,7 @@ impl JsonlInteractionStore {
         f(guard.0, index, len)
     }
 
-    fn append(&self, record: Record) -> Result<(), StorageError> {
+    fn append(&self, record: Record<&HistoryEntry, &crate::Trace>) -> Result<(), StorageError> {
         let mut bytes = serde_json::to_vec(&Revision { version: 1, record })?;
         bytes.push(b'\n');
         self.locked(|file, index, len| {
@@ -216,14 +216,10 @@ impl JsonlInteractionStore {
 
 impl InteractionStore for JsonlInteractionStore {
     fn upsert(&self, entry: &HistoryEntry) -> Result<(), StorageError> {
-        self.append(Record::Invocation {
-            entry: entry.clone(),
-        })
+        self.append(Record::Invocation { entry })
     }
     fn upsert_trace(&self, trace: &crate::Trace) -> Result<(), StorageError> {
-        self.append(Record::Execution {
-            trace: trace.clone(),
-        })
+        self.append(Record::Execution { trace })
     }
     fn get_trace(&self, id: &str) -> Result<Option<crate::Trace>, StorageError> {
         self.locked(|file, index, _| {

@@ -24,6 +24,7 @@
 //! identity exactly once.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -33,7 +34,10 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::Module;
-use crate::core::{PredictState, PredictorInfo, Predictors, ToInput};
+use crate::core::{
+    PredictState, PredictorInfo, PredictorStateUpdate, Predictors, ToInput,
+    apply_predictor_state_updates,
+};
 use crate::evaluate::{Eval, TypedMetric, evaluator::rollout_traced};
 use crate::ir::graph::Node;
 use crate::ir::interp::{Budget as RunBudget, Interpreter};
@@ -139,6 +143,7 @@ pub(crate) trait Lane {
         idx: usize,
         bound: BoundCandidate,
         candidate_hash: u64,
+        observe_capture: &'s dyn Fn(&Trace),
     ) -> LocalBoxFuture<'s, Result<(Eval, Trace)>>;
     fn output<'s>(&'s self, idx: usize, bound: BoundCandidate)
     -> LocalBoxFuture<'s, Result<Value>>;
@@ -220,6 +225,7 @@ where
         idx: usize,
         bound: BoundCandidate,
         candidate_hash: u64,
+        observe_capture: &'s dyn Fn(&Trace),
     ) -> LocalBoxFuture<'s, Result<(Eval, Trace)>> {
         Box::pin(async move {
             let BoundCandidate::Params(params) = bound else {
@@ -235,7 +241,7 @@ where
             // rollout: each Predict leaf binds its own entry at call time.
             crate::fx::with_params_shared(
                 params,
-                rollout_traced(module, example, self.metric, meta, true),
+                rollout_traced(module, example, self.metric, meta, true, observe_capture),
             )
             .await
         })
@@ -261,24 +267,35 @@ where
     }
 
     fn install(&mut self, winner: &Candidate) -> Result<()> {
-        let mut leaves = self.module.predictors_mut();
+        let mut leaves = HashMap::new();
+        for (name, predictor) in self.module.predictors_mut() {
+            leaves.entry(name).or_insert(predictor);
+        }
+        let mut updates = Vec::with_capacity(winner.slots.len());
         for (name, slot) in &winner.slots {
-            let Some((_, info)) = leaves.iter_mut().find(|(leaf, _)| leaf == name) else {
+            let Some((name, predictor)) = leaves.remove_entry(name) else {
                 return Err(anyhow!("predictor `{name}` not found in the module"));
             };
-            let mut state = info.dump_state();
-            if slot.clear_instruction {
-                state.instruction_override = None;
-            } else if let Some(text) = &slot.instruction {
-                state.instruction_override = Some(text.clone());
-            }
-            if let Some(demos) = &slot.demos {
-                state.demos = demos.clone();
-            }
-            info.load_state(state)
-                .map_err(|err| anyhow!("failed to install winner on `{name}`: {err}"))?;
+            let original = predictor.dump_state();
+            let proposed = PredictState {
+                instruction_override: if slot.clear_instruction {
+                    None
+                } else {
+                    slot.instruction
+                        .as_ref()
+                        .or(original.instruction_override.as_ref())
+                        .cloned()
+                },
+                demos: slot.demos.as_ref().unwrap_or(&original.demos).clone(),
+            };
+            updates.push(PredictorStateUpdate {
+                name,
+                predictor,
+                original,
+                proposed,
+            });
         }
-        Ok(())
+        apply_predictor_state_updates(&mut updates, "install winner on")
     }
 
     fn winner_overlay(&self) -> Option<Arc<Overlay>> {
@@ -350,6 +367,7 @@ impl<'a, MT: ProgramMetric> Lane for ProgramLane<'a, MT> {
         idx: usize,
         bound: BoundCandidate,
         candidate_hash: u64,
+        observe_capture: &'s dyn Fn(&Trace),
     ) -> LocalBoxFuture<'s, Result<(Eval, Trace)>> {
         Box::pin(async move {
             let BoundCandidate::Overlay(overlay) = bound else {
@@ -370,6 +388,7 @@ impl<'a, MT: ProgramMetric> Lane for ProgramLane<'a, MT> {
                     .run(example.input.clone(), Some(overlay), RunBudget::unlimited())
             })
             .await;
+            observe_capture(&trace);
             let output =
                 result.map_err(|err| anyhow!("candidate failed on example {idx}: {err}"))?;
             // Metric runs outside the capture scope so LM-as-judge metrics
@@ -655,8 +674,11 @@ impl<'a> OptimizeTarget<'a> {
         idx: usize,
         bound: BoundCandidate,
         candidate_hash: u64,
+        observe_capture: &dyn Fn(&Trace),
     ) -> Result<(Eval, Trace)> {
-        self.lane.run(idx, bound, candidate_hash).await
+        self.lane
+            .run(idx, bound, candidate_hash, observe_capture)
+            .await
     }
 
     /// Runs the given examples under `candidate` and returns the bare output

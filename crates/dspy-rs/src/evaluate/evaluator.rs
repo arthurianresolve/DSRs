@@ -147,9 +147,10 @@ where
         .iter()
         .enumerate()
         .map(|(index, example)| async move {
-            let result = rollout_traced(module, example, metric, TraceMeta::default(), false)
-                .await
-                .map(|(eval, _)| eval);
+            let result =
+                rollout_traced(module, example, metric, TraceMeta::default(), false, |_| {})
+                    .await
+                    .map(|(eval, _)| eval);
             (index, result)
         });
     let mut in_flight: FuturesUnordered<_> =
@@ -212,7 +213,7 @@ fn json_object(
 ///
 /// Both the public evaluation entry points and the optimizer engine compose
 /// this. Scoring-only callers may skip the final outcome after the metric
-/// hooks have run.
+/// hooks have run. `observe_capture` sees execution usage before metric work.
 #[tracing::instrument(name = "dsrs.evaluate.rollout", level = "debug", skip_all,
     fields(module = std::any::type_name::<M>()))]
 pub(crate) async fn rollout_traced<E, M, MT>(
@@ -221,6 +222,7 @@ pub(crate) async fn rollout_traced<E, M, MT>(
     metric: &MT,
     mut meta: TraceMeta,
     retain_outcome: bool,
+    observe_capture: impl FnOnce(&Trace),
 ) -> Result<Rollout>
 where
     E: ToInput<M::Input> + Sync,
@@ -233,6 +235,7 @@ where
     }
     let started = std::time::Instant::now();
     let (result, mut trace) = capture_with_meta(meta, || module.call(input)).await;
+    observe_capture(&trace);
     let predicted = result?;
     let eval = metric.evaluate(example, &predicted, Some(&trace)).await?;
     // Per-span credit (RFC 0004 §4): stamp any span-level evals the metric

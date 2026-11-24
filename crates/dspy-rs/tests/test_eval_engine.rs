@@ -557,6 +557,80 @@ async fn sampled_rollouts_check_tokens_before_starting_the_next_example() {
     assert_eq!(engine.spend().tokens.total_tokens, 6);
 }
 
+struct InterruptedMetric {
+    wait_on_second: Option<tokio::sync::Notify>,
+}
+
+impl TypedMetric<(EngSigInput, EngSigOutput), LmModule> for InterruptedMetric {
+    async fn evaluate(
+        &self,
+        example: &(EngSigInput, EngSigOutput),
+        _prediction: &Predicted<EngSigOutput>,
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        if example.0.prompt == "1" {
+            if let Some(started) = &self.wait_on_second {
+                started.notify_one();
+                return std::future::pending::<Result<Eval>>().await;
+            }
+            anyhow::bail!("second metric failed");
+        }
+        Ok(Eval::score(1.0))
+    }
+}
+
+#[rstest::rstest]
+#[case::metric_error(false)]
+#[case::caller_cancellation(true)]
+#[tokio::test]
+async fn interrupted_batch_keeps_started_spend_and_observed_usage(#[case] cancel: bool) {
+    let client = TestCompletionModel::new([answer_response("0"), answer_response("1")]);
+    let mut usage = Usage::new();
+    usage.total_tokens = 5;
+    client.set_usage(usage);
+    let mut module = lm_module(client.clone()).await;
+    let examples = trainset(2);
+    let metric = InterruptedMetric {
+        wait_on_second: cancel.then(tokio::sync::Notify::new),
+    };
+    let target = OptimizeTarget::module(&mut module, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig {
+        concurrency: 1,
+        budget: Budget {
+            max_metric_calls: Some(2),
+            ..Budget::unlimited()
+        },
+        ..EngineConfig::default()
+    });
+    let candidate = engine.register(Candidate::new());
+    if let Some(started) = &metric.wait_on_second {
+        let mut evaluation = std::pin::pin!(engine.evaluate(&target, candidate, None));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                result = &mut evaluation => panic!("evaluation returned early: {result:?}"),
+                () = started.notified() => {}
+            }
+        })
+        .await
+        .expect("second metric started");
+    } else {
+        let error = engine.evaluate(&target, candidate, None).await.unwrap_err();
+        assert!(format!("{error:#}").contains("second metric failed"));
+    }
+
+    assert_eq!(client.call_count(), 2);
+    assert_eq!(engine.spend().metric_calls, 2);
+    assert_eq!(engine.spend().lm_calls, 2);
+    assert_eq!(engine.spend().lm_spans, 2);
+    assert_eq!(engine.spend().tokens.total_tokens, 10);
+    assert!(engine.cache().is_empty());
+    assert!(matches!(
+        engine.evaluate(&target, candidate, None).await.unwrap(),
+        EvalOutcome::BudgetExhausted { needed: 2 }
+    ));
+    assert_eq!(client.call_count(), 2);
+}
+
 #[tokio::test]
 async fn rollout_cache_serves_repeats_without_lm_calls() {
     let client = TestCompletionModel::new([
@@ -922,8 +996,9 @@ async fn install_is_the_single_mutation_seam() {
     let mut target = OptimizeTarget::module(&mut module, &examples, &metric);
     target.install(&candidate).unwrap();
 
-    // Unknown predictor names are rejected.
-    let bad = Candidate::with_instruction("missing", "nope");
+    // A later unknown name rejects the entire update.
+    let mut bad = Candidate::with_instruction("predictor", "must not be installed");
+    bad.set_instruction("z_missing", "nope");
     let err = target
         .install(&bad)
         .expect_err("unknown predictor must fail");

@@ -6,6 +6,7 @@
 //! task-local probe per `Predict` call.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -20,6 +21,7 @@ use crate::{LMConfig, LmUsage, Message};
 
 task_local! {
     static ACTIVE: TraceSink;
+    static PARENT: (TraceSink, SpanId);
 }
 
 pub(crate) fn now_us() -> u64 {
@@ -47,8 +49,6 @@ pub struct TraceSink(Arc<Mutex<SinkInner>>);
 
 struct SinkInner {
     trace: Trace,
-    /// Stack of open span ids — parent attribution for Predict-in-tool.
-    open: Vec<SpanId>,
     /// Per-component next-seq counters, indexed by `CompId`.
     seqs: Vec<u32>,
     comp_index: HashMap<String, CompId>,
@@ -73,7 +73,6 @@ impl TraceSink {
                 meta,
                 ..Trace::default()
             },
-            open: Vec::new(),
             seqs: Vec::new(),
             comp_index: HashMap::new(),
             prefix_index: HashMap::new(),
@@ -94,7 +93,7 @@ impl TraceSink {
         self.0.lock().unwrap().trace.meta.tags.insert(key, value);
     }
 
-    fn begin(&self, req: SpanRequest<'_>) -> SpanGuard {
+    fn begin(&self, req: SpanRequest<'_>, parent: Option<SpanId>) -> SpanGuard {
         let mut inner = self.0.lock().unwrap();
 
         let component = match inner.comp_index.get(req.component) {
@@ -137,8 +136,6 @@ impl TraceSink {
         };
 
         let id = SpanId(inner.trace.spans.len() as u32);
-        let parent = inner.open.last().copied();
-
         inner.trace.spans.push(Span {
             id,
             component,
@@ -159,7 +156,6 @@ impl TraceSink {
             duration_us: 0,
             complete: true,
         });
-        inner.open.push(id);
         let started = inner.epoch.elapsed();
 
         SpanGuard {
@@ -180,7 +176,6 @@ impl TraceSink {
     ) {
         let mut inner = self.0.lock().unwrap();
         let duration_us = inner.epoch.elapsed().saturating_sub(started).as_micros() as u64;
-        inner.open.retain(|open| *open != id);
 
         // An explicit request_hash (holes) was stamped at open; everything
         // else hashes the redacted config + rendered prompt at close.
@@ -281,14 +276,25 @@ pub struct SpanOutcome {
 /// Opens a span in the active capture scope. Returns `None` when no scope is
 /// active — the caller does nothing else in that case (zero-overhead path).
 ///
-/// Used by `Predict`; public so custom leaf modules can record spans too.
+/// Use [`SpanGuard::scope`] when polling work that should record child spans.
 pub fn begin_span(req: SpanRequest<'_>) -> Option<SpanGuard> {
     begin_span_lazy(|| req)
 }
 
 pub(crate) fn begin_span_lazy<'a>(request: impl FnOnce() -> SpanRequest<'a>) -> Option<SpanGuard> {
-    let sink = ACTIVE.try_with(|sink| sink.clone()).ok()?;
-    Some(sink.begin(request()))
+    let sink = ACTIVE.try_with(Clone::clone).ok()?;
+    let parent = PARENT
+        .try_with(|(owner, id)| Arc::ptr_eq(&owner.0, &sink.0).then_some(*id))
+        .ok()
+        .flatten();
+    Some(sink.begin(request(), parent))
+}
+
+pub(crate) async fn in_span<F: Future>(guard: Option<&SpanGuard>, future: F) -> F::Output {
+    match guard {
+        Some(guard) => guard.scope(future).await,
+        None => future.await,
+    }
 }
 
 /// Owns a [`SpanId`] — event/close attribution travels with the guard, never
@@ -308,6 +314,13 @@ pub struct SpanGuard {
 impl SpanGuard {
     pub fn id(&self) -> SpanId {
         self.id
+    }
+
+    /// Polls `future` with this span as its parent in the originating capture.
+    /// Nested captures get their own ancestry. An independently polled future
+    /// in the outer capture retains its own parent.
+    pub async fn scope<F: Future>(&self, future: F) -> F::Output {
+        PARENT.scope((self.sink.clone(), self.id), future).await
     }
 
     pub fn finish(mut self, out: SpanOutcome) {

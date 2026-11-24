@@ -51,9 +51,8 @@ pub struct Span {
     /// `(component, seq)` is unique per trace — this is what makes loops
     /// addressable and what replay keys on.
     pub seq: u32,
-    /// Enclosing span, if this Predict ran inside another span's tool
-    /// execution (Predict-in-tool). Best-effort: set from the innermost open
-    /// span at begin time; `None` at top level.
+    /// Enclosing span when this invocation ran within a parent span's future
+    /// scope. Top-level sibling invocations each have no parent.
     pub parent: Option<SpanId>,
 
     // ---- request (recorded eagerly at span open) ----

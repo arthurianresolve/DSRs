@@ -248,8 +248,8 @@ async fn jsonl_round_trip_preserves_the_trace() {
 
 // --- Tool loop event ordering ----------------------------------------------
 
-#[derive(Clone)]
-struct EchoTool;
+#[derive(Clone, Default)]
+struct EchoTool(Option<std::sync::Arc<Predict<CapQA>>>);
 
 #[derive(Debug)]
 struct EchoToolError;
@@ -280,21 +280,33 @@ impl Tool for EchoTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        if let Some(child) = &self.0 {
+            child
+                .call(CapQAInput {
+                    question: "nested call".into(),
+                })
+                .await
+                .map_err(|_| EchoToolError)?;
+        }
         Ok(format!("echo:{args}"))
     }
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
-async fn tool_loop_events_are_ordered_within_one_span() {
+async fn tool_loop_records_ordered_events_and_child_ancestry() {
     let tool_call = AssistantContent::tool_call(
         "call_1",
         "echo".to_string(),
         serde_json::json!({"payload": "ping"}),
     );
+    let child = Predict::<CapQA>::builder()
+        .named("child")
+        .lm(make_test_lm(vec![answer("nested answer")]).await)
+        .build();
     let predict = Predict::<CapQA>::builder()
         .named("agent")
-        .add_tool(EchoTool)
+        .add_tool(EchoTool(Some(std::sync::Arc::new(child))))
         .lm(make_test_lm(vec![tool_call, answer("pong")]).await)
         .build();
 
@@ -308,10 +320,12 @@ async fn tool_loop_events_are_ordered_within_one_span() {
     .await;
     result.expect("tool-looping call should succeed");
 
-    // One Predict with one tool round-trip = ONE span with three events:
-    // Exchange (tool call), ToolRun, Exchange (final text).
-    assert_eq!(trace.spans.len(), 1);
+    // The outer Predict has one span with the whole tool round-trip.
+    assert_eq!(trace.spans.len(), 2);
     let span = &trace.spans[0];
+    let child = &trace.spans[1];
+    assert_eq!(trace.component_name(child.component), "child");
+    assert_eq!(child.parent, Some(span.id));
     assert_eq!(span.events.len(), 3);
     match &span.events[0] {
         SpanEvent::Exchange { message, .. } => assert!(message.has_tool_calls()),
@@ -349,8 +363,8 @@ async fn tool_loop_events_are_ordered_within_one_span() {
 #[tokio::test]
 async fn predict_rejects_same_named_tool_implementations() {
     let predict = Predict::<CapQA>::builder()
-        .add_tool(EchoTool)
-        .add_tool(EchoTool)
+        .add_tool(EchoTool::default())
+        .add_tool(EchoTool::default())
         .lm(make_test_lm(vec![]).await)
         .build();
     let err = predict
@@ -417,6 +431,97 @@ async fn dropped_guard_marks_span_cancelled() {
         Some(SpanErrorKind::Cancelled)
     );
     assert!(span.output.is_none());
+}
+
+#[tokio::test]
+async fn overlapping_spans_use_their_own_future_scope() {
+    let ((), trace) = capture(|| async {
+        let model = dspy_rs::LMConfig::default();
+        let start = |component| {
+            begin_span(dspy_rs::SpanRequest {
+                component,
+                prefix: None,
+                suffix: &[],
+                input: None,
+                model: &model,
+                request_hash: None,
+            })
+            .unwrap()
+        };
+        let first = async {
+            let parent = start("first");
+            parent
+                .scope(async {
+                    tokio::task::yield_now().await;
+                    drop(start("child"));
+                    let ((), nested) = capture(|| async { drop(start("nested")) }).await;
+                    assert_eq!(nested.spans[0].parent, None);
+                })
+                .await;
+        };
+        let second = async {
+            let _sibling = start("second");
+            tokio::task::yield_now().await;
+        };
+        tokio::join!(first, second);
+    })
+    .await;
+
+    let span = |name| {
+        trace
+            .spans
+            .iter()
+            .find(|span| trace.components[span.component.0 as usize] == name)
+            .unwrap()
+    };
+    assert_eq!(trace.spans.len(), 3);
+    assert_eq!(span("first").parent, None);
+    assert_eq!(span("second").parent, None);
+    assert_eq!(span("child").parent, Some(span("first").id));
+}
+
+#[tokio::test]
+async fn resumed_span_scope_respects_the_current_capture() {
+    let (pending, first_trace) = capture(|| async {
+        let model = dspy_rs::LMConfig::default();
+        let parent = begin_span(dspy_rs::SpanRequest {
+            component: "parent",
+            prefix: None,
+            suffix: &[],
+            input: None,
+            model: &model,
+            request_hash: None,
+        })
+        .unwrap();
+        let mut pending = Box::pin(async move {
+            parent
+                .scope(async {
+                    tokio::task::yield_now().await;
+                    drop(
+                        begin_span(dspy_rs::SpanRequest {
+                            component: "resumed",
+                            prefix: None,
+                            suffix: &[],
+                            input: None,
+                            model: &model,
+                            request_hash: None,
+                        })
+                        .unwrap(),
+                    );
+                })
+                .await;
+        });
+        assert!(futures::poll!(&mut pending).is_pending());
+        pending
+    })
+    .await;
+
+    let ((), second_trace) = capture(|| pending).await;
+    assert_eq!(first_trace.spans.len(), 1);
+    assert_eq!(second_trace.spans.len(), 1);
+    let resumed = &second_trace.spans[0];
+    assert_eq!(second_trace.component_name(resumed.component), "resumed");
+    assert_eq!(resumed.parent, None);
 }
 
 // --- Metric-with-trace feedback path ----------------------------------------

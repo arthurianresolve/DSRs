@@ -74,9 +74,8 @@ pub struct Span {
     /// `(component, seq)` is unique per trace — this is what makes loops
     /// addressable and what replay keys on.
     pub seq: u32,
-    /// Enclosing span, if this Predict ran inside another span's tool
-    /// execution (Predict-in-tool). Best-effort: set from the innermost open
-    /// span at begin time; `None` at top level.
+    /// Enclosing span when this invocation ran within a parent span's future
+    /// scope. Top-level sibling invocations each have no parent.
     pub parent: Option<SpanId>,
     /// Dataflow predecessors. v1 records the sequential approximation the old
     /// Graph recorded: `[previous span in this scope]`, empty for the first.
@@ -328,6 +327,7 @@ use tokio::task_local;
 
 task_local! {
     static ACTIVE: TraceSink;
+    static PARENT: (TraceSink, SpanId);
 }
 
 #[derive(Clone)]
@@ -335,8 +335,6 @@ pub struct TraceSink(Arc<Mutex<SinkInner>>);
 
 struct SinkInner {
     trace: Trace,
-    /// Stack of open span ids — parent attribution for Predict-in-tool.
-    open: Vec<SpanId>,
     /// (CompId -> next seq) counters.
     seqs: Vec<u32>,
     /// Prefix/model intern maps: content-hash -> id.
@@ -419,7 +417,7 @@ if let Some(guard) = guard {
 
 - **Nested `capture` scopes: innermost wins, exclusively.** The inner scope's spans go only to the inner trace; the outer trace records nothing for that region. This is today's `task_local` behavior and it is the correct default: it is exactly how MIPRO already keeps LM-as-judge metric calls out of the execution graph ("metric evaluation happens outside the trace scope"). An LM judge that wants isolation wraps itself in its own `capture`.
 - Spawned tasks (`tokio::spawn`) do not inherit the scope — unchanged. A harness that fans out and wants unified traces captures in each subtask and splices: `Trace::absorb(&mut self, other: Trace)` remaps ids/interns and appends (provided for the eval engine's fan-out; ordering across absorbed traces is by `started_at_us`).
-- `parent` is set from the top of the open-stack at `begin_span` time. Under single-task sequential execution (the overwhelmingly common case, incl. Predict-inside-tool) this is exact; under same-task interleaving it can mis-parent and `links` degrades to the sequential approximation — the same honesty level as the old Graph's `inputs`, now documented on the field.
+- `parent` comes from the capture active while a future is polled. Built-in tool and hole calls scope child work under their span. Custom recorders can use `SpanGuard::scope` to attach children. Overlapping sibling futures inherit the same enclosing span, or each have no parent at the top level.
 
 ---
 

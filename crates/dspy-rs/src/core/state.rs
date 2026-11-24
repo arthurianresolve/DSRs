@@ -23,7 +23,7 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-use crate::core::Predictors;
+use crate::core::{PredictorInfo, Predictors};
 use crate::trace::JsonMap;
 
 /// Serializable snapshot of a [`crate::Predict`]'s optimizable state.
@@ -51,6 +51,52 @@ pub struct PredictState {
 pub struct ModuleState {
     /// Per-predictor state, keyed by leaf name (`BTreeMap` keeps JSON output stable).
     pub predictors: BTreeMap<String, PredictState>,
+}
+
+pub(crate) struct PredictorStateUpdate<'a> {
+    pub name: String,
+    pub predictor: &'a mut dyn PredictorInfo,
+    pub original: PredictState,
+    pub proposed: PredictState,
+}
+
+pub(crate) fn apply_predictor_state_updates(
+    updates: &mut [PredictorStateUpdate<'_>],
+    action: &str,
+) -> Result<()> {
+    for update in updates.iter() {
+        update
+            .predictor
+            .validate_state(&update.proposed)
+            .map_err(|err| anyhow!("failed to {action} `{}`: {err}", update.name))?;
+    }
+
+    for index in 0..updates.len() {
+        let update = &mut updates[index];
+        if let Err(err) = update
+            .predictor
+            .load_state(std::mem::take(&mut update.proposed))
+        {
+            let message = format!("failed to {action} `{}`: {err}", update.name);
+            let mut rollback_errors = Vec::new();
+            for attempted in &mut updates[..=index] {
+                if let Err(err) = attempted
+                    .predictor
+                    .load_state(std::mem::take(&mut attempted.original))
+                {
+                    rollback_errors.push(format!("`{}`: {err}", attempted.name));
+                }
+            }
+            if rollback_errors.is_empty() {
+                return Err(anyhow!("{message}"));
+            }
+            return Err(anyhow!(
+                "{message}; rollback failed for {}",
+                rollback_errors.join(", ")
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl ModuleState {
@@ -85,7 +131,7 @@ impl ModuleState {
             .iter()
             .map(|(name, state)| (name.as_str(), state))
             .collect();
-        let mut predictors = module.predictors_mut();
+        let predictors = module.predictors_mut();
         for (name, _) in &predictors {
             remaining.remove(name.as_str());
         }
@@ -96,47 +142,21 @@ impl ModuleState {
             ));
         }
 
-        for (name, info) in &predictors {
-            if let Some(state) = self.predictors.get(name.as_str()) {
-                info.validate_state(state)
-                    .map_err(|err| anyhow!("failed to load state for `{name}`: {err}"))?;
-            }
-        }
-
-        let original = predictors
-            .iter()
-            .map(|(_, info)| info.dump_state())
-            .collect::<Vec<_>>();
-        for index in 0..predictors.len() {
-            let (name, info) = &mut predictors[index];
-            if let Some(state) = self.predictors.get(name.as_str())
-                && let Err(err) = info.load_state(state.clone())
-            {
-                let failed_name = name.clone();
-                let mut rollback_errors = Vec::new();
-                for rollback_index in 0..=index {
-                    let (rollback_name, rollback_info) = &mut predictors[rollback_index];
-                    if self.predictors.contains_key(rollback_name.as_str())
-                        && let Err(rollback_err) =
-                            rollback_info.load_state(original[rollback_index].clone())
-                    {
-                        rollback_errors.push(format!("`{rollback_name}`: {rollback_err}"));
-                    }
-                }
-                if rollback_errors.is_empty() {
-                    return Err(anyhow!("failed to load state for `{failed_name}`: {err}"));
-                }
-                return Err(anyhow!(
-                    "failed to load state for `{failed_name}`: {err}; rollback failed for {}",
-                    rollback_errors.join(", ")
-                ));
-            }
-        }
-
-        for (name, info) in predictors {
-            if self.predictors.contains_key(name.as_str()) {
-                info.set_trace_name(&name);
-            }
+        let mut updates: Vec<_> = predictors
+            .into_iter()
+            .filter_map(|(name, predictor)| {
+                let proposed = self.predictors.get(&name)?.clone();
+                Some(PredictorStateUpdate {
+                    name,
+                    original: predictor.dump_state(),
+                    predictor,
+                    proposed,
+                })
+            })
+            .collect();
+        apply_predictor_state_updates(&mut updates, "load state for")?;
+        for update in updates {
+            update.predictor.set_trace_name(&update.name);
         }
         Ok(())
     }

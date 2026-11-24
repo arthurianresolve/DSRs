@@ -862,11 +862,7 @@ impl ProgramBuilder {
             sig,
             param_index: HashMap::new(),
         };
-        program.rebuild_param_index().map_err(BuildError::Invalid)?;
-        // Validate before sealing: the hash preimage is the canonical printed
-        // text, and printing assumes structurally valid arenas.
-        program.validate().map_err(BuildError::Invalid)?;
-        program.seal();
+        program.finalize().map_err(BuildError::Invalid)?;
         Ok(program)
     }
 }

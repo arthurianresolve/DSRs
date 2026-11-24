@@ -17,7 +17,7 @@ use dspy_rs::{
     Budget, Engine, EngineConfig, Eval, LM, LMClient, LMConfig, OptimizeTarget, ProgramMetric,
     TestCompletionModel, Trace,
 };
-use rig::completion::AssistantContent;
+use rig::completion::{AssistantContent, Usage};
 use rig::message::Text;
 use serde_json::json;
 use tokio::sync::Barrier;
@@ -318,6 +318,47 @@ async fn budget_gate_runs_nothing_when_the_batch_does_not_fit() {
     ));
     assert_eq!(engine.spend().metric_calls, 0);
     assert_eq!(engine.spend().lm_calls, 0);
+}
+
+struct FailingMetric;
+
+impl ProgramMetric for FailingMetric {
+    async fn evaluate(
+        &self,
+        _example: &DemoRow,
+        _output: &JsonMap,
+        _trace: Option<&Trace>,
+    ) -> Result<Eval> {
+        anyhow::bail!("program metric failed")
+    }
+}
+
+#[tokio::test]
+async fn failed_program_metric_keeps_observed_lm_usage() {
+    let (program, _, _) = two_model_program();
+    let (lm, client) = canned_lm(vec![text(fields(&[("answer", "ok")]))]).await;
+    let mut usage = Usage::new();
+    usage.total_tokens = 5;
+    client.set_usage(usage);
+    let interp = Interpreter::load(
+        program,
+        RuntimeEnv::new()
+            .bind_model("m1", Arc::clone(&lm))
+            .bind_model("m2", lm),
+    )
+    .await
+    .unwrap();
+    let examples = [example("q", "ok")];
+    let target = OptimizeTarget::program(&interp, &examples, &FailingMetric);
+    let mut engine = Engine::new(EngineConfig::default());
+    let candidate = engine.register_overlay(Overlay::new(interp.program()));
+
+    let error = engine.evaluate(&target, candidate, None).await.unwrap_err();
+    assert!(format!("{error:#}").contains("program metric failed"));
+    assert_eq!(engine.spend().lm_calls, 1);
+    assert_eq!(engine.spend().lm_spans, 1);
+    assert_eq!(engine.spend().tokens.total_tokens, 5);
+    assert!(engine.cache().is_empty());
 }
 
 // ---------------------------------------------------------------------------

@@ -240,15 +240,11 @@ impl Program {
         gc_sigs(&mut work, self);
         gc_params(&mut work, &node_map);
 
-        work.rebuild_param_index().map_err(EditError::Invalid)?;
-        // Validate before sealing: the hash preimage is the canonical printed
-        // text, and printing assumes structurally valid arenas.
-        work.validate().map_err(EditError::Invalid)?;
         work.meta.lineage = Some(Lineage {
             parent: Some(format!("{:016x}", self.meta.program_hash).into()),
             ..Lineage::default()
         });
-        work.seal();
+        work.finalize().map_err(EditError::Invalid)?;
         Ok(work)
     }
 

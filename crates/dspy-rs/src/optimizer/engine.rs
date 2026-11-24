@@ -38,6 +38,7 @@
 //!   seam: sampling params live on LM configs outside the candidate, so
 //!   callers that change them must bump the salt.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{Result, anyhow};
@@ -259,8 +260,8 @@ impl Candidate {
 /// Hard caps on evaluation spend. `None` = unlimited.
 ///
 /// `max_metric_calls` and `max_lm_calls` are metered at rollout granularity
-/// (one module execution = one metric call = one LM call unit; auxiliary LM
-/// spend like reflection calls is charged via [`Engine::charge`]).
+/// (one started rollout consumes one metric unit and one LM unit). Auxiliary
+/// spend like reflection calls is charged via [`Engine::charge`].
 /// Exact per-span counts and token totals are tracked in [`Spend`]
 /// (`lm_spans`, `tokens`) from the captured traces; `max_tokens` stops the
 /// engine once recorded token usage reaches the cap.
@@ -306,9 +307,10 @@ impl Budget {
 /// What the engine has consumed so far. Reported to strategies.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Spend {
-    /// Metric evaluations executed (cache hits don't re-run the metric).
+    /// Metric budget units, one per started rollout plus auxiliary charges.
+    /// A rollout that fails before reaching its metric still counts.
     pub metric_calls: usize,
-    /// LM call units: one per executed rollout plus auxiliary charges
+    /// LM call units: one per started rollout plus auxiliary charges
     /// ([`Engine::charge`]).
     pub lm_calls: usize,
     /// Exact `Predict` spans observed across captured rollout traces.
@@ -662,8 +664,6 @@ struct FreshRollout {
 struct FreshBatch {
     rollouts: Vec<FreshRollout>,
     peak_candidates: usize,
-    lm_spans: usize,
-    tokens: LmUsage,
 }
 
 /// An uncached sampled rollout with its minibatch position and sample ordinal.
@@ -1032,13 +1032,8 @@ impl Engine {
             .await?;
         self.peak_candidates_in_flight = self.peak_candidates_in_flight.max(fresh.peak_candidates);
 
-        // Accounting: fresh rollouts consume budget, cached hits are free.
-        self.spend.metric_calls += fresh.rollouts.len();
-        self.spend.lm_calls += fresh.rollouts.len();
         let cache_hits = cached.len();
         self.spend.cache_hits += cache_hits;
-        self.spend.lm_spans += fresh.lm_spans;
-        self.spend.tokens = self.spend.tokens + fresh.tokens;
 
         // Bookkeeping: cache inserts + matrix records.
         for (&(candidate, idx), eval) in &cached {
@@ -1207,6 +1202,8 @@ impl Engine {
         let candidate_hash = self.candidates[candidate].0;
         let incoming = crate::current_sampling_options();
         let concurrency = self.config.concurrency.max(1);
+        let meter = RolloutMeter::new(&mut self.spend);
+        let meter = &meter;
         let mut requests = examples
             .enumerate()
             .flat_map(|(position, (example, identity))| {
@@ -1237,7 +1234,7 @@ impl Engine {
                     id: Some(id),
                     temperature: incoming.temperature,
                 };
-                let run = target.run(example, bound.clone(), candidate_hash);
+                let run = meter.run(target, example, bound.clone(), candidate_hash);
                 in_flight.push(async move {
                     let result = crate::with_sampling_options(options, run).await;
                     (position, example, sample, result)
@@ -1246,14 +1243,8 @@ impl Engine {
             let Some((position, example, sample, result)) = in_flight.next().await else {
                 break;
             };
-            self.spend.metric_calls = self.spend.metric_calls.saturating_add(1);
-            self.spend.lm_calls = self.spend.lm_calls.saturating_add(1);
             match result {
                 Ok((eval, trace)) => {
-                    self.spend.lm_spans += trace.spans.len();
-                    for span in &trace.spans {
-                        self.spend.tokens = self.spend.tokens + span.usage;
-                    }
                     rollouts.push(SampledRolloutOutcome {
                         example_position: position,
                         example,
@@ -1384,18 +1375,18 @@ impl Engine {
 
     /// The one shared fan-out: every pending `(candidate, example)` pair —
     /// across all candidates, in both lanes — in a single `buffer_unordered`
-    /// stream. Extracts usage as rollouts finish so scoring batches can
-    /// release each trace before the next result is collected.
+    /// stream. Scoring batches release each trace before collecting the next
+    /// result.
     async fn run_rollouts(
-        &self,
+        &mut self,
         target: &OptimizeTarget<'_>,
         pending: &[(usize, usize)],
         bound: &HashMap<usize, BoundCandidate>,
         retain_traces: bool,
     ) -> Result<FreshBatch> {
         let gauge = Gauge::default();
-        let mut lm_spans = 0;
-        let mut tokens = LmUsage::default();
+        let meter = RolloutMeter::new(&mut self.spend);
+        let meter = &meter;
 
         let rollouts = stream::iter(pending.iter().enumerate().map(
             |(rollout, &(candidate, idx))| {
@@ -1416,7 +1407,7 @@ impl Engine {
                             id: Some(identity),
                             temperature: incoming.temperature,
                         },
-                        target.run(idx, bound, candidate_hash),
+                        meter.run(target, idx, bound, candidate_hash),
                     )
                     .await
                     .map_err(|source| RolloutError {
@@ -1438,17 +1429,11 @@ impl Engine {
             },
         ))
         .buffer_unordered(self.config.concurrency.max(1))
-        .map_ok(|(candidate, example, eval, trace)| {
-            lm_spans += trace.spans.len();
-            for span in &trace.spans {
-                tokens = tokens + span.usage;
-            }
-            FreshRollout {
-                candidate,
-                example,
-                eval,
-                trace: retain_traces.then_some(trace),
-            }
+        .map_ok(|(candidate, example, eval, trace)| FreshRollout {
+            candidate,
+            example,
+            eval,
+            trace: retain_traces.then_some(trace),
         })
         .try_collect()
         .await?;
@@ -1456,9 +1441,58 @@ impl Engine {
         Ok(FreshBatch {
             rollouts,
             peak_candidates: gauge.peak(),
-            lm_spans,
-            tokens,
         })
+    }
+}
+
+/// Batch-local spend for futures polled by this Engine. Cache and score
+/// publication can wait for success, but started work is charged on every exit.
+struct RolloutMeter<'a> {
+    spend: &'a mut Spend,
+    started: Cell<usize>,
+    lm_spans: Cell<usize>,
+    tokens: Cell<LmUsage>,
+}
+
+impl<'a> RolloutMeter<'a> {
+    fn new(spend: &'a mut Spend) -> Self {
+        Self {
+            spend,
+            started: Cell::default(),
+            lm_spans: Cell::default(),
+            tokens: Cell::default(),
+        }
+    }
+
+    async fn run(
+        &self,
+        target: &OptimizeTarget<'_>,
+        example: usize,
+        bound: BoundCandidate,
+        candidate_hash: u64,
+    ) -> Result<(Eval, Trace)> {
+        self.started.set(self.started.get() + 1);
+        let observe_capture = |trace: &Trace| {
+            self.lm_spans.set(self.lm_spans.get() + trace.spans.len());
+            let mut tokens = self.tokens.get();
+            for span in &trace.spans {
+                tokens = tokens + span.usage;
+            }
+            self.tokens.set(tokens);
+        };
+        target
+            .run(example, bound, candidate_hash, &observe_capture)
+            .await
+    }
+}
+
+impl Drop for RolloutMeter<'_> {
+    fn drop(&mut self) {
+        let started = self.started.get();
+        self.spend.metric_calls = self.spend.metric_calls.saturating_add(started);
+        self.spend.lm_calls = self.spend.lm_calls.saturating_add(started);
+        self.spend.lm_spans += self.lm_spans.get();
+        self.spend.tokens = self.spend.tokens + self.tokens.get();
     }
 }
 

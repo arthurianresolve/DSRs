@@ -33,8 +33,8 @@ use crate::ir::graph::{
 use crate::ir::params::{ContextPolicy, DemoRow, Overlay, ParamId, ParamValue};
 use crate::ir::sig::SignatureDef;
 use crate::ir::validate::{ValidateError, json_matches_type};
-use crate::trace::capture::begin_span_lazy;
-use crate::trace::{JsonMap, SpanEvent, SpanOutcome, SpanRequest};
+use crate::trace::capture::{begin_span_lazy, in_span};
+use crate::trace::{JsonMap, SpanEvent, SpanGuard, SpanOutcome, SpanRequest};
 use crate::typesys::{FieldType, TypeTable, json_schema_compatible, json_schema_for_outputs};
 use crate::{
     Chat, LM, LMCallOptions, LMConfig, LmError, LmUsage, Message, Role, ToolLoopMode, ToolSet,
@@ -934,7 +934,11 @@ impl Interpreter {
             policy: &policy,
             code_mode: None,
         };
-        let outcome = self.agent_loop(&lc, chat, &mut run, next_turn, true).await;
+        let outcome = in_span(
+            guard.as_ref(),
+            self.agent_loop(&lc, chat, &mut run, next_turn, true),
+        )
+        .await;
         self.conclude_agent_turn(
             &at,
             &lm,
@@ -1085,8 +1089,28 @@ impl Interpreter {
 
         match &p.nodes[node] {
             Node::Predict(_) => {
-                self.predict_conversation_turn(&at, def, &lm, &cx, messages, guard)
-                    .await
+                let (output, leaf, chat) = self
+                    .exchange_predict(
+                        PredictExchange {
+                            at: &at,
+                            def,
+                            lm: &lm,
+                            meter: &cx.meter,
+                            guard,
+                        },
+                        messages,
+                        |messages| ChatAdapter.signature_tools_from_messages(def, messages),
+                        None,
+                        true,
+                    )
+                    .await?;
+                Ok(ConversationTurn::Complete {
+                    run: RunOutput {
+                        output,
+                        leaves: leaf.into_iter().collect(),
+                    },
+                    chat,
+                })
             }
             Node::AgentLoop(n) => {
                 let policy = self.p_context(&cx, n.context_policy);
@@ -1110,9 +1134,11 @@ impl Interpreter {
                     code_mode: surface.code_mode.as_ref(),
                 };
                 let mut run = AgentRun::default();
-                let outcome = self
-                    .agent_loop(&lc, Chat::new(messages), &mut run, 0, suspend_on_tools)
-                    .await;
+                let outcome = in_span(
+                    guard.as_ref(),
+                    self.agent_loop(&lc, Chat::new(messages), &mut run, 0, suspend_on_tools),
+                )
+                .await;
                 self.conclude_agent_turn(
                     &at,
                     &lm,
@@ -1132,19 +1158,22 @@ impl Interpreter {
         }
     }
 
-    /// A `Predict` leaf's conversation turn: one exchange over the assembled
-    /// chat, parsed against the leaf signature — `eval_predict` minus the
-    /// binding resolution and prompt rendering the conversation already owns.
-    async fn predict_conversation_turn(
+    async fn exchange_predict(
         &self,
-        at: &str,
-        def: &SignatureDef,
-        lm: &Arc<LM>,
-        cx: &Cx<'_>,
+        exchange: PredictExchange<'_>,
         messages: Vec<Message>,
-        guard: Option<crate::trace::SpanGuard>,
-    ) -> Result<ConversationTurn, RunError> {
-        if cx.meter.try_reserve_call().is_err() {
+        declarations: impl FnOnce(&[Message]) -> anyhow::Result<Vec<rig::completion::ToolDefinition>>,
+        options: Option<LMCallOptions>,
+        collect_leaf: bool,
+    ) -> Result<(JsonMap, Option<LeafOutcome>, Chat), RunError> {
+        let PredictExchange {
+            at,
+            def,
+            lm,
+            meter,
+            guard,
+        } = exchange;
+        if meter.try_reserve_call().is_err() {
             if let Some(guard) = guard {
                 guard.finish(span_error(
                     crate::trace::SpanErrorKind::Lm,
@@ -1157,17 +1186,17 @@ impl Interpreter {
             return Err(RunError::Budget { at: at.into() });
         }
 
-        let options = output_schema_options(lm, def, &self.program.types, true);
+        let types = &self.program.types;
+        let options = options.unwrap_or_else(|| output_schema_options(lm, def, types, true));
         let format = output_format(&options);
-        let declarations = ChatAdapter
-            .signature_tools_from_messages(def, &messages)
-            .map_err(|error| RunError::Input {
-                at: at.into(),
-                message: error.to_string(),
-            })?;
+        let declarations = declarations(&messages).map_err(|error| RunError::Input {
+            at: at.into(),
+            message: error.to_string(),
+        })?;
         let toolset = ToolSet::from_definitions(declarations);
-        let response = match lm
-            .call_with_toolset_and_options(
+        let response = match in_span(
+            guard.as_ref(),
+            lm.call_with_toolset_and_options(
                 Chat::new(messages),
                 &toolset,
                 if toolset.is_empty() {
@@ -1176,15 +1205,17 @@ impl Interpreter {
                     ToolLoopMode::CallerManaged
                 },
                 options,
-            )
-            .await
+            ),
+        )
+        .await
         {
             Ok(response) => response,
             Err(err) => {
+                let message = err.to_string();
                 if let Some(guard) = guard {
                     guard.finish(span_error(
                         crate::trace::SpanErrorKind::Lm,
-                        err.to_string(),
+                        message.clone(),
                         Vec::new(),
                         None,
                         LmUsage::default(),
@@ -1194,46 +1225,39 @@ impl Interpreter {
                     at: at.into(),
                     source: LmError::Provider {
                         provider: lm.config.model.clone(),
-                        message: err.to_string(),
+                        message,
                         source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
                     },
                 });
             }
         };
-        cx.meter.record_usage(&response.usage);
+        meter.record_usage(&response.usage);
 
-        let raw = response.output.content();
-        let parsed = if let Some(output) = ChatAdapter
-            .signature_tool_output(def, &response.tool_calls)
-            .filter(|_| !response.tool_calls.is_empty())
-        {
-            ChatAdapter.parse_output_json_def(
-                def,
-                &self.program.types,
-                &Message::assistant(
-                    serde_json::to_string(&output).expect("serializable typed tool output"),
-                ),
-            )
-        } else {
-            parse_response(def, &self.program.types, &response.output, format)
-        };
+        let parsed = ChatAdapter
+            .parse_signature_tool_output(def, types, &response.tool_calls)
+            .unwrap_or_else(|| parse_response(def, types, &response.output, format));
         if let Some(history) = &response.history {
             history.parsed(&parsed);
         }
         match parsed {
             Ok((output, metas)) => {
-                let leaf = LeafOutcome {
+                let raw = if collect_leaf || guard.is_some() {
+                    response.output.content()
+                } else {
+                    String::new()
+                };
+                let leaf = collect_leaf.then(|| LeafOutcome {
                     name: at.to_string(),
                     raw_response: raw.clone(),
-                    call_ids: response.history.iter().map(|h| h.id()).collect(),
                     field_meta: metas,
+                    call_ids: response.history.iter().map(|h| h.id()).collect(),
                     usage: response.usage,
                     model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                         .config_hash,
                     span_id: guard.as_ref().map(|guard| guard.id()),
-                    tool_calls: response.tool_calls.clone(),
-                    tool_executions: response.tool_executions.clone(),
-                };
+                    tool_calls: response.tool_calls,
+                    tool_executions: response.tool_executions,
+                });
                 if let Some(guard) = guard {
                     guard.finish(SpanOutcome {
                         events: response.events,
@@ -1243,15 +1267,10 @@ impl Interpreter {
                         error: None,
                     });
                 }
-                Ok(ConversationTurn::Complete {
-                    run: RunOutput {
-                        output,
-                        leaves: vec![leaf],
-                    },
-                    chat: response.chat,
-                })
+                Ok((output, leaf, response.chat))
             }
             Err(err) => {
+                let raw = response.output.content();
                 if let Some(guard) = guard {
                     guard.finish(span_error(
                         crate::trace::SpanErrorKind::Parse,
@@ -1978,128 +1997,25 @@ impl Interpreter {
             Some(crate::trace::replay::ReplayDirective::Live) | None => {}
         }
 
-        if cx.meter.try_reserve_call().is_err() {
-            if let Some(guard) = guard {
-                guard.finish(span_error(
-                    crate::trace::SpanErrorKind::Lm,
-                    "budget exhausted".to_string(),
-                    Vec::new(),
-                    None,
-                    LmUsage::default(),
-                ));
-            }
-            return Err(RunError::Budget {
-                at: at.clone().into(),
-            });
-        }
-
-        let declarations =
-            ChatAdapter
-                .signature_tools(def, &input)
-                .map_err(|error| RunError::Input {
-                    at: at.clone().into(),
-                    message: error.to_string(),
-                })?;
-        let toolset = ToolSet::from_definitions(declarations);
-        let response = match lm
-            .call_with_toolset_and_options(
-                Chat::new(messages),
-                &toolset,
-                if toolset.is_empty() {
-                    ToolLoopMode::Auto
-                } else {
-                    ToolLoopMode::CallerManaged
+        let (output, leaf, _) = self
+            .exchange_predict(
+                PredictExchange {
+                    at: &at,
+                    def,
+                    lm: &lm,
+                    meter: &cx.meter,
+                    guard,
                 },
-                options,
+                messages,
+                |_| ChatAdapter.signature_tools(def, &input),
+                Some(options),
+                cx.leaves.is_some(),
             )
-            .await
-        {
-            Ok(response) => response,
-            Err(err) => {
-                if let Some(guard) = guard {
-                    guard.finish(span_error(
-                        crate::trace::SpanErrorKind::Lm,
-                        err.to_string(),
-                        Vec::new(),
-                        None,
-                        LmUsage::default(),
-                    ));
-                }
-                return Err(RunError::Lm {
-                    at: at.into(),
-                    source: LmError::Provider {
-                        provider: lm.config.model.clone(),
-                        message: err.to_string(),
-                        source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
-                    },
-                });
-            }
-        };
-        cx.meter.record_usage(&response.usage);
-
-        let raw = response.output.content();
-        let parsed = if let Some(output) = ChatAdapter
-            .signature_tool_output(def, &response.tool_calls)
-            .filter(|_| !response.tool_calls.is_empty())
-        {
-            ChatAdapter.parse_output_json_def(
-                def,
-                &p.types,
-                &Message::assistant(
-                    serde_json::to_string(&output).expect("serializable typed tool output"),
-                ),
-            )
-        } else {
-            parse_response(def, &p.types, &response.output, format)
-        };
-        if let Some(history) = &response.history {
-            history.parsed(&parsed);
+            .await?;
+        if let Some(leaves) = cx.leaves.as_mut() {
+            leaves.extend(leaf);
         }
-        match parsed {
-            Ok((output, metas)) => {
-                if let Some(leaves) = cx.leaves.as_mut() {
-                    leaves.push(LeafOutcome {
-                        name: at.clone(),
-                        raw_response: raw.clone(),
-                        field_meta: metas,
-                        call_ids: response.history.iter().map(|h| h.id()).collect(),
-                        usage: response.usage,
-                        model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
-                            .config_hash,
-                        span_id: guard.as_ref().map(|guard| guard.id()),
-                        tool_calls: response.tool_calls.clone(),
-                        tool_executions: response.tool_executions.clone(),
-                    });
-                }
-                if let Some(guard) = guard {
-                    guard.finish(SpanOutcome {
-                        events: response.events,
-                        raw_output: Some(raw),
-                        output: Some(output.clone()),
-                        usage: response.usage,
-                        error: None,
-                    });
-                }
-                Ok(output)
-            }
-            Err(err) => {
-                if let Some(guard) = guard {
-                    guard.finish(span_error(
-                        crate::trace::SpanErrorKind::Parse,
-                        err.to_string(),
-                        response.events,
-                        Some(raw.clone()),
-                        response.usage,
-                    ));
-                }
-                Err(RunError::Parse {
-                    at: at.into(),
-                    raw,
-                    source: Some(Box::new(err)),
-                    usage: response.usage,
-                })
-            }
-        }
+        Ok(output)
     }
 
     async fn eval_hole(
@@ -2187,9 +2103,11 @@ impl Interpreter {
         }
 
         let started = Instant::now();
-        let result = self
-            .execute_hole_impl(&at, &imp, &input, def, &n.caps)
-            .await;
+        let result = in_span(
+            guard.as_ref(),
+            self.execute_hole_impl(&at, &imp, &input, def, &n.caps),
+        )
+        .await;
         let duration_us = started.elapsed().as_micros() as u64;
 
         match result {
@@ -2416,7 +2334,12 @@ impl Interpreter {
             code_mode: surface.code_mode.as_ref(),
         };
         let mut run = AgentRun::default();
-        let outcome = match self.agent_loop(&loop_cx, chat, &mut run, 0, false).await {
+        let outcome = in_span(
+            guard.as_ref(),
+            self.agent_loop(&loop_cx, chat, &mut run, 0, false),
+        )
+        .await;
+        let outcome = match outcome {
             Ok(LoopOutcome::Done {
                 output,
                 raw,
@@ -3092,6 +3015,14 @@ struct AgentSurface {
     sandbox_code: HashMap<ToolId, (String, u64)>,
     stop_names: Vec<String>,
     code_mode: Option<CodeModeSurface>,
+}
+
+struct PredictExchange<'a> {
+    at: &'a str,
+    def: &'a SignatureDef,
+    lm: &'a LM,
+    meter: &'a BudgetMeter,
+    guard: Option<SpanGuard>,
 }
 
 /// Owned context threaded into [`Interpreter::conclude_agent_turn`] — what a

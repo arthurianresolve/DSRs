@@ -809,7 +809,28 @@ impl ChatAdapter {
                 raw_text: content.to_string(),
                 source: JsonishError::from(anyhow::anyhow!(err)),
             })?;
-        self.coerce_json_output(def, types, parsed, &content)
+        self.coerce_json_output(def, types, parsed, || content.to_string())
+    }
+
+    pub(crate) fn parse_signature_tool_output(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        calls: &[rig::message::ToolCall],
+    ) -> Option<std::result::Result<(JsonMap, IndexMap<String, FieldMeta>), ParseError>> {
+        if calls.is_empty() {
+            return None;
+        }
+        let output = self.signature_tool_output(def, calls)?;
+        Some(
+            self.coerce_json_output(def, types, Value::Object(output), || {
+                // Only diagnostics need the full synthetic response before alias normalization.
+                let output = self
+                    .signature_tool_output(def, calls)
+                    .expect("the signature and tool calls are unchanged");
+                Value::Object(output).to_string()
+            }),
+        )
     }
 
     pub(crate) fn parse_output_scalar_def(
@@ -836,7 +857,7 @@ impl ChatAdapter {
         }
         let field = &def.outputs[0];
         let values = JsonMap::from_iter([(field.lm_name.to_string(), parsed)]);
-        self.coerce_json_output(def, types, Value::Object(values), &content)
+        self.coerce_json_output(def, types, Value::Object(values), || content.to_string())
     }
 
     fn coerce_json_output(
@@ -844,14 +865,14 @@ impl ChatAdapter {
         def: &SignatureDef,
         types: &TypeTable,
         parsed: Value,
-        content: &str,
+        raw_response: impl Fn() -> String,
     ) -> std::result::Result<(JsonMap, IndexMap<String, FieldMeta>), ParseError> {
         let normalized = canonicalize_output_aliases(parsed, def, types);
         let Some(values) = normalized.as_object() else {
             return Err(ParseError::CoercionFailed {
                 field: "<response>".into(),
                 expected_type: "JSON object".into(),
-                raw_text: content.to_string(),
+                raw_text: raw_response(),
                 source: JsonishError::from(anyhow::anyhow!("expected JSON object")),
             });
         };
@@ -862,7 +883,7 @@ impl ChatAdapter {
             let Some(value) = values.get(field.name.as_ref()).cloned() else {
                 errors.push(ParseError::MissingField {
                     field: field.name.to_string(),
-                    raw_response: content.to_string(),
+                    raw_response: raw_response(),
                 });
                 continue;
             };

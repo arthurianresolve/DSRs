@@ -524,8 +524,13 @@ impl Program {
         self.nodes[id].leaf_name().map(|sym| self.syms.get(sym))
     }
 
-    /// Rebuilds the `ParamPath` index (deserialization / builder finish).
-    pub(crate) fn rebuild_param_index(&mut self) -> Result<(), ValidateError> {
+    /// Completes a graph whose parameter slots may have changed.
+    pub(crate) fn finalize(&mut self) -> Result<(), ValidateError> {
+        self.rebuild_param_index()?;
+        self.validate_and_seal()
+    }
+
+    fn rebuild_param_index(&mut self) -> Result<(), ValidateError> {
         self.param_index.clear();
         for (id, slot) in self.params.iter() {
             if self.param_index.insert(slot.path.clone(), id).is_some() {
@@ -552,9 +557,11 @@ impl Program {
         hasher.finish()
     }
 
-    /// Stamps `meta.program_hash` from the current content.
-    pub(crate) fn seal(&mut self) {
+    fn validate_and_seal(&mut self) -> Result<(), ValidateError> {
+        // Canonical printing assumes structurally valid arenas.
+        self.validate()?;
         self.meta.program_hash = self.compute_hash();
+        Ok(())
     }
 
     /// Promotion (RFC 0002 §5, overlay lifecycle): folds `overlay` into a new
@@ -608,8 +615,7 @@ impl Program {
             overlay: Some(format!("{:016x}", overlay.hash()).into()),
             ..note
         });
-        baked.validate()?;
-        baked.seal();
+        baked.validate_and_seal()?;
         Ok(baked)
     }
 }
@@ -706,9 +712,7 @@ impl TryFrom<ProgramData> for Program {
             sig: data.sig,
             param_index: HashMap::new(),
         };
-        program.rebuild_param_index()?;
-        program.validate()?;
-        program.seal();
+        program.finalize()?;
         Ok(program)
     }
 }

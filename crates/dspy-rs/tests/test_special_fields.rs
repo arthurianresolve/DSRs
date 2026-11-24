@@ -192,6 +192,13 @@ async fn native_and_prompt_tools_produce_the_same_typed_calls(#[case] native: bo
         serde_json::from_str::<serde_json::Value>(&result.calls.calls[0].arguments).unwrap()["query"],
         "France"
     );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(
+            &result.metadata().field_meta()["calls"].raw_text
+        )
+        .unwrap(),
+        serde_json::to_value(&result.calls).unwrap()
+    );
     let request = provider.last_request().unwrap();
     assert_eq!(request.tools.len(), usize::from(native));
     if !native {

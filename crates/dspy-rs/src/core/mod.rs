@@ -55,4 +55,5 @@ pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, InputRenderSpec, Sig
 pub use settings::{Settings, configure, get_lm, try_get_lm, with_lm};
 pub use signature::{ConstraintKind, ConstraintSpec, Signature};
 pub use state::{ModuleState, PredictState};
+pub(crate) use state::{PredictorStateUpdate, apply_predictor_state_updates};
 pub use storage::{InteractionStore, JsonlInteractionStore, StorageError, with_interaction_store};
