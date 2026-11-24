@@ -1,7 +1,7 @@
 #![cfg(feature = "data")]
 
 use dspy_rs::{DataLoadError, DataLoader, RemoteLoadLimits, TypedLoadOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,6 +11,27 @@ use std::time::{Duration, Instant};
 struct Row {
     question: String,
     answer: String,
+}
+
+fn accept_request(listener: &TcpListener) -> TcpStream {
+    let timeout = Duration::from_secs(5);
+    let deadline = Instant::now() + timeout;
+    listener.set_nonblocking(true).unwrap();
+    let mut stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "client did not connect");
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => panic!("failed to accept the request: {error}"),
+        }
+    };
+    stream.set_nonblocking(false).unwrap();
+    stream.set_read_timeout(Some(timeout)).unwrap();
+    stream.set_write_timeout(Some(timeout)).unwrap();
+    read_request_headers(&mut stream);
+    stream
 }
 
 fn read_request_headers(stream: &mut TcpStream) {
@@ -31,8 +52,7 @@ fn serve(body: &str, delay: Duration) -> (String, thread::JoinHandle<()>) {
     let port = listener.local_addr().unwrap().port();
     let body = body.to_owned();
     let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        read_request_headers(&mut stream);
+        let mut stream = accept_request(&listener);
         thread::sleep(delay);
         let response = format!(
             "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n{:X}\r\n{body}\r\n0\r\n\r\n",
@@ -49,8 +69,7 @@ fn serve_bytes(body: Vec<u8>, content_type: &str) -> (String, thread::JoinHandle
     let port = listener.local_addr().unwrap().port();
     let content_type = content_type.to_owned();
     let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        read_request_headers(&mut stream);
+        let mut stream = accept_request(&listener);
         let headers = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
@@ -120,9 +139,9 @@ fn remote_csv_enforces_row_limit() {
 #[test]
 fn remote_json_honors_deadline() {
     let body = r#"{"question":"Q","answer":"A"}"#;
-    let (url, server) = serve(body, Duration::from_millis(150));
+    let (url, server) = serve(body, Duration::from_millis(1_500));
     let limits = RemoteLoadLimits {
-        timeout: Duration::from_millis(20),
+        timeout: Duration::from_secs(1),
         ..RemoteLoadLimits::default()
     };
     let err =
@@ -258,8 +277,7 @@ fn remote_json_deadline_includes_stalled_body_after_slow_headers() {
     let port = listener.local_addr().unwrap().port();
     let (done, keep_open) = std::sync::mpsc::channel::<()>();
     let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        read_request_headers(&mut stream);
+        let mut stream = accept_request(&listener);
         thread::sleep(Duration::from_millis(1_100));
         let _ = stream
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 64\r\nConnection: close\r\n\r\n{");
@@ -289,8 +307,7 @@ fn remote_json_rejects_slow_trickle_after_total_deadline() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        read_request_headers(&mut stream);
+        let mut stream = accept_request(&listener);
         stream
             .write_all(
                 b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
@@ -300,7 +317,7 @@ fn remote_json_rejects_slow_trickle_after_total_deadline() {
             if stream.write_all(b"1\r\n{\r\n").is_err() {
                 return;
             }
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(175));
         }
         let _ = stream.write_all(b"0\r\n\r\n");
     });
@@ -309,7 +326,7 @@ fn remote_json_rejects_slow_trickle_after_total_deadline() {
         false,
         TypedLoadOptions::default(),
         RemoteLoadLimits {
-            timeout: Duration::from_millis(35),
+            timeout: Duration::from_secs(1),
             ..RemoteLoadLimits::default()
         },
     )
