@@ -2292,19 +2292,6 @@ pub(crate) mod tests {
         assert_eq!(model.call_count(), 1);
     }
 
-    #[cfg(feature = "inflight-dedup")]
-    #[tokio::test]
-    async fn uncacheable_flight_releases_waiters_for_independent_calls() {
-        let cache = ResponseCache::memory_only_for_test().await;
-        let InflightResponse::Leader(pending) = cache.register_inflight(17) else {
-            panic!("first caller should lead");
-        };
-        let mut waiter = std::pin::pin!(cache.shared_response(17));
-        assert!(futures::poll!(&mut waiter).is_pending());
-        pending.finish_uncached();
-        assert!(matches!(waiter.await.unwrap(), SharedResponse::Independent));
-    }
-
     #[tokio::test]
     async fn call_with_caller_managed_mode_returns_tool_calls_without_executing() {
         let model = TestCompletionModel::new([make_tool_call("counter")]);

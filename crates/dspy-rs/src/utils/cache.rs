@@ -292,3 +292,66 @@ impl ResponseCache {
         trace!(prompt_len, "cache entry inserted");
     }
 }
+
+#[cfg(all(test, feature = "inflight-dedup"))]
+mod tests {
+    use super::*;
+    use std::future::{Future, poll_fn};
+    use std::pin::Pin;
+    use std::task::Poll;
+    use std::time::Duration;
+
+    const KEY: CacheKey = 17;
+
+    fn lead(cache: &ResponseCache) -> PendingResponse<'_> {
+        let InflightResponse::Leader(pending) = cache.register_inflight(KEY) else {
+            panic!("expected an available flight");
+        };
+        pending
+    }
+
+    async fn subscribed(cache: &ResponseCache, mut waiter: Pin<&mut impl Future>) {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            poll_fn(|cx| {
+                assert!(waiter.as_mut().poll(cx).is_pending());
+                // The initial cache lookup can yield before registration.
+                let flights = cache.inflight.lock().unwrap();
+                if flights
+                    .get(&KEY)
+                    .is_some_and(|sender| sender.receiver_count() > 0)
+                {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            }),
+        )
+        .await
+        .expect("waiter should subscribe to the current flight");
+    }
+
+    #[tokio::test]
+    async fn uncacheable_flight_releases_waiters_for_independent_calls() {
+        let cache = ResponseCache::memory_only_for_test().await;
+        let pending = lead(&cache);
+        let mut waiter = std::pin::pin!(cache.shared_response(KEY));
+        subscribed(&cache, waiter.as_mut()).await;
+        pending.finish_uncached();
+        assert!(matches!(waiter.await.unwrap(), SharedResponse::Independent));
+    }
+
+    #[tokio::test]
+    async fn waiter_can_proceed_after_two_empty_flights() {
+        let cache = ResponseCache::memory_only_for_test().await;
+        let initial = lead(&cache);
+        let mut waiter = std::pin::pin!(cache.shared_response(KEY));
+        subscribed(&cache, waiter.as_mut()).await;
+        drop(initial);
+
+        let replacement = lead(&cache);
+        subscribed(&cache, waiter.as_mut()).await;
+        drop(replacement);
+        assert!(matches!(waiter.await.unwrap(), SharedResponse::Independent));
+    }
+}
