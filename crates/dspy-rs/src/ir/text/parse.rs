@@ -12,6 +12,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use indexmap::IndexMap;
+
 use crate::LMConfig;
 use crate::ir::builder::{self, BuildError, NodeSpec, Port, ProgramBuilder};
 use crate::ir::graph::{MAX_NODE_DEPTH, ModelId, NodeBudget, Program, SigId, ToolId};
@@ -117,18 +119,19 @@ fn build_span_maps(root: &Shadow) -> SpanMaps {
 /// A parsed-but-unregistered top declaration that owns a signature. Kept in
 /// text order so signature arena ids follow declaration order.
 enum SigItem {
-    Sig {
-        def: SignatureDef,
-        span: Span,
-    },
+    Sig(SignatureDef),
     Tool {
-        name: String,
         desc: String,
         def: SignatureDef,
         caps: Vec<(String, Span)>,
         js: Option<String>,
-        span: Span,
     },
+}
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+enum DeclKind {
+    Sig,
+    Tool,
 }
 
 const MAX_TYPE_DEPTH: usize = 64;
@@ -161,7 +164,7 @@ struct Parser<'a> {
     builder: Option<ProgramBuilder>,
     program_caps: HashSet<String>,
     models: HashMap<String, ModelId>,
-    sig_items: Vec<SigItem>,
+    sig_items: IndexMap<(DeclKind, String), SigItem>,
     sigs: HashMap<String, SigId>,
     tools: HashMap<String, ToolId>,
     types: TypeTable,
@@ -190,7 +193,7 @@ impl<'a> Parser<'a> {
             builder: None,
             program_caps: HashSet::new(),
             models: HashMap::new(),
-            sig_items: Vec::new(),
+            sig_items: IndexMap::new(),
             sigs: HashMap::new(),
             tools: HashMap::new(),
             types: TypeTable::default(),
@@ -567,14 +570,13 @@ impl<'a> Parser<'a> {
     fn sig_decl(&mut self) -> Result<(), ParseError> {
         self.bump()?; // sig
         let (name, span) = self.expect_name("after `sig`")?;
-        if self.sig_items.iter().any(|item| match item {
-            SigItem::Sig { def, .. } => *def.name == name,
-            _ => false,
-        }) {
+        let key = (DeclKind::Sig, name);
+        let name = &key.1;
+        if self.sig_items.contains_key(&key) {
             return Err(ParseError::at(span, format!("duplicate sig name `{name}`")));
         }
         self.expect_tok(Tok::LBrace, "after the sig name")?;
-        let mut sig = SignatureDef::build(&name);
+        let mut sig = SignatureDef::build(name);
         if let Tok::Str(instruction) = &self.cur.tok {
             let instruction = instruction.clone();
             self.bump()?;
@@ -599,7 +601,7 @@ impl<'a> Parser<'a> {
         let def = sig
             .finish()
             .map_err(|e| ParseError::at(span, format!("invalid sig `{name}`: {e}")))?;
-        self.sig_items.push(SigItem::Sig { def, span });
+        self.sig_items.insert(key, SigItem::Sig(def));
         Ok(())
     }
 
@@ -832,10 +834,9 @@ impl<'a> Parser<'a> {
     fn tool_decl(&mut self) -> Result<(), ParseError> {
         self.bump()?; // tool
         let (name, span) = self.expect_name("after `tool`")?;
-        if self.sig_items.iter().any(|item| match item {
-            SigItem::Tool { name: existing, .. } => *existing == name,
-            _ => false,
-        }) {
+        let key = (DeclKind::Tool, name);
+        let name = &key.1;
+        if self.sig_items.contains_key(&key) {
             return Err(ParseError::at(
                 span,
                 format!("duplicate tool name `{name}`"),
@@ -855,7 +856,7 @@ impl<'a> Parser<'a> {
             self.bump()?; // ]
         }
         self.expect_tok(Tok::LBrace, "to open the tool interface")?;
-        let mut sig = SignatureDef::build(&name);
+        let mut sig = SignatureDef::build(name);
         while self.cur.tok != Tok::RBrace {
             let (field, is_input) = self.sig_field()?;
             sig = if is_input {
@@ -874,14 +875,15 @@ impl<'a> Parser<'a> {
         let def = sig
             .finish()
             .map_err(|e| ParseError::at(span, format!("invalid tool `{name}` interface: {e}")))?;
-        self.sig_items.push(SigItem::Tool {
-            name,
-            desc,
-            def,
-            caps,
-            js,
-            span,
-        });
+        self.sig_items.insert(
+            key,
+            SigItem::Tool {
+                desc,
+                def,
+                caps,
+                js,
+            },
+        );
         Ok(())
     }
 
@@ -949,22 +951,18 @@ impl<'a> Parser<'a> {
         let is_enum = |token: &str| self.types.enums.contains_key(token);
         let builder = self.builder.as_mut().expect("builder");
         builder.add_types(&self.types);
-        for item in std::mem::take(&mut self.sig_items) {
+        for ((_, name), item) in std::mem::take(&mut self.sig_items) {
             match item {
-                SigItem::Sig { mut def, span } => {
+                SigItem::Sig(mut def) => {
                     fixup_sig(&mut def, &is_enum);
-                    let name = def.name.to_string();
                     let id = builder.sig(def);
                     self.sigs.insert(name, id);
-                    let _ = span;
                 }
                 SigItem::Tool {
-                    name,
                     desc,
                     mut def,
                     caps,
                     js,
-                    span,
                 } => {
                     fixup_sig(&mut def, &is_enum);
                     let sig_id = builder.sig(def);
@@ -974,7 +972,6 @@ impl<'a> Parser<'a> {
                         Some(js) => builder.sandboxed_tool(&name, &desc, sig_id, &cap_strs, &js),
                     };
                     self.tools.insert(name, id);
-                    let _ = span;
                 }
             }
         }

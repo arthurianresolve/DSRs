@@ -160,22 +160,7 @@ impl Program {
 struct Scope<'a> {
     /// `$`-frame: field name → type.
     inputs: &'a IndexMap<String, FieldType>,
-    /// Nodes usable through `Out` ports: earlier siblings at every ancestor
-    /// level, in order.
-    visible: Vec<NodeId>,
     in_loop: bool,
-}
-
-impl<'a> Scope<'a> {
-    fn child(&self, extra_visible: &[NodeId]) -> Scope<'a> {
-        let mut visible = self.visible.clone();
-        visible.extend_from_slice(extra_visible);
-        Scope {
-            inputs: self.inputs,
-            visible,
-            in_loop: self.in_loop,
-        }
-    }
 }
 
 struct Validator<'p> {
@@ -183,6 +168,8 @@ struct Validator<'p> {
     visited: HashSet<NodeId>,
     leaf_names: HashSet<&'p str>,
     ifaces: HashMap<NodeId, Interface>,
+    visible: Vec<bool>,
+    visibility_log: Vec<NodeId>,
 }
 
 impl<'p> Validator<'p> {
@@ -192,6 +179,8 @@ impl<'p> Validator<'p> {
             visited: HashSet::new(),
             leaf_names: HashSet::new(),
             ifaces: HashMap::new(),
+            visible: vec![false; p.nodes.len()],
+            visibility_log: Vec::new(),
         }
     }
 
@@ -208,7 +197,6 @@ impl<'p> Validator<'p> {
         let root_inputs = sig_inputs(&self.p.sigs[self.p.sig]);
         let scope = Scope {
             inputs: &root_inputs,
-            visible: Vec::new(),
             in_loop: false,
         };
         let root_iface = self.check_node(self.p.root, &scope, 1)?;
@@ -490,6 +478,22 @@ impl<'p> Validator<'p> {
 
     // -- the tree walk --------------------------------------------------------
 
+    /// Temporary Out-port grants for one container's children or exports.
+    fn with_visibility<T>(&mut self, check: impl FnOnce(&mut Self) -> T) -> T {
+        let checkpoint = self.visibility_log.len();
+        let result = check(self);
+        for id in self.visibility_log.drain(checkpoint..) {
+            self.visible[id.index()] = false;
+        }
+        result
+    }
+
+    fn make_visible(&mut self, id: NodeId) {
+        if !std::mem::replace(&mut self.visible[id.index()], true) {
+            self.visibility_log.push(id);
+        }
+    }
+
     fn check_node(
         &mut self,
         id: NodeId,
@@ -584,21 +588,24 @@ impl<'p> Validator<'p> {
                 self.check_leaf_bindings(at, n.sig, &n.binding, scope)?;
                 sig_outputs(&self.p.sigs[n.sig])
             }
-            Node::Seq(n) => {
-                let mut inner = scope.child(&[]);
+            Node::Seq(n) => self.with_visibility(|validator| {
                 for &child in n.body.iter() {
-                    self.check_node(child, &inner, depth + 1)?;
-                    inner.visible.push(child);
+                    validator.check_node(child, scope, depth + 1)?;
+                    validator.make_visible(child);
                 }
-                self.check_export_bindings(&format!("{id}"), &n.out, &inner)?
-            }
+                validator.check_export_bindings(&format!("{id}"), &n.out, scope)
+            })?,
             Node::ForkJoin(n) => {
                 for &branch in n.branches.iter() {
                     // Branches cannot see each other: entry scope for each.
                     self.check_node(branch, scope, depth + 1)?;
                 }
-                let after = scope.child(&n.branches);
-                self.check_export_bindings(&format!("{id}"), &n.join, &after)?
+                self.with_visibility(|validator| {
+                    for &branch in n.branches.iter() {
+                        validator.make_visible(branch);
+                    }
+                    validator.check_export_bindings(&format!("{id}"), &n.join, scope)
+                })?
             }
             Node::Route(n) => {
                 let at = format!("{id}");
@@ -653,8 +660,10 @@ impl<'p> Validator<'p> {
             Node::Refine(n) => {
                 let at = format!("{id}");
                 let child_iface = self.check_node(n.child, scope, depth + 1)?;
-                let judge_scope = scope.child(&[n.child]);
-                let judge_iface = self.check_node(n.judge, &judge_scope, depth + 1)?;
+                let judge_iface = self.with_visibility(|validator| {
+                    validator.make_visible(n.child);
+                    validator.check_node(n.judge, scope, depth + 1)
+                })?;
                 if !matches!(self.p.nodes[n.judge], Node::Predict(_) | Node::Hole(_)) {
                     return Err(ValidateError::RefineJudgeNotLeaf { at });
                 }
@@ -701,7 +710,6 @@ impl<'p> Validator<'p> {
                 }
                 let body_scope = Scope {
                     inputs: scope.inputs,
-                    visible: scope.visible.clone(),
                     in_loop: true,
                 };
                 self.check_node(n.body, &body_scope, depth + 1)?;
@@ -709,35 +717,31 @@ impl<'p> Validator<'p> {
                 // scope: the body node itself plus, when the body is a Seq,
                 // its steps — the text form (`loop { step+ }`) references
                 // step names directly.
-                let after = Scope {
-                    inputs: scope.inputs,
-                    visible: {
-                        let mut v = scope.visible.clone();
-                        v.push(n.body);
-                        if let Node::Seq(seq) = &self.p.nodes[n.body] {
-                            v.extend(seq.body.iter().copied());
+                self.with_visibility(|validator| {
+                    validator.make_visible(n.body);
+                    if let Node::Seq(seq) = &program.nodes[n.body] {
+                        for &step in seq.body.iter() {
+                            validator.make_visible(step);
                         }
-                        v
-                    },
-                    in_loop: true,
-                };
-                // Carry rebinding must produce values compatible with the
-                // shadowed inputs.
-                for b in n.carry.iter() {
-                    let name = self.p.syms.get(b.dst).to_string();
-                    let expected = scope.inputs.get(&name).cloned().expect("checked above");
-                    self.check_binding(&at, &name, &expected, &b.src, &after)?;
-                }
-                if let Some(port) = &n.while_ {
-                    let ty = self.port_type(&at, port, &after)?;
-                    if !matches!(ty, FieldType::Bool) {
-                        return Err(ValidateError::WhileNotBool {
-                            at,
-                            got: type_label(&ty),
-                        });
                     }
-                }
-                self.check_export_bindings(&at, &n.out, &after)?
+                    // Carry rebinding must produce values compatible with the
+                    // shadowed inputs.
+                    for b in n.carry.iter() {
+                        let name = program.syms.get(b.dst).to_string();
+                        let expected = scope.inputs.get(&name).cloned().expect("checked above");
+                        validator.check_binding(&at, &name, &expected, &b.src, &body_scope)?;
+                    }
+                    if let Some(port) = &n.while_ {
+                        let ty = validator.port_type(&at, port, &body_scope)?;
+                        if !matches!(ty, FieldType::Bool) {
+                            return Err(ValidateError::WhileNotBool {
+                                at,
+                                got: type_label(&ty),
+                            });
+                        }
+                    }
+                    validator.check_export_bindings(&at, &n.out, &body_scope)
+                })?
             }
         };
         self.ifaces.insert(id, iface.clone());
@@ -889,7 +893,7 @@ impl<'p> Validator<'p> {
                     })
             }
             PortRef::Out { node, field } => {
-                if !scope.visible.contains(node) {
+                if !self.visible[node.index()] {
                     return Err(ValidateError::NodeNotVisible {
                         at: at.to_string(),
                         node: self.p.node_display(*node),

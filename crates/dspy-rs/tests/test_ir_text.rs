@@ -133,6 +133,43 @@ main: Main = seq {
     assert_eq!((error.line, error.col), (6, 14));
 }
 
+#[test]
+fn interleaved_signatures_and_tools_keep_separate_namespaces() {
+    let declarations = r#"dsrs 1
+program declarations
+model m = "openai:gpt-4o-mini"
+tool Shared "First tool" { in question: string out answer: string }
+sig Main { in question: string out answer: string }
+sig Shared { in question: string out answer: string }
+tool Other "Second tool" { in question: string out answer: string }
+"#;
+    let entry = r#"main: Main = seq {
+  result = agent Shared (question = $.question) { tools [Shared Other] }
+  out { answer = result.answer }
+}
+"#;
+    let program = Program::from_dsrs(&format!("{declarations}{entry}")).unwrap();
+    let names: Vec<&str> = program
+        .sigs
+        .iter()
+        .map(|(_, sig)| sig.name.as_ref())
+        .collect();
+    assert_eq!(names, ["Shared", "Main", "Shared", "Other"]);
+    let tools: Vec<_> = program
+        .tools
+        .iter()
+        .map(|(_, tool)| program.syms.get(tool.name))
+        .collect();
+    assert_eq!(tools, ["Shared", "Other"]);
+
+    for (keyword, column) in [("sig", 5), ("tool", 6)] {
+        let source = format!("{declarations}{keyword} Shared\n{entry}");
+        let error = Program::from_dsrs(&source).unwrap_err();
+        assert_eq!((error.line, error.col), (8, column));
+        assert_eq!(error.message, format!("duplicate {keyword} name `Shared`"));
+    }
+}
+
 /// The RFC §4.3 worked example, builder frontend — must equal the parsed
 /// `qa.dsrs` golden fixture (same canonical print, same hash).
 fn qa_program() -> Program {

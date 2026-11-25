@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::fmt::Write;
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use dspy_rs::ir::SignatureDef;
 use dspy_rs::typesys::{json_schema_for_outputs, schema_block};
@@ -47,6 +47,8 @@ pub struct Rlm<S: Signature> {
     lm: Option<Arc<LM>>,
     sub_lm: Option<Arc<LM>>,
     instruction: String,
+    /// The instruction and signature are fixed once this instance is built.
+    action_prompt: OnceLock<String>,
     signature: PhantomData<S>,
 }
 
@@ -58,6 +60,7 @@ impl<S: Signature> Rlm<S> {
                 lm: None,
                 sub_lm: None,
                 instruction: S::instruction().to_owned(),
+                action_prompt: OnceLock::new(),
                 signature: PhantomData,
             },
         }
@@ -87,15 +90,17 @@ impl<S: Signature> Module for Rlm<S> {
         let sub_lm = self.sub_lm.as_deref().unwrap_or(&lm);
         let input_json = serde_json::to_string(&input).map_err(internal_error)?;
         drop(input);
-        let definition = SignatureDef::of::<S>();
-        let types = SignatureDef::types_of::<S>();
-        let output_schema = json_schema_for_outputs(definition, types);
-        let input_schema = OutputSchema::from_shape(S::input_shape());
-        let system = format!(
+        let system = self.action_prompt.get_or_init(|| {
+            let definition = SignatureDef::of::<S>();
+            let types = SignatureDef::types_of::<S>();
+            let output_schema = json_schema_for_outputs(definition, types);
+            let input_schema = OutputSchema::from_shape(S::input_shape());
+            format!(
             "{}\n\nYou have a persistent Python session. Return a Python cell each turn. Inspect the input with print and continue from the results. Input fields are globals and are also available in the inputs dictionary. Use llm_query(prompt) or llm_query_batched(prompts) for selected passages. Finish with SUBMIT using the named output fields.\n\nInput type:\n{}\n\nSUBMIT schema:\n{output_schema}",
-            self.instruction,
-            schema_block(&input_schema.target, &input_schema.types),
-        );
+                self.instruction,
+                schema_block(&input_schema.target, &input_schema.types),
+            )
+        });
         let output_limit = self.config.max_output_chars;
         let (mut session, preview) =
             BlockingTask::spawn(move || Session::new(input_json, output_limit))
@@ -103,7 +108,10 @@ impl<S: Signature> Module for Rlm<S> {
                 .await
                 .map_err(internal_error)?
                 .map_err(internal_error)?;
-        let mut chat = Chat::new(vec![Message::system(system), Message::user(preview)]);
+        let mut chat = Chat::new(vec![
+            Message::system(system.clone()),
+            Message::user(preview),
+        ]);
 
         let mut metadata = CallMetadata::default();
         let mut remaining = self.config.max_llm_calls;
@@ -170,6 +178,8 @@ impl<S: Signature> Module for Rlm<S> {
             "{}\n\nUse the Python execution transcript to answer the task.",
             self.instruction,
         );
+        let definition = SignatureDef::of::<S>();
+        let types = SignatureDef::types_of::<S>();
         chat.messages[0] =
             Message::system(ChatAdapter.build_system_def(definition, types, Some(&instruction)));
         let finalize = Predict::<S>::builder().named("rlm.finalize").build();

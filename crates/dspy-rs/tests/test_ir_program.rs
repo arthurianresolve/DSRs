@@ -398,6 +398,37 @@ fn duplicate_leaf_names_are_rejected() {
 }
 
 #[test]
+fn fork_visibility_grants_are_local_to_the_join() {
+    let build = |right_input, join_from, after_from| {
+        let (builder, main_sig, qa) = tiny_builder();
+        let worker = ir::predict("worker", qa).bind("question", ir::input("question"));
+        let left = ir::seq([worker])
+            .out("answer", ir::out("worker", "answer"))
+            .named("left");
+        let right = ir::predict("right", qa).bind("question", right_input);
+        let fork = ir::fork([left, right])
+            .join("answer", ir::out(join_from, "answer"))
+            .named("forked");
+        let after = ir::predict("after", qa).bind("question", ir::out(after_from, "answer"));
+        builder.main(
+            main_sig,
+            ir::seq([fork, after]).out("answer", ir::out("after", "answer")),
+        )
+    };
+    build(ir::input("question"), "left", "forked").unwrap();
+    for result in [
+        build(ir::out("left", "answer"), "left", "forked"),
+        build(ir::input("question"), "worker", "forked"),
+        build(ir::input("question"), "left", "left"),
+    ] {
+        assert!(matches!(
+            result,
+            Err(BuildError::Invalid(ValidateError::NodeNotVisible { .. }))
+        ));
+    }
+}
+
+#[test]
 fn capability_violation_is_rejected() {
     let (b, main_sig, qa) = tiny_builder();
     // Program ceiling is empty; the hole asks for net:fetch.

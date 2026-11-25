@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use dspy_rlm::Rlm;
@@ -93,6 +94,38 @@ async fn keeps_large_inputs_in_python_and_preserves_session_across_cells() {
     assert!(prompt.contains("list of 1 items"));
     assert!(prompt.contains("['Rust']"));
     assert!(!prompt.contains("abstract not requested by the model"));
+}
+
+#[tokio::test]
+async fn reused_action_prompts_preserve_instance_instructions_and_fresh_inputs() {
+    let (lm, provider) = test_lm(&["SUBMIT(selected_titles=[query])"; 3]).await;
+    let lm = Arc::new(lm);
+    let first = Rlm::<Search>::builder()
+        .lm(Arc::clone(&lm))
+        .instruction("Use the primary selection policy.")
+        .build();
+    let second = Rlm::<Search>::builder()
+        .lm(lm)
+        .instruction("Use the alternate selection policy.")
+        .build();
+
+    let prediction = first.call(input("Rust")).await.unwrap();
+    assert_eq!(prediction.titles, ["Rust"]);
+    let first_preamble = provider.last_request().unwrap().preamble.unwrap();
+    assert!(first_preamble.starts_with("Use the primary selection policy."));
+
+    let prediction = second.call(input("Python")).await.unwrap();
+    assert_eq!(prediction.titles, ["Python"]);
+    let second_preamble = provider.last_request().unwrap().preamble.unwrap();
+    assert!(second_preamble.starts_with("Use the alternate selection policy."));
+
+    let prediction = first.call(input("Zig")).await.unwrap();
+    assert_eq!(prediction.titles, ["Zig"]);
+    assert_eq!(
+        provider.last_request().unwrap().preamble.as_deref(),
+        Some(first_preamble.as_str())
+    );
+    assert_eq!(provider.call_count(), 3);
 }
 
 #[tokio::test]
