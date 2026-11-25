@@ -52,7 +52,7 @@ fn canonical_model_url_omits_credentials_and_path() {
     program.models.values_mut().next().unwrap().config.base_url =
         Some("https://%75ser:%70ass@model.example/v1?token=encoded-secret".into());
     let text = program.to_dsrs();
-    assert!(text.contains("base_url \"https://model.example\""));
+    assert!(text.contains("base_url \"https://model.example/v1\""));
     assert!(!text.contains("encoded-secret"));
 
     program.models.values_mut().next().unwrap().config.base_url =
@@ -60,6 +60,29 @@ fn canonical_model_url_omits_credentials_and_path() {
     let text = program.to_dsrs();
     assert!(!text.contains("private-secret"));
     assert!(!text.contains("query-secret"));
+}
+
+#[test]
+fn canonical_model_url_round_trips_public_v1_prefix() {
+    for url in ["http://localhost:11434/v1", "https://model.example/v1/"] {
+        let mut program = qa_program();
+        program.models.values_mut().next().unwrap().config.base_url = Some(url.into());
+        let text = program.to_dsrs();
+        assert!(text.contains(&format!("base_url \"{url}\"")));
+        let restored = Program::from_dsrs(&text).unwrap();
+        assert_eq!(
+            restored
+                .models
+                .values()
+                .next()
+                .unwrap()
+                .config
+                .base_url
+                .as_deref(),
+            Some(url)
+        );
+        assert_eq!(restored.to_dsrs(), text);
+    }
 }
 
 #[test]

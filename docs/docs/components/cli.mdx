@@ -75,14 +75,16 @@ Prints (or rewrites) the canonical form of an artifact. The canonical form is `P
 
 ## `dsrs serve <program> [flags]`
 
-Serves a `.dsrs` program over HTTP. Startup is fail-fast, before the port binds: parse, apply the optional overlay (named form, verified against the program's hash and slot kinds), then `Interpreter::load` with the grants from `--allow`. Models are constructed from the artifact configs with secrets from provider environment variables; a QuickJS sandbox is added when none was supplied. Once bound, the address is printed on stderr. Set `DSRS_AUTH_TOKEN` to a token of at least 32 printable ASCII bytes. On loopback, the server generates and prints a token if the variable is unset. Binding to a non-loopback address requires `DSRS_AUTH_TOKEN`.
+Serves a `.dsrs` program over loopback HTTP. Startup is fail-fast, before the port binds: parse, apply the optional overlay (named form, verified against the program's hash and slot kinds), then `Interpreter::load` with the grants from `--allow`. Models are constructed from the artifact configs with secrets from provider environment variables; a QuickJS sandbox is added when none was supplied. Once bound, the address is printed on stderr. Set `DSRS_AUTH_TOKEN` to a token of at least 32 printable ASCII bytes. The server generates and prints a token if the variable is unset. For remote access, put a TLS reverse proxy in front of the loopback listener.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--host <addr>` | `127.0.0.1` | Bind address. |
+| `--host <addr>` | `127.0.0.1` | Loopback bind address. |
 | `--port <n>` | `8080` | Bind port (0 binds an ephemeral port). |
 | `--overlay <path>` | none | Overlay JSON in the named form (`{"<param path>": <value>, ...}`), applied read-through on every run. |
 | `--allow <CAP>` | none | Capability grant, repeatable: `--allow net:search --allow fs:read`. Load is refused (with the missing set printed) when the program's caps exceed the grants. |
+| `--allow-model-base-url <URL>` | none | Permit an exact `base_url` from the artifact, repeatable. |
+| `--model-base-url-env <MODEL=ENV_VAR>` | none | Bind a declared model to the full endpoint URL held in a host environment variable, repeatable. Useful when a custom path is omitted from exported artifacts. |
 
 <Warning>
 Host tools cannot be served: a program declaring a host tool needs an embedding host that supplies the binding ([`include_program!`](/docs/components/runtime) plus your own code, or a sandboxed `js` tool instead). The load surfaces that refusal with a hint rather than a bare unbound-tool error.
@@ -143,7 +145,7 @@ dsrs serve qa.dsrs --port 8080
 # Read the generated bearer token from stderr, or set DSRS_AUTH_TOKEN first.
 ```
 
-Model API keys come from the usual provider environment variables (for example `OPENAI_API_KEY`). The flag table above lists `--host`, `--port`, `--overlay`, and `--allow`.
+Model API keys come from the usual provider environment variables (for example `OPENAI_API_KEY`). Exported model URLs retain only their origin and the public `/v1` API prefix. For a custom endpoint path, set `MY_MODEL_URL` in the host environment and pass `--model-base-url-env m=MY_MODEL_URL`; the URL value stays out of the artifact and `/program` response.
 
 ### 5. Call it
 

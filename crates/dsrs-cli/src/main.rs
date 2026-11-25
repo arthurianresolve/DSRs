@@ -53,7 +53,19 @@ enum Cmd {
         /// Permit an exact model base_url from the artifact (repeatable).
         #[arg(long = "allow-model-base-url", value_name = "URL")]
         allow_model_base_urls: Vec<String>,
+        /// Bind a model to an endpoint URL held in an environment variable.
+        #[arg(long = "model-base-url-env", value_name = "MODEL=ENV_VAR", value_parser = parse_model_base_url_env)]
+        model_base_url_envs: Vec<(String, String)>,
     },
+}
+
+fn parse_model_base_url_env(value: &str) -> Result<(String, String), String> {
+    match value.split_once('=') {
+        Some((model, var)) if !model.is_empty() && !var.is_empty() => {
+            Ok((model.to_string(), var.to_string()))
+        }
+        _ => Err("expected MODEL=ENV_VAR".to_string()),
+    }
 }
 
 fn main() -> ExitCode {
@@ -93,12 +105,14 @@ fn main() -> ExitCode {
             overlay,
             allow,
             allow_model_base_urls,
+            model_base_url_envs,
         } => {
             let config = ServeConfig {
                 program,
                 overlay,
                 allow,
                 allowed_model_base_urls: allow_model_base_urls,
+                model_base_url_envs,
                 auth_token: std::env::var("DSRS_AUTH_TOKEN").ok(),
             };
             let runtime = match tokio::runtime::Runtime::new() {

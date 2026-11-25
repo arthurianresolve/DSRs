@@ -43,10 +43,14 @@ lineage { optimizer "…" trainset "…" budget "…" parent "…" date "…" } 
 main: <MainSig> = seq { … }                      // the program body; always a seq
 ````
 
-Canonical program export keeps only the scheme, host, and port of a model
-`base_url`. URL userinfo, paths, queries, and fragments are omitted from exported
-text and `LMConfig` JSON. A custom endpoint path therefore does not survive
-export and reload; keep provider credentials in environment variables.
+Canonical program export keeps the scheme, host, port, and exact public `/v1`
+or `/v1/` API prefix of a model `base_url`. URL userinfo, other paths, queries,
+and fragments are omitted from exported text and `LMConfig` JSON. This lets
+common OpenAI-compatible endpoints round-trip without copying URL secrets.
+For a custom path, set a host environment variable with the full endpoint URL
+and run `dsrs serve` with `--model-base-url-env MODEL=ENV_VAR`. The variable's
+value is used only for the live model binding; it is never written into the
+program artifact or returned by `/program`.
 
 **Types**: `string` `int` `float` `bool` · `Name` (class/enum) · `"lit"` (literal) · `T[]` (list) · `T?` (optional) · `map<T>` (string-keyed map) · `A | B` (union) · `(A | B)[]` (group). 
 

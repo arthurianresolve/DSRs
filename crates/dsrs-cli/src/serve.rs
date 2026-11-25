@@ -26,7 +26,7 @@
 //! code). `load` surfaces that refusal with a hint rather than a bare
 //! "unbound" error.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -38,7 +38,10 @@ use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use dspy_rs::ir::{Budget, Interpreter, LoadError, Overlay, ParamValue, Program, RunError};
+use dspy_rs::LM;
+use dspy_rs::ir::{
+    Budget, Interpreter, LoadError, Overlay, ParamValue, Program, RunError, RuntimeEnv,
+};
 use dspy_rs::trace::{JsonMap, capture};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
@@ -60,6 +63,9 @@ pub struct ServeConfig {
     pub allow: Vec<String>,
     /// Exact artifact model URLs the operator permits at load.
     pub allowed_model_base_urls: Vec<String>,
+    /// Model name and environment variable holding a host-owned endpoint URL.
+    /// This restores custom paths without placing them in the artifact.
+    pub model_base_url_envs: Vec<(String, String)>,
     /// Optional operator token; a random token is generated when absent.
     pub auth_token: Option<String>,
 }
@@ -151,7 +157,7 @@ impl std::fmt::Debug for App {
 /// their artifact configs, secrets from provider env vars); tests pre-bind
 /// canned models. Grants from `config.allow` and a QuickJS sandbox (when none
 /// was supplied) are added here.
-pub async fn load(config: &ServeConfig, env: dspy_rs::ir::RuntimeEnv) -> anyhow::Result<Arc<App>> {
+pub async fn load(config: &ServeConfig, env: RuntimeEnv) -> anyhow::Result<Arc<App>> {
     let auth_token = match &config.auth_token {
         Some(token) if token.len() >= 32 && token.bytes().all(|byte| byte.is_ascii_graphic()) => {
             token.clone()
@@ -207,6 +213,7 @@ pub async fn load(config: &ServeConfig, env: dspy_rs::ir::RuntimeEnv) -> anyhow:
     for url in &config.allowed_model_base_urls {
         env = env.allow_model_base_url(url.clone());
     }
+    env = bind_model_base_url_envs(&program, env, &config.model_base_url_envs).await?;
     if env.sandbox.is_none() {
         env = env.with_sandbox(Arc::new(dsrs_tools::QuickJsExecutor::new()));
     }
@@ -234,6 +241,41 @@ pub async fn load(config: &ServeConfig, env: dspy_rs::ir::RuntimeEnv) -> anyhow:
         run_slots: Semaphore::new(MAX_CONCURRENT_RUNS),
         recent_runs: Mutex::new(VecDeque::new()),
     }))
+}
+
+async fn bind_model_base_url_envs(
+    program: &Program,
+    mut env: RuntimeEnv,
+    bindings: &[(String, String)],
+) -> anyhow::Result<RuntimeEnv> {
+    let mut seen = HashSet::new();
+    for (name, var) in bindings {
+        if name.is_empty() || var.is_empty() {
+            anyhow::bail!("model URL environment binding requires MODEL=ENV_VAR");
+        }
+        if !seen.insert(name.as_str()) || env.models.contains_key(name) {
+            anyhow::bail!("model `{name}` has more than one host binding");
+        }
+        let def = program
+            .models
+            .iter()
+            .find(|(_, def)| &*def.name == name.as_str())
+            .map(|(_, def)| def)
+            .ok_or_else(|| anyhow::anyhow!("model `{name}` is not declared in the program"))?;
+        let url = std::env::var(var)
+            .ok()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("model `{name}` needs nonempty environment variable `{var}`")
+            })?;
+        let mut model_config = def.config.clone();
+        model_config.base_url = Some(url);
+        let lm = LM::from_config(model_config).await.map_err(|_| {
+            anyhow::anyhow!("failed to initialize model `{name}` from environment variable `{var}`")
+        })?;
+        env = env.bind_model(name, Arc::new(lm));
+    }
+    Ok(env)
 }
 
 /// The HTTP surface over a loaded [`App`]. Split from [`serve`] so

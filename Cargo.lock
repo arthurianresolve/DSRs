@@ -1041,6 +1041,7 @@ dependencies = [
  "reqwest 0.13.2",
  "rig-core",
  "serde_json",
+ "temp-env",
  "tempfile",
  "tokio",
 ]

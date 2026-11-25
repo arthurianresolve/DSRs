@@ -30,3 +30,4 @@ reqwest = { workspace = true, features = ["json"] }
 # for the TestCompletionModel in server integration tests.
 rig-core = { workspace = true }
 tempfile = { workspace = true }
+temp-env = { version = "0.3.6", features = ["async_closure"] }

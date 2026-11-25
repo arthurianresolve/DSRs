@@ -75,6 +75,17 @@ fn lm_config_serializes_without_secrets() {
     assert_eq!(restored.temperature, config.temperature);
     assert_eq!(restored.max_tokens, config.max_tokens);
 
+    let mut public_v1 = restored.clone();
+    public_v1.base_url = Some("http://localhost:11434/v1?token=secret-check".into());
+    let json = serde_json::to_string(&public_v1).unwrap();
+    assert!(json.contains("http://localhost:11434/v1"));
+    assert!(!json.contains("secret-check"));
+    let restored_v1: LMConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        restored_v1.base_url.as_deref(),
+        Some("http://localhost:11434/v1")
+    );
+
     let mut invalid = config;
     invalid.base_url = Some("https://user:pass@/v1?token=invalid-secret".into());
     let json = serde_json::to_string(&invalid).unwrap();

@@ -141,6 +141,78 @@ async fn serve_requires_operator_approval_for_artifact_model_url() {
         .expect("approved artifact URL should load");
 }
 
+#[tokio::test]
+async fn serve_uses_host_model_url_without_exposing_custom_path() {
+    const URL_VAR: &str = "DSRS_TEST_CUSTOM_MODEL_BASE_URL";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = ECHO.replace(
+        "model m = \"openai:gpt-4o-mini\"",
+        "model m = \"openai:gpt-4o-mini\" { base_url \"http://127.0.0.1:9999\" }",
+    );
+    let program = write_program(&dir, "custom-model-url.dsrs", &source);
+    let mut config = ServeConfig {
+        program,
+        model_base_url_envs: vec![("m".into(), URL_VAR.into())],
+        auth_token: Some(TEST_TOKEN.into()),
+        ..ServeConfig::default()
+    };
+
+    let err = temp_env::async_with_vars(
+        [(URL_VAR, None::<&str>)],
+        serve::load(&config, RuntimeEnv::new()),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains(URL_VAR));
+
+    config.model_base_url_envs[0].0 = "undeclared".into();
+    let err = serve::load(&config, RuntimeEnv::new()).await.unwrap_err();
+    assert!(err.to_string().contains("not declared"));
+    config.model_base_url_envs[0].0 = "m".into();
+
+    let upstream = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    let upstream_router = axum::Router::new().route(
+        "/private-check/v1/chat/completions",
+        axum::routing::post(|| async {
+            axum::Json(json!({
+                "id": "custom-endpoint-test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "test-model",
+                "choices": [{
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "[[ ## answer ## ]]\n42\n\n[[ ## completed ## ]]"}
+                }],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+            }))
+        }),
+    );
+    tokio::spawn(async move { axum::serve(upstream, upstream_router).await.unwrap() });
+
+    let url = format!("http://{upstream_addr}/private-check/v1");
+    let app = temp_env::async_with_vars(
+        [(URL_VAR, Some(url.as_str()))],
+        serve::load(&config, RuntimeEnv::new()),
+    )
+    .await
+    .expect("host-owned model URL loads without artifact allowlist");
+    assert!(!app.program().to_dsrs().contains("private-check"));
+    let addr = spawn_server(app).await;
+    let response = authorized_client()
+        .post(format!("http://{addr}/run"))
+        .json(&json!({"question": "meaning?"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["output"]["answer"], "42");
+}
+
 const TEST_TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
 fn authorized_client() -> reqwest::Client {
@@ -216,6 +288,7 @@ async fn serve_end_to_end_on_an_ephemeral_port() {
         overlay: None,
         allow: vec![],
         allowed_model_base_urls: vec![],
+        model_base_url_envs: vec![],
         auth_token: Some(TEST_TOKEN.to_string()),
     };
     let app = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
@@ -419,6 +492,7 @@ async fn serve_applies_a_named_overlay() {
         overlay: Some(overlay_path),
         allow: vec![],
         allowed_model_base_urls: vec![],
+        model_base_url_envs: vec![],
         auth_token: Some(TEST_TOKEN.to_string()),
     };
     let app = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
@@ -475,6 +549,7 @@ main: Main = seq {
         overlay: None,
         allow: vec![],
         allowed_model_base_urls: vec![],
+        model_base_url_envs: vec![],
         auth_token: Some(TEST_TOKEN.to_string()),
     };
     let err = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
@@ -489,6 +564,7 @@ main: Main = seq {
         overlay: None,
         allow: vec!["net:probe".to_string()],
         allowed_model_base_urls: vec![],
+        model_base_url_envs: vec![],
         auth_token: Some(TEST_TOKEN.to_string()),
     };
     serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
@@ -516,6 +592,7 @@ async fn serve_rejects_stale_overlays() {
         overlay: Some(overlay_path),
         allow: vec![],
         allowed_model_base_urls: vec![],
+        model_base_url_envs: vec![],
         auth_token: Some(TEST_TOKEN.to_string()),
     };
     let err = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))

@@ -151,8 +151,9 @@ impl ToolSet {
 /// optimizer can hash, diff, and mutate. The live half ([`LM`]) is built from
 /// it with [`LM::from_config`]. `api_key` is deliberately `#[serde(skip)]`:
 /// secrets never serialize, and on load the key is resolved from provider env
-/// vars at client initialization. Serialized `base_url` values keep only the
-/// endpoint origin so URL userinfo, paths, and queries cannot carry secrets.
+/// vars at client initialization. Serialized `base_url` values keep the
+/// endpoint origin and the public `/v1` API prefix. Other path segments and
+/// URL userinfo, queries, and fragments can carry secrets and are omitted.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Builder)]
 #[builder(finish_fn(vis = "", name = __internal_build))]
 pub struct LMConfig {
@@ -197,7 +198,9 @@ fn serialize_public_base_url<S>(url: &Option<String>, serializer: S) -> Result<S
 where
     S: serde::Serializer,
 {
-    url.as_deref().map(public_url_origin).serialize(serializer)
+    url.as_deref()
+        .map(public_model_base_url)
+        .serialize(serializer)
 }
 
 /// Keep the endpoint origin stable for trace identities.
@@ -215,8 +218,8 @@ pub(crate) fn url_origin(url: &str) -> String {
     }
 }
 
-/// Reject malformed URLs before writing an origin to a public artifact.
-pub(crate) fn public_url_origin(url: &str) -> String {
+/// Reject malformed URLs and retain only a fixed public API prefix in artifacts.
+pub(crate) fn public_model_base_url(url: &str) -> String {
     let has_scheme = url.contains("://");
     let parsed = if has_scheme {
         reqwest::Url::parse(url)
@@ -229,7 +232,10 @@ pub(crate) fn public_url_origin(url: &str) -> String {
     if parsed.host_str().is_none() {
         return "<invalid URL>".to_string();
     }
-    let origin = parsed.origin().ascii_serialization();
+    let mut origin = parsed.origin().ascii_serialization();
+    if matches!(parsed.path(), "/v1" | "/v1/") {
+        origin.push_str(parsed.path());
+    }
     if has_scheme {
         origin
     } else {
