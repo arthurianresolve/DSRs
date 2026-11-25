@@ -36,6 +36,7 @@ static FLEXIBLE_FIELD_HEADER_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\[\[\s*##\s*([^#]+?)\s*##\s*\]\]").unwrap());
 
 const INPUT_RENDER_TEMPLATE_NAME: &str = "__input_field__";
+const INPUT_RENDER_FUEL: u64 = 10_000;
 
 #[derive(Default)]
 struct InputTemplate {
@@ -130,6 +131,7 @@ fn truncate_filter(
 
 fn build_input_render_environment<'source>() -> minijinja::Environment<'source> {
     let mut env = minijinja::Environment::new();
+    env.set_fuel(Some(INPUT_RENDER_FUEL));
     env.set_formatter(|output, state, value| {
         let value = if value.is_none() {
             &MiniJinjaValue::from("null")

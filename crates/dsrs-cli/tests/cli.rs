@@ -380,11 +380,23 @@ async fn serve_limits_authenticated_request_rate() {
 }
 
 #[tokio::test]
-async fn non_loopback_bind_requires_operator_token() {
+async fn non_loopback_bind_is_refused_even_with_operator_token() {
     let err = serve::serve(&ServeConfig::default(), "0.0.0.0", 0)
         .await
         .unwrap_err();
-    assert!(err.to_string().contains("DSRS_AUTH_TOKEN"));
+    assert!(err.to_string().contains("loopback"));
+
+    let config = ServeConfig {
+        auth_token: Some(TEST_TOKEN.to_string()),
+        ..ServeConfig::default()
+    };
+    let err = serve::serve(&config, "0.0.0.0", 0).await.unwrap_err();
+    assert!(err.to_string().contains("loopback"));
+    let err = serve::serve(&config, "::", 0).await.unwrap_err();
+    assert!(err.to_string().contains("loopback"));
+
+    let err = serve::serve(&config, "127.0.0.1", 0).await.unwrap_err();
+    assert!(err.to_string().contains("failed to read"));
 }
 
 #[tokio::test]

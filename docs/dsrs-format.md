@@ -43,6 +43,11 @@ lineage { optimizer "…" trainset "…" budget "…" parent "…" date "…" } 
 main: <MainSig> = seq { … }                      // the program body; always a seq
 ````
 
+Canonical program export keeps only the scheme, host, and port of a model
+`base_url`. URL userinfo, paths, queries, and fragments are omitted from exported
+text and `LMConfig` JSON. A custom endpoint path therefore does not survive
+export and reload; keep provider credentials in environment variables.
+
 **Types**: `string` `int` `float` `bool` · `Name` (class/enum) · `"lit"` (literal) · `T[]` (list) · `T?` (optional) · `map<T>` (string-keyed map) · `A | B` (union) · `(A | B)[]` (group). 
 
 Constraint expressions are limited to 1024 bytes and predicate operations:

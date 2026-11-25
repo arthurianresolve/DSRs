@@ -250,18 +250,25 @@ pub fn router(app: Arc<App>) -> Router {
 /// Loads and serves until the process ends. Prints the bound address on
 /// stderr (port 0 binds an ephemeral port).
 pub async fn serve(config: &ServeConfig, host: &str, port: u16) -> anyhow::Result<()> {
-    if config.auth_token.is_none()
-        && !host
-            .parse::<IpAddr>()
-            .is_ok_and(|address| address.is_loopback())
+    if !host
+        .parse::<IpAddr>()
+        .is_ok_and(|address| address.is_loopback())
+        && !host.eq_ignore_ascii_case("localhost")
     {
-        anyhow::bail!("DSRS_AUTH_TOKEN is required when binding beyond loopback");
+        anyhow::bail!(
+            "plain HTTP serving is limited to loopback; use a TLS reverse proxy for remote access"
+        );
     }
     let app = load(config, dspy_rs::ir::RuntimeEnv::new()).await?;
     let listener = tokio::net::TcpListener::bind((host, port))
         .await
         .with_context(|| format!("failed to bind {host}:{port}"))?;
     let addr = listener.local_addr()?;
+    if !addr.ip().is_loopback() {
+        anyhow::bail!(
+            "plain HTTP serving is limited to loopback; use a TLS reverse proxy for remote access"
+        );
+    }
     eprintln!(
         "dsrs: serving `{}` ({:016x}) at http://{addr}",
         app.program().meta.name,

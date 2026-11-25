@@ -151,7 +151,8 @@ impl ToolSet {
 /// optimizer can hash, diff, and mutate. The live half ([`LM`]) is built from
 /// it with [`LM::from_config`]. `api_key` is deliberately `#[serde(skip)]`:
 /// secrets never serialize, and on load the key is resolved from provider env
-/// vars at client initialization.
+/// vars at client initialization. Serialized `base_url` values keep only the
+/// endpoint origin so URL userinfo, paths, and queries cannot carry secrets.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Builder)]
 #[builder(finish_fn(vis = "", name = __internal_build))]
 pub struct LMConfig {
@@ -163,6 +164,7 @@ pub struct LMConfig {
     )]
     #[builder(default = true)]
     pub native_tools: bool,
+    #[serde(serialize_with = "serialize_public_base_url")]
     pub base_url: Option<String>,
     #[serde(skip)]
     pub api_key: Option<String>,
@@ -189,6 +191,53 @@ pub struct LMConfig {
     pub retry_base_delay_ms: u64,
     #[builder(default = false)]
     pub cache: bool,
+}
+
+fn serialize_public_base_url<S>(url: &Option<String>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    url.as_deref().map(public_url_origin).serialize(serializer)
+}
+
+/// Keep the endpoint origin stable for trace identities.
+pub(crate) fn url_origin(url: &str) -> String {
+    let (scheme, rest) = match url.split_once("://") {
+        Some((scheme, rest)) => (scheme, rest),
+        None => ("", url),
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    if scheme.is_empty() {
+        host.to_string()
+    } else {
+        format!("{scheme}://{host}")
+    }
+}
+
+/// Reject malformed URLs before writing an origin to a public artifact.
+pub(crate) fn public_url_origin(url: &str) -> String {
+    let has_scheme = url.contains("://");
+    let parsed = if has_scheme {
+        reqwest::Url::parse(url)
+    } else {
+        reqwest::Url::parse(&format!("http://{url}"))
+    };
+    let Ok(parsed) = parsed else {
+        return "<invalid URL>".to_string();
+    };
+    if parsed.host_str().is_none() {
+        return "<invalid URL>".to_string();
+    }
+    let origin = parsed.origin().ascii_serialization();
+    if has_scheme {
+        origin
+    } else {
+        origin
+            .strip_prefix("http://")
+            .unwrap_or("<invalid URL>")
+            .to_string()
+    }
 }
 
 /// Per-call structured output request. Unsupported clients ignore the schema and

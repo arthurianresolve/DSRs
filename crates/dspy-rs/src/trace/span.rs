@@ -12,6 +12,7 @@ use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::lm::url_origin;
 use crate::utils::hash::{HashWriter, StableHasher, stable_hash_debug};
 use crate::{LMConfig, LmUsage, Message};
 
@@ -207,23 +208,6 @@ impl ModelEntry {
         config.api_key = None;
         config.base_url = config.base_url.as_deref().map(url_origin);
         config
-    }
-}
-
-/// Reduces a URL to `scheme://host[:port]`, stripping userinfo, path, and query
-/// (vLLM tokens hide in query strings).
-fn url_origin(url: &str) -> String {
-    let (scheme, rest) = match url.split_once("://") {
-        Some((scheme, rest)) => (scheme, rest),
-        None => ("", url),
-    };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-    // Strip userinfo (`user:pass@host`).
-    let host = authority.rsplit('@').next().unwrap_or(authority);
-    if scheme.is_empty() {
-        host.to_string()
-    } else {
-        format!("{scheme}://{host}")
     }
 }
 

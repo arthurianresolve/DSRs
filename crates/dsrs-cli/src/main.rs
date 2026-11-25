@@ -35,8 +35,8 @@ enum Cmd {
         #[arg(long)]
         write: bool,
     },
-    /// Serve a .dsrs program over HTTP. Set DSRS_AUTH_TOKEN for a stable
-    /// bearer token; a random token is printed for loopback use.
+    /// Serve a .dsrs program over loopback HTTP. Use a TLS reverse proxy for
+    /// remote access. Set DSRS_AUTH_TOKEN for a stable bearer token.
     Serve {
         /// Path to the .dsrs artifact.
         program: PathBuf,

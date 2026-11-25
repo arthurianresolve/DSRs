@@ -45,6 +45,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use crate::LMConfig;
+use crate::core::lm::public_url_origin;
 use crate::ir::builder::cot_reasoning_field;
 use crate::ir::graph::{
     AgentLoopNode, Binding, HoleImpl, HoleNode, Node, NodeId, PortRef, PredictNode, Program, SigId,
@@ -874,7 +875,7 @@ fn model_opts(config: &LMConfig) -> Vec<String> {
     let default = LMConfig::default();
     let mut opts = Vec::new();
     if let Some(url) = &config.base_url {
-        opts.push(format!("base_url {}", json_str(url)));
+        opts.push(format!("base_url {}", json_str(&public_url_origin(url))));
     }
     if config.temperature != default.temperature {
         opts.push(format!("temperature {}", fmt_f32(config.temperature)));

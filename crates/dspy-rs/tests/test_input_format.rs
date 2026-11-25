@@ -115,6 +115,16 @@ struct RenderJinjaSumSig {
 }
 
 #[derive(Signature, Clone, Debug)]
+/// Render an input-dependent collection.
+struct RenderJinjaBoundedSig {
+    #[input]
+    #[render(jinja = "{% for value in this %}{% for _ in range(100) %}{% endfor %}{% endfor %}")]
+    values: Vec<i64>,
+    #[output]
+    answer: String,
+}
+
+#[derive(Signature, Clone, Debug)]
 /// Render using field metadata and vars context.
 struct RenderJinjaFieldMetaSig {
     #[input]
@@ -341,6 +351,24 @@ fn typed_input_render_jinja_sum_overflow_returns_error() {
         .try_format_input_def(SignatureDef::of::<RenderJinjaSumSig>(), &json_map(&input))
         .unwrap_err();
     assert!(format!("{err:#}").contains("sum overflow"), "{err:#}");
+}
+
+#[test]
+fn input_jinja_work_is_bounded_per_render() {
+    let small = RenderJinjaBoundedSigInput { values: vec![1, 2] };
+    assert!(user_message::<RenderJinjaBoundedSig>(&small).contains("[[ ## values ## ]]"));
+
+    let large = RenderJinjaBoundedSigInput {
+        values: vec![0; 1000],
+    };
+    let err = ChatAdapter
+        .try_format_input_def(
+            SignatureDef::of::<RenderJinjaBoundedSig>(),
+            &json_map(&large),
+        )
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("fuel"), "{err:#}");
+    assert!(user_message::<RenderJinjaBoundedSig>(&small).contains("[[ ## values ## ]]"));
 }
 
 #[test]

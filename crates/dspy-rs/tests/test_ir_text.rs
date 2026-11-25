@@ -28,6 +28,41 @@ fn model_config(name: &str) -> LMConfig {
 }
 
 #[test]
+fn canonical_model_url_omits_credentials_and_path() {
+    let mut program = qa_program();
+    program.models.values_mut().next().unwrap().config.base_url =
+        Some("https://user-check:password-check@model.example:8443/v1/private-check?token=secret-check#fragment-check".into());
+
+    let text = program.to_dsrs();
+    assert!(text.contains("base_url \"https://model.example:8443\""));
+    for secret in [
+        "user-check",
+        "password-check",
+        "private-check",
+        "secret-check",
+        "fragment-check",
+    ] {
+        assert!(
+            !text.contains(secret),
+            "{secret} leaked into canonical text"
+        );
+    }
+    assert_eq!(Program::from_dsrs(&text).unwrap().to_dsrs(), text);
+
+    program.models.values_mut().next().unwrap().config.base_url =
+        Some("https://%75ser:%70ass@model.example/v1?token=encoded-secret".into());
+    let text = program.to_dsrs();
+    assert!(text.contains("base_url \"https://model.example\""));
+    assert!(!text.contains("encoded-secret"));
+
+    program.models.values_mut().next().unwrap().config.base_url =
+        Some(r"https://model.example\private-secret?token=query-secret".into());
+    let text = program.to_dsrs();
+    assert!(!text.contains("private-secret"));
+    assert!(!text.contains("query-secret"));
+}
+
+#[test]
 fn recursive_class_is_rejected_without_recursing_forever() {
     let source = r#"dsrs 1
 program recursive

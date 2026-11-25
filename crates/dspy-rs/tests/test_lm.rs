@@ -41,6 +41,9 @@ async fn changing_cache_flag_after_build_does_not_silently_ignore_missing_featur
 fn lm_config_serializes_without_secrets() {
     let config = LMConfig {
         api_key: Some("sk-super-secret".to_string()),
+        base_url: Some(
+            "https://user-check:pass-check@model.example:8443/v1/private-check?token=secret-check#fragment-check".into(),
+        ),
         model: "openai:gpt-4o".to_string(),
         ..Default::default()
     };
@@ -48,12 +51,35 @@ fn lm_config_serializes_without_secrets() {
     let json = serde_json::to_string(&config).unwrap();
     assert!(!json.contains("sk-super-secret"));
     assert!(!json.contains("api_key"));
+    assert!(json.contains("https://model.example:8443"));
+    for secret in [
+        "user-check",
+        "pass-check",
+        "private-check",
+        "secret-check",
+        "fragment-check",
+    ] {
+        assert!(
+            !json.contains(secret),
+            "{secret} leaked into model config JSON"
+        );
+    }
 
     let restored: LMConfig = serde_json::from_str(&json).unwrap();
     assert_eq!(restored.api_key, None);
+    assert_eq!(
+        restored.base_url.as_deref(),
+        Some("https://model.example:8443")
+    );
     assert_eq!(restored.model, "openai:gpt-4o");
     assert_eq!(restored.temperature, config.temperature);
     assert_eq!(restored.max_tokens, config.max_tokens);
+
+    let mut invalid = config;
+    invalid.base_url = Some("https://user:pass@/v1?token=invalid-secret".into());
+    let json = serde_json::to_string(&invalid).unwrap();
+    assert!(!json.contains("invalid-secret"));
+    assert!(json.contains("<invalid URL>"));
 }
 
 #[tokio::test]
