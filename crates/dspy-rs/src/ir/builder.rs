@@ -809,25 +809,23 @@ impl ProgramBuilder {
         };
 
         // Tools first: their param slots exist regardless of node references.
-        for spec in &self.tool_specs {
+        for spec in self.tool_specs {
             let name_sym = lower.syms.intern(&spec.name);
             let tool_id = ToolId::new(lower.tools.len());
             let desc = lower.params.push(ParamSlot {
                 path: format!("tool.{}.desc", spec.name).into(),
                 owner: ParamOwner::Tool(tool_id),
                 kind: ParamKind::ToolDesc,
-                default: ParamValue::ToolDesc {
-                    text: spec.desc.clone(),
-                },
+                default: ParamValue::ToolDesc { text: spec.desc },
             });
-            let kind = match &spec.js {
+            let kind = match spec.js {
                 None => ToolKind::Host,
                 Some(js) => ToolKind::Sandboxed {
                     code: lower.params.push(ParamSlot {
                         path: format!("tool.{}.code", spec.name).into(),
                         owner: ParamOwner::Tool(tool_id),
                         kind: ParamKind::Code,
-                        default: ParamValue::code(CodeLang::Js, js.clone()),
+                        default: ParamValue::code(CodeLang::Js, js),
                     }),
                 },
             };
@@ -835,7 +833,7 @@ impl ProgramBuilder {
                 name: name_sym,
                 desc,
                 sig: spec.sig,
-                caps: spec.caps.clone(),
+                caps: spec.caps,
                 kind,
             });
         }
@@ -879,6 +877,17 @@ struct Lowering {
     single_model: Option<ModelId>,
 }
 
+fn signature_for_leaf<'a>(
+    sigs: &'a PrimaryMap<SigId, SignatureDef>,
+    sig: SigId,
+    name: &str,
+) -> Result<&'a SignatureDef, ValidateError> {
+    sigs.get(sig).ok_or_else(|| ValidateError::IdOutOfRange {
+        at: name.to_owned(),
+        what: sig.to_string(),
+    })
+}
+
 impl Lowering {
     fn lower(
         &mut self,
@@ -897,7 +906,8 @@ impl Lowering {
                 binds,
             } => {
                 let sig = if cot {
-                    let augmented = sigs[sig].augmented_with(&[cot_reasoning_field()]);
+                    let augmented = signature_for_leaf(sigs, sig, &name)?
+                        .augmented_with(&[cot_reasoning_field()]);
                     sigs.push(augmented)
                 } else {
                     sig
@@ -907,8 +917,12 @@ impl Lowering {
                 let model = model
                     .or(self.single_model)
                     .ok_or_else(|| BuildError::MissingModel { at: name.clone() })?;
-                let instruction_text =
-                    instruction.unwrap_or_else(|| sigs[sig].instruction.to_string());
+                let instruction_text = match instruction {
+                    Some(text) => text,
+                    None => signature_for_leaf(sigs, sig, &name)?
+                        .instruction
+                        .to_string(),
+                };
                 let instruction = self.leaf_param(
                     &name,
                     "instruction",
@@ -962,8 +976,12 @@ impl Lowering {
                 let model = model
                     .or(self.single_model)
                     .ok_or_else(|| BuildError::MissingModel { at: name.clone() })?;
-                let instruction_text =
-                    instruction.unwrap_or_else(|| sigs[sig].instruction.to_string());
+                let instruction_text = match instruction {
+                    Some(text) => text,
+                    None => signature_for_leaf(sigs, sig, &name)?
+                        .instruction
+                        .to_string(),
+                };
                 let instruction = self.leaf_param(
                     &name,
                     "instruction",

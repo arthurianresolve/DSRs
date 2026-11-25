@@ -26,3 +26,22 @@ fn parity_accepts_everything_the_full_parser_accepts() {
         "expected the golden .dsrs fixtures, found {seen}"
     );
 }
+#[test]
+fn raw_region_offsets_preserve_crlf_and_byte_columns() {
+    use dsrs_syntax::lex::{Lexer, Span, Tok};
+
+    let source = "````\r\n// café\r\n```\r\n````\r\n{\r\n\"文字\": [1]\r\n}\tname";
+    let mut lexer = Lexer::new(source);
+    let opener = lexer.next_token().unwrap();
+    let (body, end) = lexer.scan_code_fence(opener.start).unwrap();
+    assert_eq!(body, "// café\r\n```");
+    let brace = lexer.resume_at(end).unwrap();
+    assert_eq!(brace.tok, Tok::LBrace);
+    assert_eq!(brace.span, Span { line: 5, col: 1 });
+
+    let (_, end) = lexer.scan_json(brace.start).unwrap();
+    let name = lexer.resume_at(end).unwrap();
+    assert_eq!(name.tok, Tok::Ident("name".into()));
+    assert_eq!(name.span, Span { line: 7, col: 3 });
+    assert_eq!(lexer.resume_at(brace.start).unwrap().span, brace.span);
+}

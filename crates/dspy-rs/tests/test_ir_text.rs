@@ -46,6 +46,93 @@ main: Main = seq {
     assert!(err.to_string().contains("recursive class"), "{err}");
 }
 
+#[test]
+fn nested_fields_resolve_forward_enum_references() {
+    let source = r#"dsrs 1
+program nested_enums
+model m = "openai:gpt-4o-mini"
+class Report { levels: Severity[]? previous: Shared }
+class Shared { text: string }
+enum Severity { Low alias "minor" High }
+enum Shared { Other }
+sig Main { in question: string out report: Report out kind: Shared }
+main: Main = seq {
+  result = predict Main (question = $.question)
+  out { report = result.report, kind = result.kind }
+}
+"#;
+    let program = Program::from_dsrs(source).unwrap();
+    let fields = &program.types.classes["Report"].fields;
+    assert_eq!(
+        fields[0].field_type,
+        T::optional(T::List(Box::new(T::Enum("Severity".into()))))
+    );
+    assert_eq!(fields[1].field_type, T::Class("Shared".into()));
+    assert_eq!(
+        program.sigs[program.sig].outputs[1].ty,
+        T::Enum("Shared".into())
+    );
+    let schema =
+        dspy_rs::typesys::json_schema_for_outputs(&program.sigs[program.sig], &program.types);
+    assert_eq!(schema["$defs"]["Severity"]["enum"][0], "minor");
+    let reloaded = Program::from_dsrs(&program.to_dsrs()).unwrap();
+    assert_eq!(reloaded.meta.program_hash, program.meta.program_hash);
+    assert_eq!(reloaded.types, program.types);
+}
+
+#[test]
+fn reused_class_must_fit_the_current_nesting_limit() {
+    use std::fmt::Write as _;
+
+    let mut source = String::from("dsrs 1\nprogram depth\nmodel m = \"openai:gpt-4o-mini\"\n");
+    for index in 0..64 {
+        writeln!(
+            &mut source,
+            "class Chain{index} {{ next: Chain{} }}",
+            index + 1
+        )
+        .unwrap();
+    }
+    source.push_str(
+        "class Chain64 { data: string }\n\
+         sig Main { in question: string out shallow: Chain1 out deep: Chain0 }\n\
+         main: Main = seq {\n\
+          result = predict Main (question = $.question)\n\
+          out { shallow = result.shallow, deep = result.deep }\n\
+         }\n",
+    );
+    let error = Program::from_dsrs(&source).unwrap_err();
+    assert!(
+        error.message.contains("exceeds the class nesting limit"),
+        "{error}"
+    );
+}
+
+#[test]
+fn invalid_program_output_points_to_the_root_export() {
+    let source = r#"dsrs 1
+program output_diagnostic
+model m = "openai:gpt-4o-mini"
+sig Main { in question: string out answer: string }
+sig Score { in question: string out answer: int }
+main: Main = seq {
+  nested = seq {
+    score = predict Score (question = $.question)
+    out { answer = score.answer }
+  }
+  out { answer = nested.answer }
+}
+"#;
+    let error = Program::from_dsrs(source).unwrap_err();
+    assert!(error.message.contains("answer"), "{error}");
+    assert_eq!((error.line, error.col), (11, 9));
+
+    let missing = source.replace("answer = nested.answer", "other = nested.answer");
+    let error = Program::from_dsrs(&missing).unwrap_err();
+    assert!(error.message.contains("answer"), "{error}");
+    assert_eq!((error.line, error.col), (6, 14));
+}
+
 /// The RFC §4.3 worked example, builder frontend — must equal the parsed
 /// `qa.dsrs` golden fixture (same canonical print, same hash).
 fn qa_program() -> Program {

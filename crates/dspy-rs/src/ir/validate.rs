@@ -401,9 +401,17 @@ impl<'p> Validator<'p> {
     /// What the derive rejects, the loader rejects: every Class/Enum token in
     /// every signature must resolve against the program's type table.
     fn check_sigs(&self) -> Result<(), ValidateError> {
+        let mut stack = Vec::new();
+        let mut class_heights = vec![0; self.p.types.classes.len()];
         for (_, sig) in self.p.sigs.iter() {
             for field in sig.inputs.iter().chain(sig.outputs.iter()) {
-                check_tokens(&sig.name, &field.ty, &self.p.types)?;
+                check_tokens(
+                    &sig.name,
+                    &field.ty,
+                    &self.p.types,
+                    &mut stack,
+                    &mut class_heights,
+                )?;
             }
         }
         Ok(())
@@ -973,21 +981,20 @@ pub(crate) fn compat(src: &FieldType, dst: &FieldType) -> bool {
     }
 }
 
-fn check_tokens(sig: &str, ty: &FieldType, types: &TypeTable) -> Result<(), ValidateError> {
-    check_tokens_inner(sig, ty, types, &mut Vec::new())
-}
-
 const MAX_CLASS_DEPTH: usize = 64;
 
-fn check_tokens_inner(
+/// Returns the maximum number of nested classes under this type. A fully
+/// checked class can be reused if its height fits the current path.
+fn check_tokens<'a>(
     sig: &str,
-    ty: &FieldType,
-    types: &TypeTable,
-    stack: &mut Vec<String>,
-) -> Result<(), ValidateError> {
+    ty: &'a FieldType,
+    types: &'a TypeTable,
+    stack: &mut Vec<&'a str>,
+    class_heights: &mut [usize],
+) -> Result<usize, ValidateError> {
     match ty {
         FieldType::Class(token) => {
-            if stack.contains(token) {
+            if stack.contains(&token.as_str()) {
                 return Err(ValidateError::RecursiveType {
                     sig: sig.to_string(),
                     token: token.clone(),
@@ -998,41 +1005,58 @@ fn check_tokens_inner(
                     sig: sig.to_string(),
                 });
             }
-            let def = types
-                .classes
-                .get(token)
-                .ok_or_else(|| ValidateError::UnknownTypeToken {
-                    sig: sig.to_string(),
-                    token: token.clone(),
-                })?;
-            stack.push(token.clone());
+            let (index, _, def) =
+                types
+                    .classes
+                    .get_full(token)
+                    .ok_or_else(|| ValidateError::UnknownTypeToken {
+                        sig: sig.to_string(),
+                        token: token.clone(),
+                    })?;
+            let cached_height = class_heights[index];
+            if cached_height != 0 {
+                if cached_height > MAX_CLASS_DEPTH - stack.len() {
+                    return Err(ValidateError::TypeNestingExceeded {
+                        sig: sig.to_string(),
+                    });
+                }
+                return Ok(cached_height);
+            }
+            stack.push(token);
+            let mut child_height = 0;
             for field in &def.fields {
-                check_tokens_inner(sig, &field.field_type, types, stack)?;
+                child_height = child_height.max(check_tokens(
+                    sig,
+                    &field.field_type,
+                    types,
+                    stack,
+                    class_heights,
+                )?);
             }
             stack.pop();
-            Ok(())
+            let height = child_height + 1;
+            class_heights[index] = height;
+            Ok(height)
         }
         FieldType::Enum(token) => {
             types
                 .enums
                 .get(token)
-                .map(|_| ())
+                .map(|_| 0)
                 .ok_or_else(|| ValidateError::UnknownTypeToken {
                     sig: sig.to_string(),
                     token: token.clone(),
                 })
         }
         FieldType::List(inner) | FieldType::Optional(inner) => {
-            check_tokens_inner(sig, inner, types, stack)
+            check_tokens(sig, inner, types, stack, class_heights)
         }
-        FieldType::Map(key, value) => {
-            check_tokens_inner(sig, key, types, stack)?;
-            check_tokens_inner(sig, value, types, stack)
-        }
-        FieldType::Union(items) => items
-            .iter()
-            .try_for_each(|i| check_tokens_inner(sig, i, types, stack)),
-        _ => Ok(()),
+        FieldType::Map(key, value) => Ok(check_tokens(sig, key, types, stack, class_heights)?
+            .max(check_tokens(sig, value, types, stack, class_heights)?)),
+        FieldType::Union(items) => items.iter().try_fold(0, |height, item| {
+            Ok(height.max(check_tokens(sig, item, types, stack, class_heights)?))
+        }),
+        _ => Ok(0),
     }
 }
 

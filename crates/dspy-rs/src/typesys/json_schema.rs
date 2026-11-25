@@ -1,5 +1,7 @@
 //! Provider-native JSON Schema projection from the owned signature IR.
 
+use std::collections::HashSet;
+
 use serde_json::{Map, Value, json};
 
 use crate::ir::SignatureDef;
@@ -35,16 +37,20 @@ pub fn json_schema_for_outputs(def: &SignatureDef, types: &TypeTable) -> Value {
     Value::Object(root)
 }
 
-/// Whether this signature fits the JSON Schema subset accepted by providers. JSON object
-/// keys are strings, so a map with a non-string key must stay on delimiter output.
+/// Whether this signature fits the strict JSON Schema subset accepted by providers.
+/// Open maps use JSON mode or delimiter output.
 pub fn json_schema_compatible(def: &SignatureDef, types: &TypeTable) -> bool {
-    let mut visited = Vec::new();
+    let mut visited = None;
     def.outputs
         .iter()
         .all(|field| compatible_type(&field.ty, types, &mut visited))
 }
 
-fn compatible_type(ty: &FieldType, types: &TypeTable, visited: &mut Vec<String>) -> bool {
+fn compatible_type<'a>(
+    ty: &'a FieldType,
+    types: &'a TypeTable,
+    visited: &mut Option<HashSet<&'a str>>,
+) -> bool {
     match ty {
         // Open maps are not valid in providers' strict schema subset. Keep them
         // open by selecting JSON mode or delimiter output instead of closing them.
@@ -55,36 +61,33 @@ fn compatible_type(ty: &FieldType, types: &TypeTable, visited: &mut Vec<String>)
         FieldType::Union(items) => items
             .iter()
             .all(|item| compatible_type(item, types, visited)),
-        FieldType::Class(name) if !visited.contains(name) => {
-            visited.push(name.clone());
-            let ok = types.classes.get(name).is_none_or(|class| {
+        FieldType::Class(name) if visited.get_or_insert_with(HashSet::new).insert(name) => {
+            types.classes.get(name).is_none_or(|class| {
                 class
                     .fields
                     .iter()
                     .all(|field| compatible_type(&field.field_type, types, visited))
-            });
-            visited.pop();
-            ok
+            })
         }
         _ => true,
     }
 }
 
-fn collect_defs(
-    ty: &FieldType,
-    types: &TypeTable,
+fn collect_defs<'a>(
+    ty: &'a FieldType,
+    types: &'a TypeTable,
     defs: &mut Map<String, Value>,
-    visiting: &mut Vec<String>,
+    visiting: &mut Vec<&'a str>,
 ) {
     match ty {
         FieldType::Class(name) if !defs.contains_key(name) => {
             let Some(class) = types.classes.get(name) else {
                 return;
             };
-            if visiting.contains(name) {
+            if visiting.contains(&name.as_str()) {
                 return;
             }
-            visiting.push(name.clone());
+            visiting.push(name);
             let mut properties = Map::new();
             let mut required = Vec::new();
             for field in &class.fields {
@@ -183,27 +186,40 @@ pub fn canonicalize_output_aliases(value: Value, def: &SignatureDef, types: &Typ
 
 /// Rewrites canonical output keys to LM-facing names in few-shot JSON examples.
 pub fn alias_output_fields(value: Value, def: &SignatureDef, types: &TypeTable) -> Value {
-    let fields = def
-        .outputs
-        .iter()
-        .map(|f| (f.name.as_ref(), f.lm_name.as_ref(), &f.ty))
-        .collect::<Vec<_>>();
-    alias_object(value, &fields, types)
-}
-
-fn alias_object(value: Value, fields: &[(&str, &str, &FieldType)], types: &TypeTable) -> Value {
     let Value::Object(input) = value else {
         return value;
     };
+    Value::Object(alias_object(
+        input,
+        def.outputs
+            .iter()
+            .map(|f| (f.name.as_ref(), f.lm_name.as_ref(), &f.ty)),
+        types,
+    ))
+}
+
+fn alias_object<'a>(
+    mut input: Map<String, Value>,
+    fields: impl ExactSizeIterator<Item = (&'a str, &'a str, &'a FieldType)>,
+    types: &TypeTable,
+) -> Map<String, Value> {
+    let single = fields.len() == 1;
     let mut out = Map::new();
     for (canonical, lm, ty) in fields {
-        let Some(mut item) = input.get(*canonical).or_else(|| input.get(*lm)).cloned() else {
+        let selected = if single {
+            input
+                .swap_remove(canonical)
+                .or_else(|| input.swap_remove(lm))
+        } else {
+            input.get(canonical).or_else(|| input.get(lm)).cloned()
+        };
+        let Some(mut item) = selected else {
             continue;
         };
         alias_nested(&mut item, ty, types);
-        out.insert((*lm).into(), item);
+        out.insert(lm.into(), item);
     }
-    Value::Object(out)
+    out
 }
 
 fn alias_nested(value: &mut Value, ty: &FieldType, types: &TypeTable) {
@@ -217,16 +233,17 @@ fn alias_nested(value: &mut Value, ty: &FieldType, types: &TypeTable) {
             }
         }
         FieldType::Class(name) => {
-            if let Some(class) = types.classes.get(name) {
-                if let Some(input) = value.as_object() {
-                    let input = input.clone();
-                    let fields = class
+            if let Some(class) = types.classes.get(name)
+                && let Value::Object(input) = value
+            {
+                *input = alias_object(
+                    std::mem::take(input),
+                    class
                         .fields
                         .iter()
-                        .map(|f| (f.name.as_str(), f.rendered_name.as_str(), &f.field_type))
-                        .collect::<Vec<_>>();
-                    *value = alias_object(Value::Object(input), &fields, types);
-                }
+                        .map(|f| (f.name.as_str(), f.rendered_name.as_str(), &f.field_type)),
+                    types,
+                );
             }
         }
         FieldType::Map(_, item) => {
@@ -462,6 +479,29 @@ mod tests {
         assert_eq!(
             alias_output_fields(json!({"root":{"label":"x","next":null}}), &def, &types)["tree"]["label_alias"],
             "x"
+        );
+    }
+
+    #[test]
+    fn demo_aliases_can_share_the_same_source_key() {
+        let def = SignatureDef::build("Out")
+            .input("seed", FieldType::String)
+            .output_full(IrFieldDef::new("first", FieldType::String).aliased("second"))
+            .output_full(IrFieldDef::new("second", FieldType::String).aliased("third"))
+            .finish()
+            .unwrap();
+        let types = TypeTable::default();
+        assert_eq!(
+            alias_output_fields(json!({"second": "shared"}), &def, &types),
+            json!({"second": "shared", "third": "shared"})
+        );
+        assert_eq!(
+            alias_output_fields(
+                json!({"first": "canonical", "second": "shared"}),
+                &def,
+                &types
+            ),
+            json!({"second": "canonical", "third": "shared"})
         );
     }
 

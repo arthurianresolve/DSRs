@@ -20,6 +20,37 @@ fn model_config(name: &str) -> LMConfig {
     }
 }
 
+#[test]
+fn unresolved_leaf_signatures_return_a_build_error() {
+    let signature = || {
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap()
+    };
+    let mut other = ProgramBuilder::new("other");
+    other.sig(signature());
+    let foreign = other.sig(signature());
+
+    for leaf in [
+        ir::predict("leaf", foreign),
+        ir::cot("leaf", foreign),
+        ir::agent("leaf", foreign),
+    ] {
+        let mut builder = ProgramBuilder::new("unresolved");
+        builder.model("m", model_config("openai:gpt-4o-mini"));
+        let main = builder.sig(signature());
+        let root = ir::seq([leaf.bind("question", ir::input("question"))])
+            .out("answer", ir::out("leaf", "answer"));
+        let error = builder.main(main, root).unwrap_err();
+        assert!(
+            matches!(&error, BuildError::Invalid(ValidateError::IdOutOfRange { at, .. }) if at == "leaf"),
+            "{error}"
+        );
+    }
+}
+
 /// The RFC §4.3 worked example: CoT draft → tool-using agent loop → typed hole.
 fn qa_program() -> Program {
     let mut b = ProgramBuilder::new("qa");

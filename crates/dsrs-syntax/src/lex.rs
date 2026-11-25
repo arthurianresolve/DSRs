@@ -163,20 +163,35 @@ impl<'a> Lexer<'a> {
         self.col = span.col;
     }
 
-    /// Line/col of an arbitrary byte offset (computed by rescanning; raw-mode
-    /// scans are rare, so this stays off every hot path).
+    /// Advances past a raw-mode scan and returns the next token.
+    pub fn resume_at(&mut self, pos: usize) -> Result<Lexed, ParseError> {
+        let pos = pos.min(self.bytes.len());
+        let span = match self.bytes.get(self.pos..pos) {
+            Some(bytes) => Self::advance_span(self.span(), bytes),
+            None => self.span_at(pos),
+        };
+        self.seek(pos, span);
+        self.next_token()
+    }
+
+    /// Line/col of an arbitrary byte offset.
     pub fn span_at(&self, pos: usize) -> Span {
-        let mut line = 1u32;
-        let mut col = 1u32;
-        for &b in &self.bytes[..pos.min(self.bytes.len())] {
+        Self::advance_span(
+            Span { line: 1, col: 1 },
+            &self.bytes[..pos.min(self.bytes.len())],
+        )
+    }
+
+    fn advance_span(mut span: Span, bytes: &[u8]) -> Span {
+        for &b in bytes {
             if b == b'\n' {
-                line += 1;
-                col = 1;
+                span.line += 1;
+                span.col = 1;
             } else {
-                col += 1;
+                span.col += 1;
             }
         }
-        Span { line, col }
+        span
     }
 
     pub fn next_token(&mut self) -> Result<Lexed, ParseError> {
@@ -387,7 +402,14 @@ impl<'a> Lexer<'a> {
     /// including) the newline that precedes a line consisting of exactly `k`
     /// backticks and nothing else.
     pub fn scan_code_fence(&self, from: usize) -> Result<(String, usize), ParseError> {
-        let span = self.span_at(from);
+        let (body, end) = self.code_fence_bounds(from)?;
+        Ok((self.src[body].to_owned(), end))
+    }
+
+    pub(crate) fn code_fence_bounds(
+        &self,
+        from: usize,
+    ) -> Result<(std::ops::Range<usize>, usize), ParseError> {
         let bytes = self.bytes;
         let mut i = from;
         let mut ticks = 0usize;
@@ -397,7 +419,7 @@ impl<'a> Lexer<'a> {
         }
         if ticks < 3 {
             return Err(ParseError::at(
-                span,
+                self.span_at(from),
                 "expected a code fence of at least three backticks (```) after `js`",
             ));
         }
@@ -406,14 +428,14 @@ impl<'a> Lexer<'a> {
         }
         if bytes.get(i) != Some(&b'\n') {
             return Err(ParseError::at(
-                span,
+                self.span_at(from),
                 "the opening code fence must be followed by a newline",
             ));
         }
         i += 1;
         let body_start = i;
         // Find a line that is exactly `ticks` backticks.
-        let fence = vec![b'`'; ticks];
+        let fence = &bytes[from..from + ticks];
         let mut line_start = i;
         loop {
             let line_end = bytes[line_start..]
@@ -428,7 +450,7 @@ impl<'a> Lexer<'a> {
             if trimmed_end > line_start && bytes[trimmed_end - 1] == b'\r' {
                 trimmed_end -= 1;
             }
-            if &bytes[line_start..trimmed_end] == fence.as_slice() {
+            if &bytes[line_start..trimmed_end] == fence {
                 // Source ends before the newline that precedes the fence line.
                 let mut src_end = line_start;
                 if src_end > body_start && bytes[src_end - 1] == b'\n' {
@@ -437,12 +459,11 @@ impl<'a> Lexer<'a> {
                         src_end -= 1;
                     }
                 }
-                let source = self.src[body_start..src_end].to_string();
-                return Ok((source, next_line));
+                return Ok((body_start..src_end, next_line));
             }
             if line_end.is_none() {
                 return Err(ParseError::at(
-                    span,
+                    self.span_at(from),
                     format!(
                         "unterminated code block: no closing fence of {ticks} backticks on its own line"
                     ),
@@ -455,13 +476,15 @@ impl<'a> Lexer<'a> {
     /// Scans one raw JSON value starting at byte `from`. Returns the parsed
     /// value and the byte offset one past its end.
     pub fn scan_json(&self, from: usize) -> Result<(serde_json::Value, usize), ParseError> {
-        let span = self.span_at(from);
         let rest = &self.src[from..];
         let mut de = serde_json::Deserializer::from_str(rest).into_iter::<serde_json::Value>();
         match de.next() {
             Some(Ok(value)) => Ok((value, from + de.byte_offset())),
-            Some(Err(e)) => Err(ParseError::at(span, format!("invalid JSON: {e}"))),
-            None => Err(ParseError::at(span, "expected a JSON value")),
+            Some(Err(e)) => Err(ParseError::at(
+                self.span_at(from),
+                format!("invalid JSON: {e}"),
+            )),
+            None => Err(ParseError::at(self.span_at(from), "expected a JSON value")),
         }
     }
 }

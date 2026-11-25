@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dsrs_tools::{
-    Capability, ExecError, Executor, QuickJsExecutor, RegisterError, ToolInvocation, ToolSource,
+    Capability, ExecError, Executor, QuickJsExecutor, RegisterError, SandboxConfig, ToolInvocation,
+    ToolSource, run_script,
 };
 use serde_json::{Value, json};
 
@@ -42,6 +43,33 @@ async fn happy_path_register_and_execute() {
         .await
         .expect("execute");
     assert_eq!(result, json!(42));
+}
+
+#[tokio::test]
+async fn unrepresentable_deadline_returns_an_error_on_each_entry_point() {
+    let config = SandboxConfig {
+        deadline: Duration::MAX,
+        ..SandboxConfig::default()
+    };
+    let executor = QuickJsExecutor::with_config(config);
+    let invocation = || ToolInvocation::new("add", json!({"x": 1, "y": 2}));
+    let error = executor.register(add_tool()).await.unwrap_err();
+    assert!(matches!(
+        error,
+        RegisterError::Execution(ExecError::Internal { .. })
+    ));
+    assert!(matches!(
+        executor.execute(invocation()).await,
+        Err(ExecError::Internal { .. })
+    ));
+    assert!(matches!(
+        run_script("return 1", vec![], config).await,
+        Err(ExecError::Internal { .. })
+    ));
+    let result = tokio::task::spawn_blocking(move || executor.execute_blocking(invocation()))
+        .await
+        .unwrap();
+    assert!(matches!(result, Err(ExecError::Internal { .. })));
 }
 
 #[tokio::test]

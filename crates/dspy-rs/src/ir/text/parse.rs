@@ -334,9 +334,7 @@ impl<'a> Parser<'a> {
 
     /// Re-syncs the token stream after a raw-mode scan ending at byte `end`.
     fn resync(&mut self, end: usize) -> Result<(), ParseError> {
-        let span = self.lx.span_at(end);
-        self.lx.seek(end, span);
-        self.cur = self.lx.next_token()?;
+        self.cur = self.lx.resume_at(end)?;
         Ok(())
     }
 
@@ -458,11 +456,19 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let maps = build_span_maps(&root_shadow);
         let builder = self.builder.take().expect("builder present");
-        let mut program = builder
-            .main(main_sig, root)
-            .map_err(|err| self.map_build_error(err, &maps, main_span))?;
+        let mut program = builder.main(main_sig, root).map_err(|err| {
+            if let BuildError::Invalid(ValidateError::ProgramOutputMissing { field }) = &err {
+                let span = root_shadow
+                    .binds
+                    .iter()
+                    .find(|(name, _)| name == field)
+                    .map_or(main_span, |(_, span)| *span);
+                return ParseError::at(span, err.to_string());
+            }
+            let maps = build_span_maps(&root_shadow);
+            self.map_build_error(err, &maps, main_span)
+        })?;
         program.meta.lineage = self.lineage.take();
         Ok(program)
     }
@@ -924,13 +930,29 @@ impl<'a> Parser<'a> {
     /// Resolves class↔enum tokens and registers signatures/tools with the
     /// builder in declaration order.
     fn register_sig_items(&mut self) -> Result<(), ParseError> {
-        let enums: HashSet<String> = self.types.enums.keys().cloned().collect();
+        let TypeTable { classes, enums } = &mut self.types;
+        // Class definitions may refer to enums declared later. When a class
+        // and an enum share a token, nested fields already resolve to the class.
+        let enum_only: HashSet<&str> = enums
+            .keys()
+            .filter(|token| !classes.contains_key(*token))
+            .map(String::as_str)
+            .collect();
+        if !enum_only.is_empty() {
+            for class in classes.values_mut() {
+                for field in &mut class.fields {
+                    fixup_type(&mut field.field_type, &|token| enum_only.contains(token));
+                }
+            }
+        }
+
+        let is_enum = |token: &str| self.types.enums.contains_key(token);
         let builder = self.builder.as_mut().expect("builder");
         builder.add_types(&self.types);
         for item in std::mem::take(&mut self.sig_items) {
             match item {
                 SigItem::Sig { mut def, span } => {
-                    fixup_sig(&mut def, &enums);
+                    fixup_sig(&mut def, &is_enum);
                     let name = def.name.to_string();
                     let id = builder.sig(def);
                     self.sigs.insert(name, id);
@@ -944,7 +966,7 @@ impl<'a> Parser<'a> {
                     js,
                     span,
                 } => {
-                    fixup_sig(&mut def, &enums);
+                    fixup_sig(&mut def, &is_enum);
                     let sig_id = builder.sig(def);
                     let cap_strs: Vec<&str> = caps.iter().map(|(c, _)| c.as_str()).collect();
                     let id = match js {
@@ -1911,23 +1933,17 @@ impl<'a> Parser<'a> {
                             .copied()
                     })
                     .or_else(|| at.and_then(|at| maps.at.get(at).copied()))
-                    .or_else(|| self.extra_validate_span(v, maps));
+                    .or_else(|| self.extra_validate_span(v));
                 (span, v.to_string())
             }
         };
         ParseError::at(span.unwrap_or(fallback), message)
     }
 
-    /// Fallback spans for validate errors that name types or program outputs
-    /// rather than nodes.
-    fn extra_validate_span(&self, v: &ValidateError, maps: &SpanMaps) -> Option<Span> {
+    /// Fallback spans for validation errors that name types or leaf names.
+    fn extra_validate_span(&self, v: &ValidateError) -> Option<Span> {
         match v {
             ValidateError::UnknownTypeToken { token, .. } => self.type_spans.get(token).copied(),
-            ValidateError::ProgramOutputMissing { field } => maps
-                .field
-                .iter()
-                .find(|((_, f), _)| f == field)
-                .map(|(_, span)| *span),
             ValidateError::DuplicateLeafName { name } => self.node_names.get(name).copied(),
             _ => None,
         }
@@ -1971,23 +1987,23 @@ fn validate_error_handles(v: &ValidateError) -> (Option<&str>, Option<(&str, &st
 
 /// Re-tags provisional `Class` tokens as `Enum` where the token names a
 /// declared enum (references parse before declarations are complete).
-fn fixup_sig(def: &mut SignatureDef, enums: &HashSet<String>) {
+fn fixup_sig(def: &mut SignatureDef, is_enum: &impl Fn(&str) -> bool) {
     for field in def.inputs.iter_mut().chain(def.outputs.iter_mut()) {
-        fixup_type(&mut field.ty, enums);
+        fixup_type(&mut field.ty, is_enum);
     }
 }
 
-fn fixup_type(ty: &mut FieldType, enums: &HashSet<String>) {
+fn fixup_type(ty: &mut FieldType, is_enum: &impl Fn(&str) -> bool) {
     match ty {
-        FieldType::Class(token) if enums.contains(token.as_str()) => {
+        FieldType::Class(token) if is_enum(token) => {
             *ty = FieldType::Enum(std::mem::take(token));
         }
-        FieldType::List(inner) | FieldType::Optional(inner) => fixup_type(inner, enums),
+        FieldType::List(inner) | FieldType::Optional(inner) => fixup_type(inner, is_enum),
         FieldType::Map(key, value) => {
-            fixup_type(key, enums);
-            fixup_type(value, enums);
+            fixup_type(key, is_enum);
+            fixup_type(value, is_enum);
         }
-        FieldType::Union(items) => items.iter_mut().for_each(|i| fixup_type(i, enums)),
+        FieldType::Union(items) => items.iter_mut().for_each(|i| fixup_type(i, is_enum)),
         _ => {}
     }
 }

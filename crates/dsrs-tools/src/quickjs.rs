@@ -310,12 +310,12 @@ impl QuickJsExecutor {
     /// Do not call this from inside an async task: it blocks the thread for
     /// the whole sandbox run.
     pub fn execute_blocking(&self, invocation: ToolInvocation) -> Result<Value, ExecError> {
-        let deadline = Instant::now() + self.config.deadline;
+        let deadline = sandbox_deadline(self.config.deadline)?;
         let (name, entry, args_json) = self.prepare(invocation)?;
         run_tool(
             &name,
             &entry.bytecode,
-            &args_json,
+            args_json,
             &self.snapshot_capabilities(),
             self.config,
             Handle::try_current().ok(),
@@ -417,7 +417,7 @@ impl QuickJsExecutor {
         invocation: ToolInvocation,
         capabilities: Vec<Capability>,
     ) -> Result<Value, ExecError> {
-        let deadline = Instant::now() + self.config.deadline;
+        let deadline = sandbox_deadline(self.config.deadline)?;
         let (name, entry, args_json) = self.prepare(invocation)?;
         let handle = current_handle()?;
         let config = self.config;
@@ -426,7 +426,7 @@ impl QuickJsExecutor {
             run_tool(
                 &name,
                 &entry.bytecode,
-                &args_json,
+                args_json,
                 &capabilities,
                 config,
                 Some(cap_handle),
@@ -592,7 +592,7 @@ pub async fn run_script(
     capabilities: Vec<Capability>,
     config: SandboxConfig,
 ) -> Result<Value, ExecError> {
-    let deadline = Instant::now() + config.deadline;
+    let deadline = sandbox_deadline(config.deadline)?;
     let handle = current_handle()?;
     let source = source.to_string();
     let cap_handle = handle.clone();
@@ -772,6 +772,14 @@ struct Sandbox {
     config: SandboxConfig,
 }
 
+fn sandbox_deadline(timeout: Duration) -> Result<Instant, ExecError> {
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| ExecError::Internal {
+            message: "sandbox deadline is out of range".to_owned(),
+        })
+}
+
 fn check_deadline(name: &str, sandbox: &Sandbox) -> Result<(), ExecError> {
     if Instant::now() < sandbox.deadline {
         return Ok(());
@@ -793,7 +801,7 @@ impl Sandbox {
             config,
             capabilities,
             handle,
-            Instant::now() + config.deadline,
+            sandbox_deadline(config.deadline)?,
         )
     }
 
@@ -1110,7 +1118,7 @@ fn run_validation(
 fn run_tool(
     tool_name: &str,
     bytecode: &[u8],
-    args_json: &str,
+    args_json: String,
     capabilities: &[Capability],
     config: SandboxConfig,
     handle: Option<Handle>,
@@ -1140,7 +1148,7 @@ fn run_tool(
         };
 
         let args = ctx
-            .json_parse(args_json.as_bytes().to_vec())
+            .json_parse(args_json)
             .catch(&ctx)
             .map_err(|caught| classify(tool_name, &caught, &sandbox))?;
 

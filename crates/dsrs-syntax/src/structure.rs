@@ -121,10 +121,8 @@ impl<'a> Checker<'a> {
     /// Skips a raw fence region; the current token must be the fence opener.
     fn skip_fence(&mut self) -> Result<(), ParseError> {
         debug_assert_eq!(self.cur.tok, Tok::Fence);
-        let (_, end) = self.lx.scan_code_fence(self.cur.start)?;
-        let span = self.lx.span_at(end);
-        self.lx.seek(end, span);
-        self.cur = self.lx.next_token()?;
+        let (_, end) = self.lx.code_fence_bounds(self.cur.start)?;
+        self.cur = self.lx.resume_at(end)?;
         Ok(())
     }
 
