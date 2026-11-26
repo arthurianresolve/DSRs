@@ -71,8 +71,28 @@ impl Program {
         })
     }
 
-    /// Writes the canonical `.dsrs` text form to `path`.
+    /// Writes the canonical `.dsrs` text form to `path`. Refuses to change a
+    /// model endpoint URL without an explicit redaction choice.
     pub fn save_dsrs(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
+        let changed = self.model_urls_changed_on_export();
+        if !changed.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "model base URL would change on export for {}: use \
+                     save_dsrs_with_redacted_model_urls to write a sanitized artifact",
+                    changed.join(", ")
+                ),
+            ));
+        }
+        self.save_dsrs_with_redacted_model_urls(path)
+    }
+
+    /// Writes the canonical text, explicitly allowing model URL redaction.
+    pub fn save_dsrs_with_redacted_model_urls(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> std::io::Result<()> {
         std::fs::write(path, self.to_dsrs())
     }
 }

@@ -86,6 +86,26 @@ fn canonical_model_url_round_trips_public_v1_prefix() {
 }
 
 #[test]
+fn save_dsrs_requires_explicit_model_url_redaction() {
+    let mut program = qa_program();
+    program.models.values_mut().next().unwrap().config.base_url =
+        Some("https://model.example/private-check/v1?token=secret-check".into());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("private-model-url.dsrs");
+
+    let err = program.save_dsrs(&path).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(!err.to_string().contains("private-check"));
+    assert!(!path.exists());
+
+    program.save_dsrs_with_redacted_model_urls(&path).unwrap();
+    let text = std::fs::read_to_string(path).unwrap();
+    assert!(text.contains("base_url \"https://model.example\""));
+    assert!(!text.contains("private-check"));
+    assert!(!text.contains("secret-check"));
+}
+
+#[test]
 fn recursive_class_is_rejected_without_recursing_forever() {
     let source = r#"dsrs 1
 program recursive

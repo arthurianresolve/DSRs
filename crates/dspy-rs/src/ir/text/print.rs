@@ -60,6 +60,24 @@ impl Program {
     pub fn to_dsrs(&self) -> String {
         canonical_text(self, true)
     }
+
+    /// Names of models whose endpoint URL would change during canonical export.
+    /// Callers can use this before writing an artifact that must remain runnable.
+    pub fn model_urls_changed_on_export(&self) -> Vec<String> {
+        self.models
+            .values()
+            .filter_map(|model| {
+                let url = model.config.base_url.as_deref()?;
+                let exported = public_model_base_url(url);
+                let unchanged = url == exported
+                    || matches!(
+                        (reqwest::Url::parse(url), reqwest::Url::parse(&exported)),
+                        (Ok(original), Ok(public)) if original == public
+                    );
+                (!unchanged).then(|| model.name.to_string())
+            })
+            .collect()
+    }
 }
 
 /// Canonical text; `include_lineage = false` yields the hash preimage

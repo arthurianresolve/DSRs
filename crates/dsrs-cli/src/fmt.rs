@@ -24,11 +24,29 @@ pub enum FmtOutcome {
 /// Parses `path` and canonically prints it. With `write`, rewrites the file
 /// in place (only when the bytes differ); otherwise returns the text.
 pub fn fmt_file(path: impl AsRef<Path>, write: bool) -> anyhow::Result<FmtOutcome> {
+    fmt_file_with_options(path, write, false)
+}
+
+/// Formats a file, explicitly allowing model URL redaction when requested.
+pub fn fmt_file_with_options(
+    path: impl AsRef<Path>,
+    write: bool,
+    redact_model_urls: bool,
+) -> anyhow::Result<FmtOutcome> {
     let path = path.as_ref();
     let program = Program::load_dsrs(path)?;
     let canonical = program.to_dsrs();
     if !write {
         return Ok(FmtOutcome::Canonical(canonical));
+    }
+    if !redact_model_urls {
+        let changed = program.model_urls_changed_on_export();
+        if !changed.is_empty() {
+            anyhow::bail!(
+                "model base URL would change on export for {}: pass --redact-model-urls to write a sanitized artifact",
+                changed.join(", ")
+            );
+        }
     }
     let original = std::fs::read_to_string(path)
         .with_context(|| format!("failed to re-read `{}`", path.display()))?;

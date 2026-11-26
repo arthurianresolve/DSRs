@@ -155,7 +155,7 @@ Lineage is a note stored in the file that says where this version came from: whi
 ### 3. Print the new version
 
 ```rust
-std::fs::write("qa-v2.dsrs", baked.to_dsrs())?;
+baked.save_dsrs("qa-v2.dsrs")?;
 ```
 
 The new file carries the baked values as its own defaults, plus a `lineage { ... }` block. It runs exactly like the old program plus the overlay, and you can check and serve it with the [CLI](/docs/components/cli) like any other program.

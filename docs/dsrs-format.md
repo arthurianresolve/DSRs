@@ -51,6 +51,11 @@ For a custom path, set a host environment variable with the full endpoint URL
 and run `dsrs serve` with `--model-base-url-env MODEL=ENV_VAR`. The variable's
 value is used only for the live model binding; it is never written into the
 program artifact or returned by `/program`.
+`dsrs fmt --write` and `Program::save_dsrs` refuse a write that would change a
+model URL. Pass `--redact-model-urls` to the formatter, or call
+`save_dsrs_with_redacted_model_urls`, when that redaction is intentional.
+`Program::to_dsrs` remains a sanitized text preview; callers writing its
+result directly can check `model_urls_changed_on_export` first.
 
 **Types**: `string` `int` `float` `bool` · `Name` (class/enum) · `"lit"` (literal) · `T[]` (list) · `T?` (optional) · `map<T>` (string-keyed map) · `A | B` (union) · `(A | B)[]` (group). 
 

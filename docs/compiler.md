@@ -19,7 +19,7 @@ let report = Compiler::default().compile(&program, |candidate| async move {
     // concurrency and tracing settings. Return observed quality and latency:
     evaluate_candidate(candidate).await // Result<CompilerMeasurement>
 }).await?;
-std::fs::write("optimized.dsrs", report.program.to_dsrs())?;
+report.program.save_dsrs("optimized.dsrs")?;
 ```
 
 `CompilerMeasurement` contains per-case quality scores (higher is better),

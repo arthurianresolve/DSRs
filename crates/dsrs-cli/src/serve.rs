@@ -63,9 +63,6 @@ pub struct ServeConfig {
     pub allow: Vec<String>,
     /// Exact artifact model URLs the operator permits at load.
     pub allowed_model_base_urls: Vec<String>,
-    /// Model name and environment variable holding a host-owned endpoint URL.
-    /// This restores custom paths without placing them in the artifact.
-    pub model_base_url_envs: Vec<(String, String)>,
     /// Optional operator token; a random token is generated when absent.
     pub auth_token: Option<String>,
 }
@@ -158,6 +155,16 @@ impl std::fmt::Debug for App {
 /// canned models. Grants from `config.allow` and a QuickJS sandbox (when none
 /// was supplied) are added here.
 pub async fn load(config: &ServeConfig, env: RuntimeEnv) -> anyhow::Result<Arc<App>> {
+    load_with_model_base_url_envs(config, env, &[]).await
+}
+
+/// Loads a serving app with explicit host-owned model URL environment bindings.
+/// `ServeConfig` stays compatible with existing struct literal construction.
+pub async fn load_with_model_base_url_envs(
+    config: &ServeConfig,
+    env: RuntimeEnv,
+    model_base_url_envs: &[(String, String)],
+) -> anyhow::Result<Arc<App>> {
     let auth_token = match &config.auth_token {
         Some(token) if token.len() >= 32 && token.bytes().all(|byte| byte.is_ascii_graphic()) => {
             token.clone()
@@ -213,7 +220,7 @@ pub async fn load(config: &ServeConfig, env: RuntimeEnv) -> anyhow::Result<Arc<A
     for url in &config.allowed_model_base_urls {
         env = env.allow_model_base_url(url.clone());
     }
-    env = bind_model_base_url_envs(&program, env, &config.model_base_url_envs).await?;
+    env = bind_model_base_url_envs(&program, env, model_base_url_envs).await?;
     if env.sandbox.is_none() {
         env = env.with_sandbox(Arc::new(dsrs_tools::QuickJsExecutor::new()));
     }
@@ -292,6 +299,16 @@ pub fn router(app: Arc<App>) -> Router {
 /// Loads and serves until the process ends. Prints the bound address on
 /// stderr (port 0 binds an ephemeral port).
 pub async fn serve(config: &ServeConfig, host: &str, port: u16) -> anyhow::Result<()> {
+    serve_with_model_base_url_envs(config, host, port, &[]).await
+}
+
+/// Serves with explicit host-owned model URL environment bindings.
+pub async fn serve_with_model_base_url_envs(
+    config: &ServeConfig,
+    host: &str,
+    port: u16,
+    model_base_url_envs: &[(String, String)],
+) -> anyhow::Result<()> {
     if !host
         .parse::<IpAddr>()
         .is_ok_and(|address| address.is_loopback())
@@ -301,7 +318,7 @@ pub async fn serve(config: &ServeConfig, host: &str, port: u16) -> anyhow::Resul
             "plain HTTP serving is limited to loopback; use a TLS reverse proxy for remote access"
         );
     }
-    let app = load(config, dspy_rs::ir::RuntimeEnv::new()).await?;
+    let app = load_with_model_base_url_envs(config, RuntimeEnv::new(), model_base_url_envs).await?;
     let listener = tokio::net::TcpListener::bind((host, port))
         .await
         .with_context(|| format!("failed to bind {host}:{port}"))?;

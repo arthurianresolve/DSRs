@@ -34,6 +34,9 @@ enum Cmd {
         /// Rewrite the file in place instead of printing to stdout.
         #[arg(long)]
         write: bool,
+        /// Explicitly allow model URL redaction when rewriting the file.
+        #[arg(long, requires = "write")]
+        redact_model_urls: bool,
     },
     /// Serve a .dsrs program over loopback HTTP. Use a TLS reverse proxy for
     /// remote access. Set DSRS_AUTH_TOKEN for a stable bearer token.
@@ -80,7 +83,11 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Cmd::Fmt { program, write } => match dsrs_cli::fmt::fmt_file(&program, write) {
+        Cmd::Fmt {
+            program,
+            write,
+            redact_model_urls,
+        } => match dsrs_cli::fmt::fmt_file_with_options(&program, write, redact_model_urls) {
             Ok(FmtOutcome::Canonical(text)) => {
                 print!("{text}");
                 ExitCode::SUCCESS
@@ -112,7 +119,6 @@ fn main() -> ExitCode {
                 overlay,
                 allow,
                 allowed_model_base_urls: allow_model_base_urls,
-                model_base_url_envs,
                 auth_token: std::env::var("DSRS_AUTH_TOKEN").ok(),
             };
             let runtime = match tokio::runtime::Runtime::new() {
@@ -122,7 +128,12 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            match runtime.block_on(dsrs_cli::serve::serve(&config, &host, port)) {
+            match runtime.block_on(dsrs_cli::serve::serve_with_model_base_url_envs(
+                &config,
+                &host,
+                port,
+                &model_base_url_envs,
+            )) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(err) => {
                     eprintln!("{err:#}");

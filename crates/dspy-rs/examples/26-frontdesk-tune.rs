@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
     )?;
 
     let path = std::env::temp_dir().join("frontdesk.dsrs");
-    std::fs::write(&path, baked.to_dsrs())?;
+    baked.save_dsrs(&path)?;
     println!("baked program written to {}", path.display());
     // `dsrs check <file>` and `dsrs serve <file>` take it from here. (One
     // caveat specific to numbered example binaries: printed class names embed

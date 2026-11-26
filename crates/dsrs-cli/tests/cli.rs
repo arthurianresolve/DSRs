@@ -6,12 +6,13 @@
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
 use dspy_rs::ir::RuntimeEnv;
 use dspy_rs::{LM, LMClient, LMConfig, TestCompletionModel};
 use dsrs_cli::check::check_file;
-use dsrs_cli::fmt::{FmtOutcome, fmt_file};
+use dsrs_cli::fmt::{FmtOutcome, fmt_file, fmt_file_with_options};
 use dsrs_cli::serve::{self, ServeConfig};
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -99,6 +100,101 @@ fn fmt_fails_on_invalid_input() {
     assert!(err.to_string().contains("nope.dsrs"), "{err:#}");
 }
 
+#[test]
+fn fmt_requires_explicit_model_url_redaction_before_rewrite() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("custom-model-url.dsrs");
+    let source = ECHO.replace(
+        "model m = \"openai:gpt-4o-mini\"",
+        "model m = \"openai:gpt-4o-mini\" { base_url \"https://user-check:pass-check@model.example/private-check/v1?token=secret-check\" }",
+    );
+    std::fs::write(&path, &source).unwrap();
+
+    let err = fmt_file(&path, true).unwrap_err().to_string();
+    assert!(err.contains("model base URL would change"));
+    assert!(err.contains("--redact-model-urls"));
+    for secret in ["user-check", "pass-check", "private-check", "secret-check"] {
+        assert!(
+            !err.contains(secret),
+            "URL secret appeared in formatter error"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+
+    let FmtOutcome::Canonical(preview) = fmt_file(&path, false).unwrap() else {
+        panic!("expected canonical preview");
+    };
+    assert!(preview.contains("base_url \"https://model.example\""));
+    assert!(matches!(
+        fmt_file_with_options(&path, true, true).unwrap(),
+        FmtOutcome::Rewrote
+    ));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), preview);
+    assert!(matches!(
+        fmt_file(&path, true).unwrap(),
+        FmtOutcome::Unchanged
+    ));
+}
+
+#[test]
+fn fmt_accepts_equivalent_public_model_url_without_opt_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("public-model-url.dsrs");
+    let source = ECHO.replace(
+        "model m = \"openai:gpt-4o-mini\"",
+        "model m = \"openai:gpt-4o-mini\" { base_url \"https://model.example:443/v1\" }",
+    );
+    std::fs::write(&path, source).unwrap();
+    assert!(matches!(
+        fmt_file(&path, true).unwrap(),
+        FmtOutcome::Rewrote
+    ));
+    assert!(
+        std::fs::read_to_string(path)
+            .unwrap()
+            .contains("base_url \"https://model.example/v1\"")
+    );
+}
+
+#[test]
+fn fmt_command_requires_write_and_explicit_url_redaction() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("custom-model-url.dsrs");
+    let source = ECHO.replace(
+        "model m = \"openai:gpt-4o-mini\"",
+        "model m = \"openai:gpt-4o-mini\" { base_url \"https://model.example/private-check/v1\" }",
+    );
+    std::fs::write(&path, &source).unwrap();
+
+    let run = |flags: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_dsrs"))
+            .arg("fmt")
+            .arg(&path)
+            .args(flags)
+            .output()
+            .unwrap()
+    };
+
+    let output = run(&["--redact-model-urls"]);
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+
+    let output = run(&["--write"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--redact-model-urls"));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
+
+    let output = run(&["--write", "--redact-model-urls"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(rewritten.contains("base_url \"https://model.example\""));
+    assert!(!rewritten.contains("private-check"));
+}
+
 // ---------------------------------------------------------------------------
 // serve
 // ---------------------------------------------------------------------------
@@ -150,25 +246,27 @@ async fn serve_uses_host_model_url_without_exposing_custom_path() {
         "model m = \"openai:gpt-4o-mini\" { base_url \"http://127.0.0.1:9999\" }",
     );
     let program = write_program(&dir, "custom-model-url.dsrs", &source);
-    let mut config = ServeConfig {
+    let config = ServeConfig {
         program,
-        model_base_url_envs: vec![("m".into(), URL_VAR.into())],
         auth_token: Some(TEST_TOKEN.into()),
         ..ServeConfig::default()
     };
+    let mut bindings = vec![("m".into(), URL_VAR.into())];
 
     let err = temp_env::async_with_vars(
         [(URL_VAR, None::<&str>)],
-        serve::load(&config, RuntimeEnv::new()),
+        serve::load_with_model_base_url_envs(&config, RuntimeEnv::new(), &bindings),
     )
     .await
     .unwrap_err();
     assert!(err.to_string().contains(URL_VAR));
 
-    config.model_base_url_envs[0].0 = "undeclared".into();
-    let err = serve::load(&config, RuntimeEnv::new()).await.unwrap_err();
+    bindings[0].0 = "undeclared".into();
+    let err = serve::load_with_model_base_url_envs(&config, RuntimeEnv::new(), &bindings)
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("not declared"));
-    config.model_base_url_envs[0].0 = "m".into();
+    bindings[0].0 = "m".into();
 
     let upstream = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
@@ -196,7 +294,7 @@ async fn serve_uses_host_model_url_without_exposing_custom_path() {
     let url = format!("http://{upstream_addr}/private-check/v1");
     let app = temp_env::async_with_vars(
         [(URL_VAR, Some(url.as_str()))],
-        serve::load(&config, RuntimeEnv::new()),
+        serve::load_with_model_base_url_envs(&config, RuntimeEnv::new(), &bindings),
     )
     .await
     .expect("host-owned model URL loads without artifact allowlist");
@@ -288,7 +386,6 @@ async fn serve_end_to_end_on_an_ephemeral_port() {
         overlay: None,
         allow: vec![],
         allowed_model_base_urls: vec![],
-        model_base_url_envs: vec![],
         auth_token: Some(TEST_TOKEN.to_string()),
     };
     let app = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
@@ -492,7 +589,6 @@ async fn serve_applies_a_named_overlay() {
         overlay: Some(overlay_path),
         allow: vec![],
         allowed_model_base_urls: vec![],
-        model_base_url_envs: vec![],
         auth_token: Some(TEST_TOKEN.to_string()),
     };
     let app = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
@@ -549,7 +645,6 @@ main: Main = seq {
         overlay: None,
         allow: vec![],
         allowed_model_base_urls: vec![],
-        model_base_url_envs: vec![],
         auth_token: Some(TEST_TOKEN.to_string()),
     };
     let err = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
@@ -564,7 +659,6 @@ main: Main = seq {
         overlay: None,
         allow: vec!["net:probe".to_string()],
         allowed_model_base_urls: vec![],
-        model_base_url_envs: vec![],
         auth_token: Some(TEST_TOKEN.to_string()),
     };
     serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
@@ -592,7 +686,6 @@ async fn serve_rejects_stale_overlays() {
         overlay: Some(overlay_path),
         allow: vec![],
         allowed_model_base_urls: vec![],
-        model_base_url_envs: vec![],
         auth_token: Some(TEST_TOKEN.to_string()),
     };
     let err = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))

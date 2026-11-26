@@ -64,14 +64,15 @@ Parses and validates a `.dsrs` artifact via `Program::load_dsrs`, running the fu
 
 On success it prints one line to stdout: `ok: program` with the program name, its 16-hex hash, the node, signature, model, and tool counts, and the caps set when non-empty. On failure the parser's error goes to stderr with the artifact path and a `line N, column M: expected ...` position, and the exit code is non-zero.
 
-## `dsrs fmt <program> [--write]`
+## `dsrs fmt <program> [--write] [--redact-model-urls]`
 
 Prints (or rewrites) the canonical form of an artifact. The canonical form is `Program::to_dsrs`, the same text that seals `program_hash` and that `bake` writes. Formatting is parse then print, never token shuffling, so an artifact that does not parse does not format.
 
 | Flag | Effect |
 |---|---|
 | (none) | Prints the canonical text to stdout. |
-| `--write` | Rewrites the file in place, only when the bytes differ. Reports ``formatted `<path>` `` or `` `<path>` already canonical`` on stderr. |
+| `--write` | Rewrites the file in place, only when the bytes differ. Refuses to change a model endpoint URL without `--redact-model-urls`. |
+| `--redact-model-urls` | With `--write`, explicitly allows sanitized model URLs to replace full URLs in the file. Keep custom endpoint paths in a host environment variable for serving. |
 
 ## `dsrs serve <program> [flags]`
 
@@ -107,11 +108,10 @@ The full workflow: print a program out of your code, check it, format it, serve 
 
 ### 1. Print the program
 
-Every [`#[module]`](/docs/components/module-macro) exposes `program()`. Call `to_dsrs()` on it to get the canonical text, then save it:
+Every [`#[module]`](/docs/components/module-macro) exposes `program()`. Save its canonical text with `save_dsrs`, which refuses to discard a custom model URL without an explicit redaction choice:
 
 ```rust
-let text = qa::program().to_dsrs();
-std::fs::write("qa.dsrs", text)?;
+qa::program().save_dsrs("qa.dsrs")?;
 ```
 
 One note before serving: a file printed from a `#[module]` holds a placeholder model line like `model default = "unbound:default"`, because the real model was bound in your code. Open the file and point each model line at a real model, for example:
