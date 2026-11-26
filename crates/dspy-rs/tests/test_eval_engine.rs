@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
+use dspy_rs::optimizer::EvaluationContext;
 use dspy_rs::optimizer::engine::{BatchEvalOutcome, EvalOutcome, GateOutcome, RolloutCache};
 use dspy_rs::{
     Budget, CallMetadata, Candidate, Engine, EngineConfig, Eval, LM, LMClient, Module, ModuleState,
@@ -989,12 +990,15 @@ async fn reordered_examples_reuse_rollouts_without_reusing_score_columns() {
     let mut examples = trainset(2);
     let mut engine = Engine::new(EngineConfig::default());
     let candidate = engine.register(Candidate::new());
-    let target = OptimizeTarget::module(&mut module, &examples, &IndexMetric);
+    let context = EvaluationContext::new();
+    let target = OptimizeTarget::module(&mut module, &examples, &IndexMetric)
+        .with_evaluation_context(context);
     engine.evaluate(&target, candidate, None).await.unwrap();
     drop(target);
 
     examples.reverse();
-    let target = OptimizeTarget::module(&mut module, &examples, &IndexMetric);
+    let target = OptimizeTarget::module(&mut module, &examples, &IndexMetric)
+        .with_evaluation_context(context);
     assert!(engine.matrix_for(&target).is_none());
     engine
         .evaluate(&target, candidate, Some(&[0]))
@@ -1005,6 +1009,26 @@ async fn reordered_examples_reuse_rollouts_without_reusing_score_columns() {
     let current = engine.matrix_for(&target).unwrap();
     assert_eq!(current.score(candidate, 0), Some(0.1));
     assert_eq!(current.score(candidate, 1), None);
+}
+
+#[tokio::test]
+async fn targets_with_different_metrics_do_not_share_scores_or_matrices() {
+    let mut module = EchoModule::new();
+    let examples = trainset(1);
+    let mut engine = Engine::new(EngineConfig::default());
+    let candidate = engine.register(Candidate::new());
+
+    let target = OptimizeTarget::module(&mut module, &examples, &IndexMetric);
+    let first = engine.evaluate(&target, candidate, None).await.unwrap();
+    assert_eq!(first.completed().unwrap().mean(), 0.0);
+    drop(target);
+
+    let target = OptimizeTarget::module(&mut module, &examples, &ExactMatch);
+    assert!(engine.matrix_for(&target).is_none());
+    let second = engine.evaluate(&target, candidate, None).await.unwrap();
+    assert_eq!(second.completed().unwrap().mean(), 1.0);
+    assert_eq!(engine.spend().metric_calls, 2);
+    assert_eq!(engine.spend().cache_hits, 0);
 }
 
 #[tokio::test]

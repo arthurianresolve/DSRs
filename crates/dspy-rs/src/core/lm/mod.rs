@@ -816,6 +816,16 @@ impl LM {
         let system_prompt = messages.system_prompt();
         let chat_history = messages.to_rig_chat_history();
         let tool_definitions = tools.definitions();
+        if matches!(self.client.as_deref(), Some(LMClient::Gemini(_)))
+            && tool_definitions.iter().any(|tool| {
+                !crate::typesys::json_schema::fits_inline_tool_schema_budget(&tool.parameters)
+            })
+        {
+            return Err(crate::LmCallError::UnsupportedOption {
+                option: "tool schema exceeds Gemini's bounded inline expansion",
+            }
+            .into());
+        }
         trace!(
             conversation_messages = chat_history.len(),
             tool_definitions = tool_definitions.len(),

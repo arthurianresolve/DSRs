@@ -100,13 +100,13 @@ fn ensure_period(text: &str) -> String {
 /// `{query: string, limit?: integer}` — `?` marks optional properties.
 /// Non-object or property-less schemas render as `object` (free-form).
 fn compact_args(schema: &Value) -> String {
-    match compact_object(schema, 0) {
+    match compact_object(schema, schema, 0) {
         Some(rendered) => rendered,
         None => "object".to_string(),
     }
 }
 
-fn compact_object(schema: &Value, depth: usize) -> Option<String> {
+fn compact_object(schema: &Value, root: &Value, depth: usize) -> Option<String> {
     if depth > 2 {
         return None;
     }
@@ -125,16 +125,26 @@ fn compact_object(schema: &Value, depth: usize) -> Option<String> {
             } else {
                 "?"
             };
-            format!("{name}{marker}: {}", compact_type(prop, depth + 1))
+            format!("{name}{marker}: {}", compact_type(prop, root, depth + 1))
         })
         .collect();
     Some(format!("{{{}}}", fields.join(", ")))
 }
 
-fn compact_type(schema: &Value, depth: usize) -> String {
+fn compact_type(schema: &Value, root: &Value, depth: usize) -> String {
     let Some(obj) = schema.as_object() else {
         return "any".to_string();
     };
+    if let Some(pointer) = obj
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|reference| reference.strip_prefix('#'))
+        .filter(|pointer| pointer.starts_with("/$defs/"))
+        && let Some(definition) = root.pointer(pointer)
+        && definition.get("type").and_then(Value::as_str) == Some("object")
+    {
+        return compact_object(definition, root, depth).unwrap_or_else(|| "object".to_string());
+    }
     if let Some(c) = obj.get("const") {
         return c.to_string();
     }
@@ -156,16 +166,18 @@ fn compact_type(schema: &Value, depth: usize) -> String {
     {
         return any_of
             .iter()
-            .map(|v| compact_type(v, depth))
+            .map(|v| compact_type(v, root, depth))
             .collect::<Vec<_>>()
             .join("|");
     }
     match obj.get("type").and_then(Value::as_str) {
         Some("array") => match obj.get("items") {
-            Some(items) => format!("{}[]", compact_type(items, depth)),
+            Some(items) => format!("{}[]", compact_type(items, root, depth)),
             None => "any[]".to_string(),
         },
-        Some("object") => compact_object(schema, depth).unwrap_or_else(|| "object".to_string()),
+        Some("object") => {
+            compact_object(schema, root, depth).unwrap_or_else(|| "object".to_string())
+        }
         Some(other) => other.to_string(),
         None => "any".to_string(),
     }

@@ -26,6 +26,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
@@ -548,11 +549,33 @@ fn program_leaves(interp: &Interpreter) -> Vec<LeafInfo> {
 // OptimizeTarget
 // ---------------------------------------------------------------------------
 
+/// Identity of a module or interpreter and its metric for score reuse.
+///
+/// Keep a context while the execution bindings and scoring behavior are
+/// equivalent. Example order and subsets can change within a context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct EvaluationContext(u64);
+
+impl EvaluationContext {
+    /// Starts an independent evaluation context.
+    pub fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for EvaluationContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// The thing an [`Optimizer`](crate::optimizer::Optimizer) optimizes: a
 /// module or a program, packaged with its example set and metric. See the
 /// module docs for the two lanes.
 pub struct OptimizeTarget<'a> {
     lane: Box<dyn Lane + 'a>,
+    context: EvaluationContext,
     example_order: u64,
     /// Number of leading example columns that are the validation set, when a
     /// separate valset was supplied.
@@ -605,6 +628,7 @@ impl<'a> OptimizeTarget<'a> {
             .collect();
 
         Self {
+            context: EvaluationContext::new(),
             example_order: canonical_hash(&(val_len, &uids)),
             lane: Box::new(ModuleLane {
                 module,
@@ -624,13 +648,19 @@ impl<'a> OptimizeTarget<'a> {
     where
         MT: ProgramMetric,
     {
-        Self::program_with_examples(interp, ProgramExamples::new(examples), metric)
+        Self::program_with_examples(
+            interp,
+            ProgramExamples::new(examples),
+            metric,
+            EvaluationContext::new(),
+        )
     }
 
     pub(super) fn program_with_examples<MT>(
         interp: &'a Interpreter,
         examples: ProgramExamples<'a>,
         metric: &'a MT,
+        context: EvaluationContext,
     ) -> Self
     where
         MT: ProgramMetric,
@@ -638,6 +668,7 @@ impl<'a> OptimizeTarget<'a> {
         let leaves = program_leaves(interp);
         let program_tag = format!("{:016x}", interp.program().meta.program_hash);
         Self {
+            context,
             example_order: examples.order,
             lane: Box::new(ProgramLane {
                 interp,
@@ -649,6 +680,18 @@ impl<'a> OptimizeTarget<'a> {
             }),
             val_len: None,
         }
+    }
+
+    /// Reuses an evaluation context across targets built with equivalent
+    /// execution bindings and metrics, for example after reordering examples.
+    /// Constructors otherwise give each target its own context.
+    pub fn with_evaluation_context(mut self, context: EvaluationContext) -> Self {
+        self.context = context;
+        self
+    }
+
+    pub(super) fn evaluation_context_id(&self) -> u64 {
+        self.context.0
     }
 
     /// The optimizable leaves' read surface. Module leaves reflect installed

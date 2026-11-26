@@ -26,7 +26,7 @@ use crate::ir::interp::{Interpreter, RuntimeEnv};
 use crate::ir::params::{DemoRow, Overlay};
 use crate::optimizer::OptimizerCommon;
 use crate::optimizer::engine::{Engine, EngineConfig, EvalOutcome, GateOutcome, Spend};
-use crate::optimizer::target::{OptimizeTarget, ProgramExamples, ProgramMetric};
+use crate::optimizer::target::{EvaluationContext, OptimizeTarget, ProgramExamples, ProgramMetric};
 use crate::trace::Trace;
 use crate::utils::truncate;
 use crate::{Predict, Signature};
@@ -565,8 +565,14 @@ impl Structural {
         // traced. Seeds the rollout store and the cache — every later parent
         // minibatch read is served for free.
         let mut incumbent_row = engine.register_overlay(incumbent.clone());
+        let mut incumbent_context = EvaluationContext::new();
         let baseline_eval = {
-            let target = OptimizeTarget::program_with_examples(interp, examples.borrowed(), metric);
+            let target = OptimizeTarget::program_with_examples(
+                interp,
+                examples.borrowed(),
+                metric,
+                incumbent_context,
+            );
             match engine.evaluate(&target, incumbent_row, None).await? {
                 EvalOutcome::Complete(eval) => eval,
                 EvalOutcome::BudgetExhausted { needed } => {
@@ -621,8 +627,12 @@ impl Structural {
             // Cache-served (the incumbent always has full coverage).
             let threshold = {
                 let cur = owned.as_ref().unwrap_or(interp);
-                let target =
-                    OptimizeTarget::program_with_examples(cur, examples.borrowed(), metric);
+                let target = OptimizeTarget::program_with_examples(
+                    cur,
+                    examples.borrowed(),
+                    metric,
+                    incumbent_context,
+                );
                 match engine
                     .evaluate(&target, incumbent_row, Some(&minibatch))
                     .await?
@@ -686,6 +696,7 @@ impl Structural {
             };
             let migrated = migrate_overlay(&program, &incumbent, child_interp.program());
             let child_row = engine.register_overlay(migrated.clone());
+            let child_context = EvaluationContext::new();
 
             // 5. The gate: child vs parent on the shared minibatch; only a
             // strict win promotes to the full set.
@@ -694,6 +705,7 @@ impl Structural {
                     &child_interp,
                     examples.borrowed(),
                     metric,
+                    child_context,
                 );
                 engine
                     .evaluate_gated(&child_target, child_row, &minibatch, threshold)
@@ -735,6 +747,7 @@ impl Structural {
                     program = Arc::clone(child_interp.program());
                     incumbent = migrated;
                     incumbent_row = child_row;
+                    incumbent_context = child_context;
                     owned = Some(child_interp);
                 }
             }

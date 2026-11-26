@@ -71,7 +71,7 @@ Prints (or rewrites) the canonical form of an artifact. The canonical form is `P
 | Flag | Effect |
 |---|---|
 | (none) | Prints the canonical text to stdout. |
-| `--write` | Rewrites the file in place, only when the bytes differ. Refuses to change a model endpoint URL without `--redact-model-urls`. |
+| `--write` | Rewrites the file in place, preserving the exact spelling of public endpoint URLs. URLs that need sanitization require `--redact-model-urls`. |
 | `--redact-model-urls` | With `--write`, explicitly allows sanitized model URLs to replace full URLs in the file. Keep custom endpoint paths in a host environment variable for serving. |
 
 ## `dsrs serve <program> [flags]`

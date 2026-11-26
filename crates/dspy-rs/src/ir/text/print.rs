@@ -61,29 +61,62 @@ impl Program {
         canonical_text(self, true)
     }
 
-    /// Names of models whose endpoint URL would change during canonical export.
-    /// Callers can use this before writing an artifact that must remain runnable.
+    /// Names of models whose endpoint requires redaction before a safe rewrite.
     pub fn model_urls_changed_on_export(&self) -> Vec<String> {
         self.models
             .values()
             .filter_map(|model| {
                 let url = model.config.base_url.as_deref()?;
-                let exported = public_model_base_url(url);
-                let unchanged = url == exported
-                    || matches!(
-                        (reqwest::Url::parse(url), reqwest::Url::parse(&exported)),
-                        (Ok(original), Ok(public)) if original == public
-                    );
-                (!unchanged).then(|| model.name.to_string())
+                (!can_preserve_model_url(url)).then(|| model.name.to_string())
             })
             .collect()
     }
+
+    /// Formats an artifact in place while preserving literal public endpoints.
+    /// Returns the names of models that require explicit redaction.
+    pub fn to_dsrs_for_rewrite(&self) -> Result<String, Vec<String>> {
+        let changed = self.model_urls_changed_on_export();
+        if !changed.is_empty() {
+            return Err(changed);
+        }
+        Ok(Printer::new(self).render(true, true))
+    }
+}
+
+fn can_preserve_model_url(url: &str) -> bool {
+    let public = public_model_base_url(url);
+    if url == public {
+        return true;
+    }
+    let (Some((scheme, endpoint)), Some((public_scheme, public_endpoint))) =
+        (url.split_once("://"), public.split_once("://"))
+    else {
+        return false;
+    };
+    let default_port = match public_scheme {
+        "http" => ":80",
+        "https" => ":443",
+        _ => return false,
+    };
+    // Check the literal path and authority. URL parsing can silently discard
+    // parts of a raw URL, even when the parsed result is the public endpoint.
+    let authority = endpoint.split('/').next().unwrap_or(endpoint);
+    let public_authority = public_endpoint.split('/').next().unwrap_or(public_endpoint);
+    let path = &endpoint[authority.len()..];
+    let public_path = &public_endpoint[public_authority.len()..];
+    let approved_authority = authority.eq_ignore_ascii_case(public_authority)
+        || authority
+            .strip_suffix(default_port)
+            .is_some_and(|host| host.eq_ignore_ascii_case(public_authority));
+    scheme.eq_ignore_ascii_case(public_scheme)
+        && approved_authority
+        && (path == public_path || (path == "/" && public_path.is_empty()))
 }
 
 /// Canonical text; `include_lineage = false` yields the hash preimage
 /// (RFC 0002 §2.1: the program hash covers the canonical text minus lineage).
 pub(crate) fn canonical_text(p: &Program, include_lineage: bool) -> String {
-    Printer::new(p).render(include_lineage)
+    Printer::new(p).render(include_lineage, false)
 }
 
 struct Printer<'p> {
@@ -180,7 +213,7 @@ impl<'p> Printer<'p> {
 
     // -- top level ----------------------------------------------------------
 
-    fn render(mut self, include_lineage: bool) -> String {
+    fn render(mut self, include_lineage: bool, preserve_model_urls: bool) -> String {
         let p = self.p;
         let _ = writeln!(self.out, "dsrs {}", p.meta.format);
         let _ = writeln!(self.out, "program {}", p.meta.name);
@@ -193,7 +226,7 @@ impl<'p> Printer<'p> {
         if !p.models.is_empty() {
             self.out.push('\n');
             for model in p.models.values() {
-                let opts = model_opts(&model.config);
+                let opts = model_opts(&model.config, preserve_model_urls);
                 let _ = write!(
                     self.out,
                     "model {} = {}",
@@ -889,14 +922,16 @@ fn render_text(render: &RenderSpec) -> Option<String> {
 }
 
 /// Model option entries that differ from `LMConfig::default()`, fixed order.
-fn model_opts(config: &LMConfig) -> Vec<String> {
+fn model_opts(config: &LMConfig, preserve_model_urls: bool) -> Vec<String> {
     let default = LMConfig::default();
     let mut opts = Vec::new();
     if let Some(url) = &config.base_url {
-        opts.push(format!(
-            "base_url {}",
+        let literal = if preserve_model_urls {
+            json_str(url)
+        } else {
             json_str(&public_model_base_url(url))
-        ));
+        };
+        opts.push(format!("base_url {literal}"));
     }
     if config.temperature != default.temperature {
         opts.push(format!("temperature {}", fmt_f32(config.temperature)));

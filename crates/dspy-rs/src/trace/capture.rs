@@ -220,7 +220,7 @@ impl TraceSink {
         let mut inner = self.0.lock().unwrap();
         let duration_us = inner.epoch.elapsed().saturating_sub(started).as_micros() as u64;
 
-        // An explicit request_hash (holes) was stamped at open; everything
+        // An explicit request_hash was stamped at open; everything
         // else hashes the redacted config + rendered prompt at close.
         if !hash_override {
             let hash = inner.request_hash(id);
@@ -288,10 +288,9 @@ pub struct SpanRequest<'a> {
     pub input: Option<JsonMap>,
     pub model: &'a LMConfig,
     /// Explicit `request_hash` preimage override. `None` (the norm) computes
-    /// the hash at close from the redacted config + rendered prompt. Leaves
-    /// with no prompt-shaped identity — holes (RFC 0003 §4.4: impl hash ++
-    /// canonical input ++ caps) — pass their own hash so every span keys
-    /// replay on a real preimage instead of a degenerate empty-prompt one.
+    /// the hash at close from the redacted config + rendered prompt.
+    /// Interpreter agents include their resolved tools. Holes hash their
+    /// implementation, canonical input, and capabilities (RFC 0003 §4.4).
     pub request_hash: Option<u64>,
 }
 

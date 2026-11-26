@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use dspy_rs::ir::RuntimeEnv;
+use dspy_rs::ir::{Interpreter, Program, RuntimeEnv};
 use dspy_rs::{LM, LMClient, LMConfig, TestCompletionModel};
 use dsrs_cli::check::check_file;
 use dsrs_cli::fmt::{FmtOutcome, fmt_file, fmt_file_with_options};
@@ -136,13 +136,14 @@ fn fmt_requires_explicit_model_url_redaction_before_rewrite() {
     ));
 }
 
-#[test]
-fn fmt_accepts_equivalent_public_model_url_without_opt_in() {
+#[tokio::test]
+async fn fmt_preserves_approved_model_url_without_opt_in() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("public-model-url.dsrs");
+    let url = "https://model.example:443/v1";
     let source = ECHO.replace(
         "model m = \"openai:gpt-4o-mini\"",
-        "model m = \"openai:gpt-4o-mini\" { base_url \"https://model.example:443/v1\" }",
+        &format!("model m = \"openai:gpt-4o-mini\" {{ base_url \"{url}\" }}"),
     );
     std::fs::write(&path, source).unwrap();
     assert!(matches!(
@@ -150,10 +151,14 @@ fn fmt_accepts_equivalent_public_model_url_without_opt_in() {
         FmtOutcome::Rewrote
     ));
     assert!(
-        std::fs::read_to_string(path)
+        std::fs::read_to_string(&path)
             .unwrap()
-            .contains("base_url \"https://model.example/v1\"")
+            .contains(&format!("base_url \"{url}\""))
     );
+    let program = Program::load_dsrs(&path).unwrap();
+    Interpreter::load(program, RuntimeEnv::new().allow_model_base_url(url))
+        .await
+        .expect("the original approval still loads the formatted artifact");
 }
 
 #[test]

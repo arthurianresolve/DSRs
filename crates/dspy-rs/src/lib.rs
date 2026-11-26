@@ -145,9 +145,10 @@ pub use modules::{
     ChainOfThought, ChainOfThoughtOutput, Reasoning, ValidatedPredict, WithReasoning,
 };
 pub use optimizer::{
-    BootstrapFewShot, BootstrapReport, Budget, COPRO, Candidate, Engine, EngineConfig, GEPA,
-    GEPACandidate, GEPAResult, LeafInfo, MIPROv2, OptimizeTarget, Optimizer, OptimizerCommon,
-    ProgramMetric, Report, SIMBA, SimbaReport, Structural, StructuralReport,
+    BootstrapFewShot, BootstrapReport, Budget, COPRO, Candidate, Engine, EngineConfig,
+    EvaluationContext, GEPA, GEPACandidate, GEPAResult, LeafInfo, MIPROv2, OptimizeTarget,
+    Optimizer, OptimizerCommon, ProgramMetric, Report, SIMBA, SimbaReport, Structural,
+    StructuralReport,
 };
 pub use predictors::{AgentLoopSpec, Demo, Predict};
 // The unified trace format (RFC 0001).

@@ -35,25 +35,25 @@ pub fn fmt_file_with_options(
 ) -> anyhow::Result<FmtOutcome> {
     let path = path.as_ref();
     let program = Program::load_dsrs(path)?;
-    let canonical = program.to_dsrs();
     if !write {
-        return Ok(FmtOutcome::Canonical(canonical));
+        return Ok(FmtOutcome::Canonical(program.to_dsrs()));
     }
-    if !redact_model_urls {
-        let changed = program.model_urls_changed_on_export();
-        if !changed.is_empty() {
-            anyhow::bail!(
+    let formatted = if redact_model_urls {
+        program.to_dsrs()
+    } else {
+        program.to_dsrs_for_rewrite().map_err(|changed| {
+            anyhow::anyhow!(
                 "model base URL would change on export for {}: pass --redact-model-urls to write a sanitized artifact",
                 changed.join(", ")
-            );
-        }
-    }
+            )
+        })?
+    };
     let original = std::fs::read_to_string(path)
         .with_context(|| format!("failed to re-read `{}`", path.display()))?;
-    if original == canonical {
+    if original == formatted {
         return Ok(FmtOutcome::Unchanged);
     }
-    std::fs::write(path, canonical)
+    std::fs::write(path, formatted)
         .with_context(|| format!("failed to write `{}`", path.display()))?;
     Ok(FmtOutcome::Rewrote)
 }

@@ -493,11 +493,26 @@ async fn sandboxed_tools_join_the_js_api() {
     let registered = sandbox.tools().len();
     let input = || obj(&[("question", json!("double Oslo's temperature"))]);
     let (replayed, report) = replay(&trace, ReplayMode::Strict, || {
-        interp.run(input(), Some(overlay.clone()), Budget::unlimited())
+        interp.run(input(), None, Budget::unlimited())
     })
     .await;
     assert_eq!(replayed.unwrap()["answer"], "doubled to 42");
     assert_eq!(report.served, 1);
+    assert_eq!(client.call_count(), 2);
+    assert_eq!(sandbox.tools().len(), registered);
+
+    let (changed, report) = replay(&trace, ReplayMode::Strict, || {
+        interp.run(input(), Some(overlay.clone()), Budget::unlimited())
+    })
+    .await;
+    assert!(matches!(
+        changed,
+        Err(ir::RunError::Replay {
+            source: dspy_rs::trace::ReplayError::Divergence { .. },
+            ..
+        })
+    ));
+    assert_eq!(report.served, 0);
     assert_eq!(client.call_count(), 2);
     assert_eq!(sandbox.tools().len(), registered);
 

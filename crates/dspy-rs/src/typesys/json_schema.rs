@@ -15,9 +15,55 @@ pub fn json_schema_for_outputs(def: &SignatureDef, types: &TypeTable) -> Value {
 }
 
 /// Projects a tool or hole's inputs into a JSON Schema object.
-/// Optional arguments can be omitted. Recursive classes use local references.
+/// Optional arguments can be omitted. Shared and recursive classes use local references.
 pub fn input_schema_of(def: &SignatureDef, types: &TypeTable) -> Value {
     project(&def.inputs, types, SchemaKind::ToolInput)
+}
+
+pub(crate) fn fits_inline_tool_schema_budget(schema: &Value) -> bool {
+    const MAX_NODES: usize = 4_096;
+    const MAX_DEPTH: usize = 128;
+    let Some(defs) = schema
+        .get("$defs")
+        .or_else(|| schema.get("definitions"))
+        .and_then(Value::as_object)
+    else {
+        return true;
+    };
+    // Count the work of the pinned Gemini converter without copying the
+    // expanded schema. Its traversal also visits the top-level definitions.
+    let mut remaining = MAX_NODES;
+    within_inline_budget(schema, defs, MAX_DEPTH, &mut remaining)
+}
+
+fn within_inline_budget(
+    schema: &Value,
+    defs: &Map<String, Value>,
+    depth: usize,
+    remaining: &mut usize,
+) -> bool {
+    if depth == 0 || *remaining == 0 {
+        return false;
+    }
+    *remaining -= 1;
+    let next_depth = depth - 1;
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        // The provider reports unknown or nonlocal references itself.
+        return reference
+            .strip_prefix("#/$defs/")
+            .or_else(|| reference.strip_prefix("#/definitions/"))
+            .and_then(|key| defs.get(key))
+            .is_none_or(|target| within_inline_budget(target, defs, next_depth, remaining));
+    }
+    match schema {
+        Value::Object(object) => object
+            .values()
+            .all(|child| within_inline_budget(child, defs, next_depth, remaining)),
+        Value::Array(items) => items
+            .iter()
+            .all(|child| within_inline_budget(child, defs, next_depth, remaining)),
+        _ => true,
+    }
 }
 
 /// Whether this signature fits the strict JSON Schema subset accepted by providers.
@@ -63,11 +109,19 @@ enum SchemaKind {
 }
 
 fn project(fields: &[FieldDef], types: &TypeTable, kind: SchemaKind) -> Value {
+    let mut shared_classes = HashSet::new();
+    if kind == SchemaKind::ToolInput {
+        let mut seen = HashSet::new();
+        for field in fields {
+            collect_shared_classes(&field.ty, types, &mut seen, &mut shared_classes);
+        }
+    }
     let mut projection = SchemaProjection {
         types,
         kind,
         defs: Map::new(),
         active_classes: Vec::new(),
+        shared_classes,
     };
     let mut root = projection.object(
         fields
@@ -80,11 +134,40 @@ fn project(fields: &[FieldDef], types: &TypeTable, kind: SchemaKind) -> Value {
     root
 }
 
+fn collect_shared_classes<'a>(
+    ty: &'a FieldType,
+    types: &'a TypeTable,
+    seen: &mut HashSet<&'a str>,
+    shared: &mut HashSet<&'a str>,
+) {
+    match ty {
+        FieldType::Optional(inner) | FieldType::List(inner) | FieldType::Map(_, inner) => {
+            collect_shared_classes(inner, types, seen, shared);
+        }
+        FieldType::Union(items) => {
+            for item in items {
+                collect_shared_classes(item, types, seen, shared);
+            }
+        }
+        FieldType::Class(name) => {
+            if !seen.insert(name) {
+                shared.insert(name);
+            } else if let Some(class) = types.classes.get(name) {
+                for field in &class.fields {
+                    collect_shared_classes(&field.field_type, types, seen, shared);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 struct SchemaProjection<'a> {
     types: &'a TypeTable,
     kind: SchemaKind,
     defs: Map<String, Value>,
     active_classes: Vec<&'a str>,
+    shared_classes: HashSet<&'a str>,
 }
 
 impl<'a> SchemaProjection<'a> {
@@ -170,7 +253,7 @@ impl<'a> SchemaProjection<'a> {
             )
         }));
         self.active_classes.pop();
-        if strict || self.defs.contains_key(name) {
+        if strict || self.shared_classes.contains(name) {
             let docs = if strict { class.docs.as_deref() } else { None };
             self.defs.insert(name.to_owned(), described(schema, docs));
             reference(name)
@@ -443,6 +526,36 @@ mod tests {
         let node = &schema["$defs"]["Node"];
         assert_eq!(node["properties"]["next"]["$ref"], "#/$defs/Node");
         assert_eq!(node["required"], json!(["label_alias"]));
+    }
+
+    #[test]
+    fn tool_input_schema_reuses_a_shared_acyclic_class() {
+        let mut types = base_types();
+        types.classes.get_mut("Node").unwrap().fields.truncate(1);
+        let def = SignatureDef::build("Tool")
+            .input("primary", FieldType::Class("Node".into()))
+            .input(
+                "others",
+                FieldType::List(Box::new(FieldType::Class("Node".into()))),
+            )
+            .output("result", FieldType::String)
+            .finish()
+            .unwrap();
+
+        let schema = input_schema_of(&def, &types);
+        assert_eq!(schema["properties"]["primary"]["$ref"], "#/$defs/Node");
+        assert_eq!(
+            schema["properties"]["others"]["items"]["$ref"],
+            "#/$defs/Node"
+        );
+        assert_eq!(schema["$defs"]["Node"]["required"], json!(["label_alias"]));
+        assert!(fits_inline_tool_schema_budget(&schema));
+        assert!(!within_inline_budget(
+            &schema,
+            schema["$defs"].as_object().unwrap(),
+            16,
+            &mut 8,
+        ));
     }
 
     #[test]

@@ -224,6 +224,17 @@ impl ReplaySession {
     /// input ++ caps, RFC 0003 §4.4). The recorded span's `request_hash` was
     /// stamped from the same preimage at capture time.
     fn decide_hashed(&self, component: &str, hash: impl FnOnce() -> u64) -> ReplayDirective {
+        self.decide_request(component, |recorded| {
+            let current = hash();
+            (current != recorded).then_some(current)
+        })
+    }
+
+    fn decide_request(
+        &self,
+        component: &str,
+        mismatch: impl FnOnce(u64) -> Option<u64>,
+    ) -> ReplayDirective {
         let mut inner = self.0.lock().unwrap();
 
         if inner.diverged {
@@ -272,8 +283,7 @@ impl ReplaySession {
             );
         }
 
-        let got_hash = hash();
-        if got_hash != span.request_hash {
+        if let Some(got_hash) = mismatch(span.request_hash) {
             let id = span.id;
             let expected_hash = span.request_hash;
             return inner.mismatch(
@@ -381,10 +391,60 @@ pub(crate) fn intercept_hashed(
     Some(session.decide_hashed(component, hash))
 }
 
+/// New agent requests have a domain-separated fingerprint. Existing agent
+/// recordings can still match their original prompt-only fingerprint.
+pub(crate) fn intercept_agent(
+    component: &str,
+    opening_hash: impl FnOnce() -> u64,
+    request_hash: impl FnOnce() -> u64,
+) -> Option<ReplayDirective> {
+    let session = ACTIVE.try_with(Clone::clone).ok()?;
+    Some(session.decide_request(component, |recorded| {
+        if opening_hash() == recorded {
+            return None;
+        }
+        let current = request_hash();
+        (current != recorded).then_some(current)
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::trace::capture::{SpanRequest, begin_span, capture};
+
+    #[tokio::test]
+    async fn agent_replay_accepts_the_legacy_opening_hash() {
+        let (_, trace) = capture(|| async {
+            begin_span(SpanRequest {
+                component: "agent",
+                prefix: None,
+                suffix: &[],
+                input: None,
+                model: &LMConfig::default(),
+                request_hash: Some(1),
+            })
+            .unwrap()
+            .finish(crate::trace::SpanOutcome {
+                events: vec![],
+                raw_output: None,
+                output: Some(crate::trace::JsonMap::new()),
+                usage: crate::LmUsage::default(),
+                error: None,
+            });
+        })
+        .await;
+        let (result, report) = replay(&trace, ReplayMode::Strict, || async {
+            intercept_agent(
+                "agent",
+                || 1,
+                || panic!("legacy match needs only the opening hash"),
+            )
+        })
+        .await;
+        assert!(matches!(result, Some(ReplayDirective::Serve(_))));
+        assert_eq!(report.served, 1);
+    }
 
     #[tokio::test]
     async fn replay_skips_hashing_for_incomplete_exhausted_and_live_calls() {

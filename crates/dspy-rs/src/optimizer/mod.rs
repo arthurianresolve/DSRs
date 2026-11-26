@@ -65,7 +65,7 @@ pub use gepa::{GEPA, GEPACandidate, GEPAResult};
 pub use mipro::{MIPROv2, PromptingTips};
 pub use simba::{SIMBA, SimbaMove, SimbaReport, SimbaStep};
 pub use structural::{Structural, StructuralReport, StructuralStep};
-pub use target::{LeafInfo, OptimizeTarget, ProgramMetric};
+pub use target::{EvaluationContext, LeafInfo, OptimizeTarget, ProgramMetric};
 
 use anyhow::Result;
 use rand::{SeedableRng, rngs::StdRng};

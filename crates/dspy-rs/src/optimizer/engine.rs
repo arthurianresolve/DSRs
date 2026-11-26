@@ -973,8 +973,8 @@ impl Engine {
         &self.matrix
     }
 
-    /// Scores for `target` under the current sampling options, if this is
-    /// the scope of the last completed evaluation.
+    /// Scores for `target` when its evaluation context, baseline, example
+    /// order, and sampling options match the last completed evaluation.
     pub fn matrix_for(&self, target: &OptimizeTarget<'_>) -> Option<&ScoreMatrix> {
         (self.matrix_scope == Some(self.score_scope(target))).then_some(&self.matrix)
     }
@@ -985,6 +985,7 @@ impl Engine {
             baseline: target.baseline(),
             example_order: target.example_order(),
             salt: canonical_hash(&(
+                target.evaluation_context_id(),
                 self.config.cache_salt,
                 incoming.id.as_deref(),
                 incoming.temperature.map(f32::to_bits),
@@ -1219,7 +1220,7 @@ impl Engine {
             });
         }
 
-        // Cached scores already belong to this target's baseline.
+        // Cached scores already belong to this evaluation context and baseline.
         let mut bound = HashMap::with_capacity(needs_binding.len());
         for candidate in needs_binding {
             tracing::debug!(target: "dsrs::content", candidate,

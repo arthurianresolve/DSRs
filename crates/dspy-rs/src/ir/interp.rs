@@ -1047,7 +1047,8 @@ impl Interpreter {
         }
         chat.push_message(Message::with_content(Role::User, blocks));
 
-        let surface = self.build_agent_surface(&at, n, &cx, false).await?;
+        let tools = self.p_tool_set(&cx, n.tool_set, &n.tools);
+        let surface = self.build_agent_surface(&at, n, &cx, &tools, false).await?;
         let lc = AgentLoopCx {
             at: &at,
             n,
@@ -1238,8 +1239,9 @@ impl Interpreter {
             }
             Node::AgentLoop(n) => {
                 let policy = self.p_context(&cx, n.context_policy);
+                let tools = self.p_tool_set(&cx, n.tool_set, &n.tools);
                 let surface = self
-                    .build_agent_surface(&at, n, &cx, !suspend_on_tools)
+                    .build_agent_surface(&at, n, &cx, &tools, !suspend_on_tools)
                     .await?;
                 let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
                 let lc = AgentLoopCx {
@@ -2354,24 +2356,36 @@ impl Interpreter {
         let mut messages = prefix;
         messages.extend(suffix);
         let chat = Chat::new(messages);
-        let open_span = || {
+        let tools = self.p_tool_set(cx, n.tool_set, &n.tools);
+        let opening = OnceLock::new();
+        let opening_hash = || {
+            *opening.get_or_init(|| {
+                let model_hash = crate::trace::ModelEntry::from_config(&lm.config).config_hash;
+                crate::trace::span::request_hash(model_hash, &[], &chat.messages)
+            })
+        };
+        let fingerprint = OnceLock::new();
+        let request_hash = || {
+            *fingerprint
+                .get_or_init(|| self.agent_request_hash(n, cx, &tools, &policy, opening_hash()))
+        };
+        let open_span = |recorded_hash: Option<u64>| {
             begin_span_lazy(|| SpanRequest {
                 component: &at,
                 prefix: Some(&chat.messages[..prefix_len]),
                 suffix: &chat.messages[prefix_len..],
                 input: Some(input.clone()),
                 model: &lm.config,
-                request_hash: None,
+                request_hash: Some(recorded_hash.unwrap_or_else(request_hash)),
             })
         };
 
-        // Replay (RFC 0003 M-1): an agent loop is one span keyed on its
-        // opening prompt; serving it returns the recorded final output with
-        // every tool effect baked in — nothing re-executes.
-        match crate::trace::replay::intercept(&at, &lm.config, &chat.messages) {
+        match crate::trace::replay::intercept_agent(&at, opening_hash, request_hash) {
             Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
-                let guard = open_span();
                 let span = span.span();
+                // A legacy recording keeps its original matching contract
+                // when copied to a new trace.
+                let guard = open_span(Some(span.request_hash));
                 let output = span
                     .output
                     .clone()
@@ -2413,7 +2427,7 @@ impl Interpreter {
                 return Ok(output);
             }
             Some(crate::trace::replay::ReplayDirective::Refuse(err)) => {
-                if let Some(guard) = open_span() {
+                if let Some(guard) = open_span(None) {
                     guard.finish(span_error(
                         crate::trace::SpanErrorKind::Lm,
                         err.to_string(),
@@ -2430,9 +2444,9 @@ impl Interpreter {
             Some(crate::trace::replay::ReplayDirective::Live) | None => {}
         }
 
-        let surface = self.build_agent_surface(&at, n, cx, true).await?;
+        let surface = self.build_agent_surface(&at, n, cx, &tools, true).await?;
         let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
-        let guard = open_span();
+        let guard = open_span(None);
         let loop_cx = AgentLoopCx {
             at: &at,
             n,
@@ -2786,15 +2800,10 @@ impl Interpreter {
         at: &str,
         n: &AgentLoopNode,
         cx: &Cx<'_>,
+        tools: &[ToolId],
         allow_code_mode: bool,
     ) -> Result<AgentSurface, RunError> {
         let p = &*self.program;
-        // Tool surface: the ToolSet gene selects which *declared* tools the
-        // loop carries this run (absent overlay entry = the slot default =
-        // the full declared table). `by_name` is built from the same
-        // selection, so a deselected tool cannot execute even if the model
-        // hallucinates its name.
-        let tools = self.p_tool_set(cx, n.tool_set, &n.tools);
         let mut definitions = Vec::with_capacity(tools.len());
         let mut by_name: HashMap<String, ToolId> = HashMap::new();
         let mut sandbox_code: HashMap<ToolId, (String, u64)> = HashMap::new();
@@ -2823,7 +2832,7 @@ impl Interpreter {
         // definition (stop tools stay individual — the loop must see their
         // calls by name to end).
         let code_mode = if allow_code_mode {
-            self.build_code_mode_surface(at, &tools, &mut definitions, &sandbox_code, &stop_names)
+            self.build_code_mode_surface(at, tools, &mut definitions, &sandbox_code, &stop_names)
                 .await?
         } else {
             None
@@ -2835,6 +2844,50 @@ impl Interpreter {
             stop_names,
             code_mode,
         })
+    }
+
+    fn agent_request_hash(
+        &self,
+        n: &AgentLoopNode,
+        cx: &Cx<'_>,
+        tools: &[ToolId],
+        policy: &ContextPolicy,
+        opening_hash: u64,
+    ) -> u64 {
+        use crate::utils::hash::{HashWriter, StableHasher};
+        use std::fmt::Write as _;
+        use std::hash::Hasher as _;
+
+        let p = &self.program;
+        let mut hasher = StableHasher::new();
+        let mut writer = HashWriter(&mut hasher);
+        let _ = write!(
+            writer,
+            "dsrs-agent-v2 {opening_hash:016x} {policy:?} {:?} {:?} {} {}",
+            self.code_mode, n.budget, n.stop.max_turns, n.stop.until_parse
+        );
+        for &id in n.stop.stop_tools.iter() {
+            let _ = write!(writer, " stop {:?}", p.syms.get(p.tools[id].name));
+        }
+        for &id in tools {
+            let tool = &p.tools[id];
+            let code = match tool.kind {
+                ToolKind::Host => None,
+                ToolKind::Sandboxed { code } => match self.p_value(cx, code) {
+                    ParamValue::Code { hash, .. } => Some(*hash),
+                    _ => None,
+                },
+            };
+            let _ = write!(
+                writer,
+                " tool {:?} {:?} {:?} {:?} {code:?}",
+                p.syms.get(tool.name),
+                self.p_value(cx, tool.desc),
+                self.tool_input_schema(tool.sig),
+                tool.caps
+            );
+        }
+        hasher.finish()
     }
 
     /// Builds one agent loop's Code Mode surface: wraps every non-stop tool

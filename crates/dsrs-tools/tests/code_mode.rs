@@ -680,6 +680,33 @@ fn description_generation_is_token_compact() {
 }
 
 #[test]
+fn description_resolves_shared_class_refs_with_the_existing_depth_limit() {
+    let description = code_mode_description(&[ToolApi {
+        js_name: "lookup".into(),
+        description: "Lookup an address".into(),
+        parameters: json!({
+            "type": "object",
+            "properties": {"address": {"$ref": "#/$defs/Address"}},
+            "required": ["address"],
+            "$defs": {
+                "Address": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string"},
+                        "next": {"$ref": "#/$defs/Address"}
+                    },
+                    "required": ["city"]
+                }
+            }
+        }),
+    }]);
+    assert!(
+        description
+            .contains("args: {address: {city: string, next?: {city: string, next?: object}}}")
+    );
+}
+
+#[test]
 fn description_with_no_apis_is_contract_only() {
     let description = code_mode_description(&[]);
     assert!(!description.contains("APIs:"));

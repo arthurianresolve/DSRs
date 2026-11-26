@@ -7,9 +7,9 @@ use std::future::Future;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::SystemTime;
-use tokio::runtime::Handle;
+use tokio::runtime::{Builder, Handle, Runtime};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
@@ -386,18 +386,37 @@ impl<T> StoreWrite<T> {
     }
 }
 
+// A callback from blocking code can await a stored LM call. Run writes on
+// their own pool so a caller holding a blocking worker cannot stall them.
+static STORE_WRITER: LazyLock<std::io::Result<Runtime>> = LazyLock::new(|| {
+    Builder::new_current_thread()
+        .max_blocking_threads(4)
+        .thread_name("dsrs-store-writer")
+        .build()
+});
+
 pub(crate) fn start_write<T: Send + 'static>(
     stores: Vec<Arc<StoreSession>>,
     write: impl FnOnce(&[Arc<StoreSession>]) -> T + Send + 'static,
 ) -> StoreWrite<T> {
-    let Ok(runtime) = Handle::try_current() else {
+    let Ok(caller) = Handle::try_current() else {
         return StoreWrite::Ready(write(&stores));
+    };
+    let writer = match &*STORE_WRITER {
+        Ok(writer) => writer,
+        Err(error) => {
+            tracing::error!(%error, "interaction writer unavailable");
+            return StoreWrite::Ready(write(&stores));
+        }
     };
     let pending = PendingWrites(stores);
     for session in &pending.0 {
         session.pending.fetch_add(1, Ordering::Relaxed);
     }
-    StoreWrite::Pending(runtime.spawn_blocking(move || write(&pending.0)))
+    StoreWrite::Pending(writer.spawn_blocking(move || {
+        let _caller = caller.enter();
+        write(&pending.0)
+    }))
 }
 tokio::task_local! { static STORES: Vec<Arc<StoreSession>>; }
 pub(crate) fn current_stores() -> Vec<Arc<StoreSession>> {
@@ -422,8 +441,8 @@ pub(crate) async fn persist_trace(trace: crate::Trace) -> crate::Trace {
 /// Persist calls, cache hits, failures, cancellation and subsequent parse results.
 /// History capacity may be zero. Nested scopes compose; spawned tasks need their
 /// own scope. Storage errors are returned after the future finishes (provider
-/// errors remain inside T). With Tokio, writes run on its blocking pool. A
-/// completed scope waits for durability, including writes from dropped calls.
+/// errors remain inside T). With Tokio, writes run on an independent blocking
+/// pool. A completed scope waits for durability, including writes from dropped calls.
 pub async fn with_interaction_store<T>(
     store: Arc<dyn InteractionStore>,
     future: impl Future<Output = T>,

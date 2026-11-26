@@ -1,8 +1,12 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use dspy_rlm::Rlm;
-use dspy_rs::{CompletionProvider, LM, LMClient, PredictError, Signature, TestCompletionModel};
+use dspy_rs::{
+    CompletionProvider, HistoryEntry, InteractionStore, LM, LMClient, PredictError, Signature,
+    StorageError, TestCompletionModel, Trace, with_interaction_store,
+};
 use rig::completion::{
     AssistantContent, CompletionError, CompletionRequest, CompletionResponse, Usage,
 };
@@ -181,6 +185,58 @@ async fn feeds_invalid_submissions_back_to_the_model_and_preserves_variables() {
     let prompt = format!("{:?}", provider.last_request().unwrap());
     assert!(prompt.contains("SUBMIT rejected"));
     assert!(prompt.contains("not found in response"));
+}
+
+#[test]
+fn stored_submodel_calls_complete_on_a_single_blocking_worker() {
+    #[derive(Debug, Default)]
+    struct InvocationCount(AtomicUsize);
+
+    impl InteractionStore for InvocationCount {
+        fn upsert(&self, _: &HistoryEntry) -> Result<(), StorageError> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn get(&self, _: &str) -> Result<Option<HistoryEntry>, StorageError> {
+            unreachable!()
+        }
+
+        fn recent(&self, _: usize) -> Result<Vec<HistoryEntry>, StorageError> {
+            unreachable!()
+        }
+
+        fn upsert_trace(&self, _: &Trace) -> Result<(), StorageError> {
+            unreachable!()
+        }
+
+        fn get_trace(&self, _: &str) -> Result<Option<Trace>, StorageError> {
+            unreachable!()
+        }
+    }
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let (lm, _) = test_lm(&["SUBMIT(selected_titles=[llm_query(query)])"]).await;
+            let (sub_lm, _) = test_lm(&["Rust"]).await;
+            let rlm = Rlm::<Search>::builder().lm(lm).sub_lm(sub_lm).build();
+            let store = Arc::new(InvocationCount::default());
+            let prediction = tokio::time::timeout(
+                Duration::from_secs(10),
+                with_interaction_store(store.clone(), rlm.call(input("Rust"))),
+            )
+            .await
+            .expect("the nested call can persist while Python holds the blocking worker")
+            .unwrap()
+            .unwrap();
+
+            assert_eq!(prediction.titles, ["Rust"]);
+            assert_eq!(store.0.load(Ordering::Relaxed), 2);
+        });
 }
 
 #[tokio::test]
