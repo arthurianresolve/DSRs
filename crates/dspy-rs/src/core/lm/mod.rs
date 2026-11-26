@@ -20,6 +20,7 @@ use rig::{
 
 use bon::Builder;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{sync::Arc, time::Duration};
 use tool_loop::{
     ChoiceAction, ToolLoopResult, ToolRound, classify_choice, decode_prompt_tools,
@@ -203,6 +204,7 @@ pub struct LM {
     #[cfg(feature = "cache")]
     pub cache_handler: Option<Arc<ResponseCache>>,
     client: Option<Arc<LMClient>>,
+    client_id: u64,
     custom_output_schema: bool,
     scalar_output_schema: bool,
 }
@@ -214,6 +216,20 @@ impl Default for LM {
 }
 
 impl LM {
+    fn next_client_id() -> u64 {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub(crate) fn binding_identity(&self) -> (u64, u64, bool, bool) {
+        (
+            self.client_id,
+            crate::trace::ModelEntry::from_config(&self.config).config_hash,
+            self.custom_output_schema,
+            self.scalar_output_schema,
+        )
+    }
+
     pub fn with_native_tools(mut self, enabled: bool) -> Self {
         self.config.native_tools = enabled;
         self
@@ -346,6 +362,7 @@ impl LM {
             #[cfg(feature = "cache")]
             cache_handler,
             client: Some(client),
+            client_id: Self::next_client_id(),
             custom_output_schema: false,
             scalar_output_schema: false,
         })
@@ -396,6 +413,7 @@ impl LM {
             #[cfg(feature = "cache")]
             cache_handler,
             client: Some(Arc::new(client)),
+            client_id: Self::next_client_id(),
             ..self
         })
     }
@@ -1174,6 +1192,7 @@ pub(crate) mod tests {
             config: LMConfig::default(),
             cache_handler: None,
             client: None,
+            client_id: 0,
             custom_output_schema: false,
             scalar_output_schema: false,
         };
@@ -1227,6 +1246,7 @@ pub(crate) mod tests {
             },
             cache_handler: Some(cache.clone()),
             client: None,
+            client_id: 0,
             custom_output_schema: false,
             scalar_output_schema: false,
         };
@@ -1517,6 +1537,7 @@ pub(crate) mod tests {
             #[cfg(feature = "cache")]
             cache_handler: None,
             client: Some(Arc::new(LMClient::Test(model))),
+            client_id: LM::next_client_id(),
             custom_output_schema: false,
             scalar_output_schema: false,
         }

@@ -50,8 +50,9 @@ The journal uses OS file locks across handles/processes and syncs every revision
 It recovers an incomplete final line before appending and rejects corrupt complete
 records or unknown versions as it validates the journal. Opening a handle scans
 the file once. Each handle then indexes appended revisions and reads the latest
-record by offset. Individual store methods are synchronous. The async APIs
-dispatch scoped writes to Tokio's blocking pool when running in a Tokio
-runtime. Run retention or archival with all handles closed before editing or
-replacing the journal. Bounded in-memory history applies to inspection and
+record by offset. Individual store methods are synchronous. Scoped writes use
+an independent blocking pool when running in a Tokio runtime. Handles to the
+same journal share one admission queue, so waiting writes leave workers free
+for other journals. Close all handles before editing, replacing, or archiving
+the journal. Bounded in-memory history applies to inspection and
 leaves the stored records intact.

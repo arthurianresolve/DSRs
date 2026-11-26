@@ -112,7 +112,7 @@ let (out, report) = dspy_rs::trace::replay(&trace, ReplayMode::Strict, || pipeli
 | `Strict` | Every call must match its recording; any mismatch is a typed error. For fixtures and CI (`report.live` stays 0). |
 | `UntilDivergence` | Serve while hashes match; the first mismatching call and every call after it go to the live LM. For counterfactual replay: a mutated parameter changes only the prompts it affects, so the unchanged prefix replays free and only the changed suffix spends tokens. Once diverged, the session stays live even if a later hash happens to match again. |
 
-New interpreter agent recordings fingerprint the resolved tool selection, schemas, descriptions, and sandboxed code alongside the opening prompt. Legacy agent recordings still match by opening prompt.
+Graph runs and conversations fingerprint the opening prompt and the resolved agent tools, including schemas, descriptions, sandboxed code, and Code Mode settings. Legacy agent recordings still match by opening prompt.
 
 <svg viewBox="0 0 760 300" role="img" aria-label="Until-divergence replay: footprints follow the recorded route for free, peel off at the detected divergence point, and the meter runs only from there" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
   <defs>

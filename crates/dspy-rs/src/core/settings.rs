@@ -16,7 +16,7 @@ pub static GLOBAL_SETTINGS: LazyLock<RwLock<Option<Settings>>> =
     LazyLock::new(|| RwLock::new(None));
 
 tokio::task_local! {
-    static SCOPED_LM: Arc<LM>;
+    static SCOPED_LM: Option<Arc<LM>>;
     static CALL_LM: Arc<LM>;
 }
 
@@ -24,7 +24,15 @@ tokio::task_local! {
 /// precedence. Nested scopes restore automatically on return, error, panic, or
 /// cancellation. Spawned tasks do not inherit the scope.
 pub async fn with_lm<F: std::future::Future>(lm: impl Into<Arc<LM>>, future: F) -> F::Output {
-    SCOPED_LM.scope(lm.into(), future).await
+    with_default_lm(Some(lm.into()), future).await
+}
+
+/// Pins the default binding, including its absence, for one evaluation.
+pub(crate) async fn with_default_lm<F: std::future::Future>(
+    lm: Option<Arc<LM>>,
+    future: F,
+) -> F::Output {
+    SCOPED_LM.scope(lm, future).await
 }
 
 pub(crate) async fn with_call_lm<F: std::future::Future>(
@@ -40,15 +48,17 @@ pub(crate) fn call_lm() -> Option<Arc<LM>> {
 
 /// Returns the active call LM, scoped default, or global LM, if configured.
 pub fn try_get_lm() -> Option<Arc<LM>> {
-    call_lm()
-        .or_else(|| SCOPED_LM.try_with(Arc::clone).ok())
-        .or_else(|| {
-            GLOBAL_SETTINGS
-                .read()
-                .unwrap()
-                .as_ref()
-                .map(|settings| Arc::clone(&settings.lm))
-        })
+    call_lm().or_else(default_lm)
+}
+
+pub(crate) fn default_lm() -> Option<Arc<LM>> {
+    SCOPED_LM.try_with(Clone::clone).unwrap_or_else(|_| {
+        GLOBAL_SETTINGS
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|settings| Arc::clone(&settings.lm))
+    })
 }
 
 /// Returns the active call LM, scoped default, or global LM.

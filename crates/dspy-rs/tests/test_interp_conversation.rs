@@ -919,6 +919,41 @@ async fn caller_managed_turns_never_suspend_under_replay() {
     // recorded span, so the caller never sees a suspension.
     let (empty_lm, _client) = canned_lm(vec![]).await;
     let replayed = load_agent(agent_program(None, false), empty_lm, &executed).await;
+    let (graph, report) = replay(&recording, ReplayMode::Strict, || {
+        replayed.run(input.clone(), None, Budget::unlimited())
+    })
+    .await;
+    assert_eq!(report.served, 1);
+    assert_eq!(graph.unwrap(), live_run.output);
+
+    let program = replayed.program();
+    let mut overlay = ir::Overlay::new(program);
+    overlay
+        .set(
+            program,
+            program.param_id("tool.search.desc").unwrap(),
+            ir::ParamValue::ToolDesc {
+                text: "Revised search description".into(),
+            },
+        )
+        .unwrap();
+    let (changed, _) = replay(&recording, ReplayMode::Strict, || {
+        replayed.run_conversation_caller_managed(
+            dspy_rs::Chat::new(vec![]),
+            Some(input.clone()),
+            Some(Arc::new(overlay)),
+            Budget::unlimited(),
+        )
+    })
+    .await;
+    assert!(matches!(
+        changed,
+        Err(RunError::Replay {
+            source: dspy_rs::trace::ReplayError::Divergence { .. },
+            ..
+        })
+    ));
+
     let (turn, report) = replay(&recording, ReplayMode::Strict, || {
         replayed.run_conversation_caller_managed(
             dspy_rs::Chat::new(Vec::new()),

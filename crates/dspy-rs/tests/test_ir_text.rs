@@ -105,6 +105,56 @@ fn save_dsrs_requires_explicit_model_url_redaction() {
     assert!(!text.contains("secret-check"));
 }
 
+#[tokio::test]
+async fn save_dsrs_preserves_exact_endpoint_approval() {
+    use dspy_rs::ir::{Interpreter, RuntimeEnv};
+
+    let url = "https://model.example:443/v1";
+    let mut builder = ProgramBuilder::new("public_endpoint");
+    let model = builder.model(
+        "m",
+        LMConfig {
+            base_url: Some(url.into()),
+            ..model_config("openai:gpt-4o-mini")
+        },
+    );
+    let sig = builder.sig(
+        SignatureDef::build("QA")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let predict = ir::predict("answerer", sig)
+        .model(model)
+        .bind("question", ir::input("question"));
+    let program = builder
+        .main(
+            sig,
+            ir::seq([predict]).out("answer", ir::out("answerer", "answer")),
+        )
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("public-model-url.dsrs");
+
+    program.save_dsrs(&path).unwrap();
+    let saved = Program::load_dsrs(path).unwrap();
+    assert_eq!(
+        saved
+            .models
+            .values()
+            .next()
+            .unwrap()
+            .config
+            .base_url
+            .as_deref(),
+        Some(url),
+    );
+    Interpreter::load(saved, RuntimeEnv::new().allow_model_base_url(url))
+        .await
+        .expect("the original endpoint approval still applies");
+}
+
 #[test]
 fn recursive_class_is_rejected_without_recursing_forever() {
     let source = r#"dsrs 1

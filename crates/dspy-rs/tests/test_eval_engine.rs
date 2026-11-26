@@ -13,7 +13,7 @@ use dspy_rs::optimizer::engine::{BatchEvalOutcome, EvalOutcome, GateOutcome, Rol
 use dspy_rs::{
     Budget, CallMetadata, Candidate, Engine, EngineConfig, Eval, LM, LMClient, Module, ModuleState,
     OptimizeTarget, Predict, PredictError, Predicted, SamplingOptions, Signature,
-    TestCompletionModel, TypedMetric, current_sampling_options, with_sampling_options,
+    TestCompletionModel, TypedMetric, current_sampling_options, with_lm, with_sampling_options,
 };
 use rig::completion::{AssistantContent, Usage};
 use rig::message::Text;
@@ -1029,6 +1029,40 @@ async fn targets_with_different_metrics_do_not_share_scores_or_matrices() {
     assert_eq!(second.completed().unwrap().mean(), 1.0);
     assert_eq!(engine.spend().metric_calls, 2);
     assert_eq!(engine.spend().cache_hits, 0);
+}
+
+#[tokio::test]
+async fn target_cache_tracks_the_scoped_lm() {
+    let matching = TestCompletionModel::new([answer_response("0")]);
+    let other = TestCompletionModel::new([answer_response("different")]);
+    let first_lm = Arc::new(make_test_lm(matching.clone()).await);
+    let other_lm = Arc::new(make_test_lm(other.clone()).await);
+    let mut module = LmModule {
+        predictor: Predict::<EngSig>::builder().named("predictor").build(),
+    };
+    let examples = trainset(1);
+    let target = OptimizeTarget::module(&mut module, &examples, &ExactMatch);
+    let mut engine = Engine::new(EngineConfig::default());
+    let candidate = engine.register(Candidate::new());
+
+    let first = with_lm(first_lm.clone(), engine.evaluate(&target, candidate, None))
+        .await
+        .unwrap();
+    assert_eq!(first.completed().unwrap().mean(), 1.0);
+    with_lm(other_lm, async {
+        assert!(engine.matrix_for(&target).is_none());
+        let second = engine.evaluate(&target, candidate, None).await.unwrap();
+        assert_eq!(second.completed().unwrap().mean(), 0.0);
+    })
+    .await;
+    let warm = with_lm(first_lm, engine.evaluate(&target, candidate, None))
+        .await
+        .unwrap();
+    assert_eq!(warm.completed().unwrap().mean(), 1.0);
+    assert_eq!(matching.call_count(), 1);
+    assert_eq!(other.call_count(), 1);
+    assert_eq!(engine.spend().metric_calls, 2);
+    assert_eq!(engine.spend().cache_hits, 1);
 }
 
 #[tokio::test]

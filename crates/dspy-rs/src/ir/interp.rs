@@ -1025,14 +1025,14 @@ impl Interpreter {
         let cx = self.conversation_cx(overlay.clone(), Arc::clone(&run_meter));
         let def = &p.sigs[n.sig];
         let lm = self.p_model(&at, &cx, n.model)?;
-        let policy = self.p_context(&cx, n.context_policy);
+        let agent = self.prepare_agent(n, &cx, false);
 
         // Feed the caller's results back: same event, record, and
         // conversation shape as dispatched executions.
         let duration_us = suspended_at.elapsed().as_micros() as u64;
         let mut blocks = Vec::with_capacity(calls.len());
         for (call, result) in calls.iter().zip(results) {
-            let result = clip_tool_result(result, &policy);
+            let result = clip_tool_result(result, &agent.policy);
             run.events.push(SpanEvent::ToolRun {
                 id: call.id.clone(),
                 name: call.function.name.clone(),
@@ -1047,8 +1047,7 @@ impl Interpreter {
         }
         chat.push_message(Message::with_content(Role::User, blocks));
 
-        let tools = self.p_tool_set(&cx, n.tool_set, &n.tools);
-        let surface = self.build_agent_surface(&at, n, &cx, &tools, false).await?;
+        let surface = self.build_agent_surface(&at, &cx, &agent).await?;
         let lc = AgentLoopCx {
             at: &at,
             n,
@@ -1061,7 +1060,7 @@ impl Interpreter {
             prefix_len,
             meter: &meter,
             run_meter: &run_meter,
-            policy: &policy,
+            policy: &agent.policy,
             code_mode: None,
         };
         let outcome = in_span(
@@ -1173,24 +1172,29 @@ impl Interpreter {
             prefix.len()
         };
 
-        let guard = begin_span_lazy(|| SpanRequest {
-            component: &at,
-            prefix: (!prefix.is_empty()).then_some(prefix.as_slice()),
-            suffix: &suffix,
-            input: input.clone(),
-            model: &lm.config,
-            request_hash: None,
-        });
-
+        let captured_prefix_len = prefix.len();
         let mut messages = prefix;
         messages.extend(suffix);
 
-        // Replay (RFC 0001 §4d/e): a conversation turn keys on the full chat
-        // it would send — the same preimage the span records (`request_hash`
-        // streams prefix ++ suffix, so the split is irrelevant). Serving a
-        // turn extends the chat with the recorded completion; tool effects
-        // are baked in, so caller-managed turns never suspend under replay.
-        match crate::trace::replay::intercept(&at, &lm.config, &messages) {
+        let opening = TurnRequest {
+            at: &at,
+            prefix: &messages[..captured_prefix_len],
+            suffix: &messages[captured_prefix_len..],
+            input: input.as_ref(),
+            model: &lm.config,
+        };
+        let agent = match &p.nodes[node] {
+            Node::AgentLoop(n) => Some(self.prepare_agent(n, &cx, !suspend_on_tools)),
+            _ => None,
+        };
+        let (guard, replay) = match &agent {
+            Some(agent) => self.begin_agent_request(&cx, agent, opening),
+            None => (
+                opening.open_span(|| None),
+                crate::trace::replay::intercept(&at, &lm.config, &messages),
+            ),
+        };
+        match replay {
             Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
                 return self.serve_conversation_turn(&at, &lm, span.span(), messages, guard);
             }
@@ -1212,8 +1216,8 @@ impl Interpreter {
             Some(crate::trace::replay::ReplayDirective::Live) | None => {}
         }
 
-        match &p.nodes[node] {
-            Node::Predict(_) => {
+        match agent {
+            None => {
                 let (output, leaf, chat) = self
                     .exchange_predict(
                         PredictExchange {
@@ -1237,12 +1241,9 @@ impl Interpreter {
                     chat,
                 })
             }
-            Node::AgentLoop(n) => {
-                let policy = self.p_context(&cx, n.context_policy);
-                let tools = self.p_tool_set(&cx, n.tool_set, &n.tools);
-                let surface = self
-                    .build_agent_surface(&at, n, &cx, &tools, !suspend_on_tools)
-                    .await?;
+            Some(agent) => {
+                let n = agent.node;
+                let surface = self.build_agent_surface(&at, &cx, &agent).await?;
                 let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
                 let lc = AgentLoopCx {
                     at: &at,
@@ -1256,7 +1257,7 @@ impl Interpreter {
                     prefix_len,
                     meter: &meter,
                     run_meter: &cx.meter,
-                    policy: &policy,
+                    policy: &agent.policy,
                     code_mode: surface.code_mode.as_ref(),
                 };
                 let mut run = AgentRun::default();
@@ -1280,7 +1281,6 @@ impl Interpreter {
                     },
                 )
             }
-            _ => unreachable!("conversation_leaf returns only leaves"),
         }
     }
 
@@ -2344,11 +2344,11 @@ impl Interpreter {
         let def = &p.sigs[n.sig];
         let input = self.resolve_bindings(&at, Some(id), &n.binding, cx)?;
 
-        let policy = self.p_context(cx, n.context_policy);
+        let agent = self.prepare_agent(n, cx, true);
         let lm = self.p_model(&at, cx, n.model)?;
         let format = self.output_format(n.sig, &lm, false);
         let (prefix, mut suffix) =
-            self.render_prompt(id, cx, &input, format, policy.playbook.as_deref())?;
+            self.render_prompt(id, cx, &input, format, agent.policy.playbook.as_deref())?;
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
         }
@@ -2356,36 +2356,18 @@ impl Interpreter {
         let mut messages = prefix;
         messages.extend(suffix);
         let chat = Chat::new(messages);
-        let tools = self.p_tool_set(cx, n.tool_set, &n.tools);
-        let opening = OnceLock::new();
-        let opening_hash = || {
-            *opening.get_or_init(|| {
-                let model_hash = crate::trace::ModelEntry::from_config(&lm.config).config_hash;
-                crate::trace::span::request_hash(model_hash, &[], &chat.messages)
-            })
+        let opening = TurnRequest {
+            at: &at,
+            prefix: &chat.messages[..prefix_len],
+            suffix: &chat.messages[prefix_len..],
+            input: Some(&input),
+            model: &lm.config,
         };
-        let fingerprint = OnceLock::new();
-        let request_hash = || {
-            *fingerprint
-                .get_or_init(|| self.agent_request_hash(n, cx, &tools, &policy, opening_hash()))
-        };
-        let open_span = |recorded_hash: Option<u64>| {
-            begin_span_lazy(|| SpanRequest {
-                component: &at,
-                prefix: Some(&chat.messages[..prefix_len]),
-                suffix: &chat.messages[prefix_len..],
-                input: Some(input.clone()),
-                model: &lm.config,
-                request_hash: Some(recorded_hash.unwrap_or_else(request_hash)),
-            })
-        };
+        let (guard, replay) = self.begin_agent_request(cx, &agent, opening);
 
-        match crate::trace::replay::intercept_agent(&at, opening_hash, request_hash) {
+        match replay {
             Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
                 let span = span.span();
-                // A legacy recording keeps its original matching contract
-                // when copied to a new trace.
-                let guard = open_span(Some(span.request_hash));
                 let output = span
                     .output
                     .clone()
@@ -2427,7 +2409,7 @@ impl Interpreter {
                 return Ok(output);
             }
             Some(crate::trace::replay::ReplayDirective::Refuse(err)) => {
-                if let Some(guard) = open_span(None) {
+                if let Some(guard) = guard {
                     guard.finish(span_error(
                         crate::trace::SpanErrorKind::Lm,
                         err.to_string(),
@@ -2444,9 +2426,8 @@ impl Interpreter {
             Some(crate::trace::replay::ReplayDirective::Live) | None => {}
         }
 
-        let surface = self.build_agent_surface(&at, n, cx, &tools, true).await?;
+        let surface = self.build_agent_surface(&at, cx, &agent).await?;
         let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
-        let guard = open_span(None);
         let loop_cx = AgentLoopCx {
             at: &at,
             n,
@@ -2459,7 +2440,7 @@ impl Interpreter {
             prefix_len,
             meter: &meter,
             run_meter: &cx.meter,
-            policy: &policy,
+            policy: &agent.policy,
             code_mode: surface.code_mode.as_ref(),
         };
         let mut run = AgentRun::default();
@@ -2788,22 +2769,61 @@ impl Interpreter {
             .map_err(|err| err.to_llm_json())
     }
 
-    /// Resolves one agent loop's model-facing tool surface: definitions from
-    /// the declared signatures with overlay-resolved descriptions (`ToolDesc`
-    /// is a first-class gene) and overlay-resolved code for sandboxed tools,
-    /// plus the stop-tool names and (when `allow_code_mode`) the Code Mode
-    /// collapse. Caller-managed conversations pass `allow_code_mode = false`:
-    /// the caller executes tools itself, so the host's code-mode execution
-    /// strategy cannot apply and the declared per-tool surface is presented.
+    fn prepare_agent<'a>(
+        &self,
+        node: &'a AgentLoopNode,
+        cx: &Cx<'_>,
+        allow_code_mode: bool,
+    ) -> PreparedAgent<'a> {
+        PreparedAgent {
+            node,
+            tools: self.p_tool_set(cx, node.tool_set, &node.tools),
+            policy: self.p_context(cx, node.context_policy),
+            code_mode: if allow_code_mode {
+                self.code_mode
+            } else {
+                None
+            },
+        }
+    }
+
+    fn begin_agent_request(
+        &self,
+        cx: &Cx<'_>,
+        agent: &PreparedAgent<'_>,
+        opening: TurnRequest<'_>,
+    ) -> (
+        Option<SpanGuard>,
+        Option<crate::trace::replay::ReplayDirective>,
+    ) {
+        use crate::trace::replay::{ReplayDirective, intercept_agent};
+        use std::cell::OnceCell;
+
+        let prompt = OnceCell::new();
+        let opening_hash = || *prompt.get_or_init(|| opening.prompt_hash());
+        let fingerprint = OnceCell::new();
+        let request_hash =
+            || *fingerprint.get_or_init(|| self.agent_request_hash(cx, agent, opening_hash()));
+        let replay = intercept_agent(opening.at, opening_hash, request_hash);
+        let guard = opening.open_span(|| {
+            // Copies of legacy spans retain the original matching contract.
+            Some(match &replay {
+                Some(ReplayDirective::Serve(span)) => span.span().request_hash,
+                _ => request_hash(),
+            })
+        });
+        (guard, replay)
+    }
+
+    /// Materializes the prepared tool selection for live execution.
     async fn build_agent_surface(
         &self,
         at: &str,
-        n: &AgentLoopNode,
         cx: &Cx<'_>,
-        tools: &[ToolId],
-        allow_code_mode: bool,
+        agent: &PreparedAgent<'_>,
     ) -> Result<AgentSurface, RunError> {
         let p = &*self.program;
+        let tools = &agent.tools;
         let mut definitions = Vec::with_capacity(tools.len());
         let mut by_name: HashMap<String, ToolId> = HashMap::new();
         let mut sandbox_code: HashMap<ToolId, (String, u64)> = HashMap::new();
@@ -2822,7 +2842,8 @@ impl Interpreter {
                 sandbox_code.insert(tool_id, (source.clone(), *hash));
             }
         }
-        let stop_names: Vec<String> = n
+        let stop_names: Vec<String> = agent
+            .node
             .stop
             .stop_tools
             .iter()
@@ -2831,9 +2852,16 @@ impl Interpreter {
         // Code Mode: collapse the non-stop tool surface into one `run_js`
         // definition (stop tools stay individual — the loop must see their
         // calls by name to end).
-        let code_mode = if allow_code_mode {
-            self.build_code_mode_surface(at, tools, &mut definitions, &sandbox_code, &stop_names)
-                .await?
+        let code_mode = if let Some(config) = agent.code_mode {
+            self.build_code_mode_surface(
+                at,
+                config,
+                tools,
+                &mut definitions,
+                &sandbox_code,
+                &stop_names,
+            )
+            .await?
         } else {
             None
         };
@@ -2846,30 +2874,24 @@ impl Interpreter {
         })
     }
 
-    fn agent_request_hash(
-        &self,
-        n: &AgentLoopNode,
-        cx: &Cx<'_>,
-        tools: &[ToolId],
-        policy: &ContextPolicy,
-        opening_hash: u64,
-    ) -> u64 {
+    fn agent_request_hash(&self, cx: &Cx<'_>, agent: &PreparedAgent<'_>, opening_hash: u64) -> u64 {
         use crate::utils::hash::{HashWriter, StableHasher};
         use std::fmt::Write as _;
         use std::hash::Hasher as _;
 
         let p = &self.program;
+        let n = agent.node;
         let mut hasher = StableHasher::new();
         let mut writer = HashWriter(&mut hasher);
         let _ = write!(
             writer,
-            "dsrs-agent-v2 {opening_hash:016x} {policy:?} {:?} {:?} {} {}",
-            self.code_mode, n.budget, n.stop.max_turns, n.stop.until_parse
+            "dsrs-agent-v2 {opening_hash:016x} {:?} {:?} {:?} {} {}",
+            agent.policy, agent.code_mode, n.budget, n.stop.max_turns, n.stop.until_parse
         );
         for &id in n.stop.stop_tools.iter() {
             let _ = write!(writer, " stop {:?}", p.syms.get(p.tools[id].name));
         }
-        for &id in tools {
+        for &id in agent.tools.iter() {
             let tool = &p.tools[id];
             let code = match tool.kind {
                 ToolKind::Host => None,
@@ -2896,19 +2918,17 @@ impl Interpreter {
     /// executor under their registered names) and replaces their definitions
     /// with a single `run_js` definition whose description is generated from
     /// the *overlay-resolved* tool descriptions — `ToolDesc` genes keep
-    /// flowing into the surface the model sees. Returns `None` when code
-    /// mode is off or the loop has no non-stop tools.
+    /// flowing into the surface the model sees. A loop with only stop tools
+    /// keeps its individual tool definitions.
     async fn build_code_mode_surface(
         &self,
         at: &str,
+        config: dsrs_tools::SandboxConfig,
         tools: &[ToolId],
         definitions: &mut Vec<rig::completion::ToolDefinition>,
         sandbox_code: &HashMap<ToolId, (String, u64)>,
         stop_names: &[String],
     ) -> Result<Option<CodeModeSurface>, RunError> {
-        let Some(config) = self.code_mode else {
-            return Ok(None);
-        };
         let p = &*self.program;
         let internal = |message: String| RunError::Internal {
             at: at.into(),
@@ -3191,6 +3211,39 @@ struct AgentSurface {
     sandbox_code: HashMap<ToolId, (String, u64)>,
     stop_names: Vec<String>,
     code_mode: Option<CodeModeSurface>,
+}
+
+struct PreparedAgent<'a> {
+    node: &'a AgentLoopNode,
+    tools: Box<[ToolId]>,
+    policy: ContextPolicy,
+    code_mode: Option<dsrs_tools::SandboxConfig>,
+}
+
+struct TurnRequest<'a> {
+    at: &'a str,
+    prefix: &'a [Message],
+    suffix: &'a [Message],
+    input: Option<&'a JsonMap>,
+    model: &'a LMConfig,
+}
+
+impl TurnRequest<'_> {
+    fn open_span(&self, request_hash: impl FnOnce() -> Option<u64>) -> Option<SpanGuard> {
+        begin_span_lazy(|| SpanRequest {
+            component: self.at,
+            prefix: (!self.prefix.is_empty()).then_some(self.prefix),
+            suffix: self.suffix,
+            input: self.input.cloned(),
+            model: self.model,
+            request_hash: request_hash(),
+        })
+    }
+
+    fn prompt_hash(&self) -> u64 {
+        let model_hash = crate::trace::ModelEntry::from_config(self.model).config_hash;
+        crate::trace::span::request_hash(model_hash, self.prefix, self.suffix)
+    }
 }
 
 struct PredictExchange<'a> {

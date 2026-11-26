@@ -40,6 +40,7 @@
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use futures::stream::{self, FuturesUnordered, StreamExt, TryStreamExt};
@@ -917,13 +918,18 @@ pub struct Engine {
     config: EngineConfig,
     candidates: Vec<(u64, CandidatePayload)>,
     candidate_indices: HashMap<(CandidateKind, u64), usize>,
-    matrix: ScoreMatrix,
-    matrix_scope: Option<ScoreScope>,
-    cache: RolloutCache,
+    scores: ScoredRollouts,
     spend: Spend,
     /// High-water mark of *distinct candidates* with rollouts in flight at
     /// the same instant (see [`peak_candidate_concurrency`](Self::peak_candidate_concurrency)).
     peak_candidates_in_flight: usize,
+}
+
+#[derive(Default)]
+struct ScoredRollouts {
+    matrix: ScoreMatrix,
+    matrix_scope: Option<ScoreScope>,
+    cache: RolloutCache,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -951,9 +957,7 @@ impl Engine {
             config,
             candidates: Vec::new(),
             candidate_indices: HashMap::new(),
-            matrix: ScoreMatrix::new(0),
-            matrix_scope: None,
-            cache: RolloutCache::default(),
+            scores: ScoredRollouts::default(),
             spend: Spend::default(),
             peak_candidates_in_flight: 0,
         }
@@ -970,18 +974,24 @@ impl Engine {
     /// Scores for the last completed evaluation's target and sampling scope.
     /// Use [`Self::matrix_for`] to check a target after changing its state.
     pub fn matrix(&self) -> &ScoreMatrix {
-        &self.matrix
+        &self.scores.matrix
     }
 
     /// Scores for `target` when its evaluation context, baseline, example
-    /// order, and sampling options match the last completed evaluation.
+    /// order, ambient LM, and sampling options match the last completed evaluation.
     pub fn matrix_for(&self, target: &OptimizeTarget<'_>) -> Option<&ScoreMatrix> {
-        (self.matrix_scope == Some(self.score_scope(target))).then_some(&self.matrix)
+        let (scope, _) = self.score_scope(target);
+        (self.scores.matrix_scope == Some(scope)).then_some(&self.scores.matrix)
     }
 
-    fn score_scope(&self, target: &OptimizeTarget<'_>) -> ScoreScope {
+    fn score_scope(&self, target: &OptimizeTarget<'_>) -> (ScoreScope, Option<Arc<crate::LM>>) {
+        use crate::core::settings::{call_lm, default_lm};
+
         let incoming = crate::current_sampling_options();
-        ScoreScope {
+        let default_lm = default_lm();
+        let call_lm = call_lm();
+        let model = call_lm.as_ref().or(default_lm.as_ref());
+        let scope = ScoreScope {
             baseline: target.baseline(),
             example_order: target.example_order(),
             salt: canonical_hash(&(
@@ -989,25 +999,28 @@ impl Engine {
                 self.config.cache_salt,
                 incoming.id.as_deref(),
                 incoming.temperature.map(f32::to_bits),
+                call_lm.is_some(),
+                model.map(|lm| lm.binding_identity()),
             )),
-        }
+        };
+        (scope, default_lm)
     }
 
     /// The rollout cache. Keys are `(baseline identity, candidate hash,
     /// example uid, salt)` — candidate identity is in the key, so two
     /// candidates on the same example occupy distinct entries.
     pub fn cache(&self) -> &RolloutCache {
-        &self.cache
+        &self.scores.cache
     }
 
     /// Pareto view over all example columns (see [`ScoreMatrix::pareto`]).
     pub fn pareto(&self) -> ParetoView {
-        self.matrix.pareto()
+        self.scores.matrix.pareto()
     }
 
     /// Pareto view over a column subset (see [`ScoreMatrix::pareto_over`]).
     pub fn pareto_over(&self, columns: &[usize]) -> ParetoView {
-        self.matrix.pareto_over(columns)
+        self.scores.matrix.pareto_over(columns)
     }
 
     /// The parallelism gauge: the maximum number of **distinct candidates**
@@ -1071,7 +1084,7 @@ impl Engine {
         };
 
         self.candidates.push((hash, payload()));
-        self.matrix.ensure_rows(index + 1);
+        self.scores.matrix.ensure_rows(index + 1);
         if let Some(entry) = entry {
             entry.insert(index);
         }
@@ -1159,7 +1172,7 @@ impl Engine {
             None => Cow::Owned((0..target.num_examples()).collect()),
         };
 
-        let scope = self.score_scope(target);
+        let (scope, default_lm) = self.score_scope(target);
         let ScoreScope { baseline, salt, .. } = scope;
 
         // Deduplicate each axis once, retaining first-seen order for scheduling.
@@ -1179,7 +1192,7 @@ impl Engine {
         let repeats =
             unique_candidates.len() != candidates.len() || unique_indices.len() != indices.len();
 
-        if self.cache.is_empty() {
+        if self.scores.cache.is_empty() {
             let needed = unique_candidates
                 .len()
                 .checked_mul(unique_indices.len())
@@ -1198,6 +1211,7 @@ impl Engine {
             let previous_pending = pending.len();
             for &idx in unique_indices.iter() {
                 match self
+                    .scores
                     .cache
                     .get(baseline, candidate_hash, target.example_uid(idx), salt)
                 {
@@ -1228,21 +1242,25 @@ impl Engine {
             bound.insert(candidate, target.bind(&self.candidates[candidate].1)?);
         }
 
-        let fresh = self.run_rollouts(target, &pending, &bound, detail).await?;
+        let fresh = crate::core::settings::with_default_lm(
+            default_lm,
+            self.run_rollouts(target, &pending, &bound, detail),
+        )
+        .await?;
         self.peak_candidates_in_flight = self.peak_candidates_in_flight.max(fresh.peak_candidates);
 
         let cache_hits = cached.len();
         self.spend.cache_hits += cache_hits;
 
-        if self.matrix_scope != Some(scope) {
-            self.matrix = ScoreMatrix::new(0);
-            self.matrix.ensure_rows(self.candidates.len());
-            self.matrix_scope = Some(scope);
+        if self.scores.matrix_scope != Some(scope) {
+            self.scores.matrix = ScoreMatrix::new(0);
+            self.scores.matrix.ensure_rows(self.candidates.len());
+            self.scores.matrix_scope = Some(scope);
         }
 
         // Bookkeeping: cache inserts + matrix records.
         for (&(candidate, idx), eval) in &cached {
-            self.matrix.record(candidate, idx, eval.score);
+            self.scores.matrix.record(candidate, idx, eval.score);
         }
         let mut fresh_by_key = HashMap::with_capacity(fresh.rollouts.len());
         for FreshRollout {
@@ -1252,14 +1270,14 @@ impl Engine {
             trace,
         } in fresh.rollouts
         {
-            self.cache.insert(
+            self.scores.cache.insert(
                 baseline,
                 self.candidates[candidate].0,
                 target.example_uid(idx),
                 salt,
                 eval.clone(),
             );
-            self.matrix.record(candidate, idx, eval.score);
+            self.scores.matrix.record(candidate, idx, eval.score);
             fresh_by_key.insert((candidate, idx), (eval, trace));
         }
 
@@ -1295,7 +1313,7 @@ impl Engine {
             .collect();
 
         let best = std::cell::OnceCell::new();
-        let best_candidate = || *best.get_or_init(|| self.matrix.best_by_mean());
+        let best_candidate = || *best.get_or_init(|| self.scores.matrix.best_by_mean());
         let average_score = || {
             let count: usize = evals.iter().map(|eval| eval.rollouts.len()).sum();
             (count > 0).then(|| {
@@ -1309,7 +1327,7 @@ impl Engine {
         };
         tracing::info!(fresh = pending.len(), cached = cache_hits,
             best_candidate = ?best_candidate(),
-            best_score = ?best_candidate().and_then(|id| self.matrix.mean(id)),
+            best_score = ?best_candidate().and_then(|id| self.scores.matrix.mean(id)),
             average_score = ?average_score(),
             completed = self.spend.metric_calls, requested = pending.len() + cache_hits,
             metric_calls = self.spend.metric_calls, lm_calls = self.spend.lm_calls,
@@ -1558,26 +1576,51 @@ impl Engine {
         minibatch: &[usize],
         threshold: f64,
     ) -> Result<GateOutcome> {
-        let minibatch_eval = match self.evaluate(target, candidate, Some(minibatch)).await? {
-            EvalOutcome::Complete(eval) => eval,
-            EvalOutcome::BudgetExhausted { needed } => {
-                return Ok(GateOutcome::BudgetExhausted { needed });
+        let default_lm = crate::core::settings::default_lm();
+        crate::core::settings::with_default_lm(default_lm, async {
+            let minibatch_eval = match self.evaluate(target, candidate, Some(minibatch)).await? {
+                EvalOutcome::Complete(eval) => eval,
+                EvalOutcome::BudgetExhausted { needed } => {
+                    return Ok(GateOutcome::BudgetExhausted { needed });
+                }
+            };
+
+            if minibatch_eval.mean() <= threshold {
+                return Ok(GateOutcome::Rejected {
+                    minibatch: minibatch_eval,
+                });
             }
-        };
 
-        if minibatch_eval.mean() <= threshold {
-            return Ok(GateOutcome::Rejected {
-                minibatch: minibatch_eval,
-            });
-        }
+            match self.evaluate(target, candidate, None).await? {
+                EvalOutcome::Complete(full) => Ok(GateOutcome::Promoted {
+                    minibatch: minibatch_eval,
+                    full,
+                }),
+                EvalOutcome::BudgetExhausted { needed } => {
+                    Ok(GateOutcome::BudgetExhausted { needed })
+                }
+            }
+        })
+        .await
+    }
 
-        match self.evaluate(target, candidate, None).await? {
-            EvalOutcome::Complete(full) => Ok(GateOutcome::Promoted {
-                minibatch: minibatch_eval,
-                full,
-            }),
-            EvalOutcome::BudgetExhausted { needed } => Ok(GateOutcome::BudgetExhausted { needed }),
+    /// Keeps a structural child's scores only if it becomes the incumbent.
+    /// The search owns the engine for the duration of the operation.
+    pub(super) async fn evaluate_child(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidate: usize,
+        minibatch: &[usize],
+        threshold: f64,
+    ) -> Result<GateOutcome> {
+        let incumbent = std::mem::take(&mut self.scores);
+        let outcome = self
+            .evaluate_gated(target, candidate, minibatch, threshold)
+            .await;
+        if !matches!(outcome, Ok(GateOutcome::Promoted { .. })) {
+            self.scores = incumbent;
         }
+        outcome
     }
 
     /// The one shared fan-out: every pending `(candidate, example)` pair —
@@ -1893,6 +1936,31 @@ mod tests {
             EvalOutcome::BudgetExhausted { needed: 2 }
         ));
         assert_eq!(provider.call_count(), 2);
+
+        // Structural search keeps only the current incumbent's score state.
+        engine.config.budget.max_metric_calls = Some(5);
+        let child = OptimizeTarget::program(&interp, &rows, &ExactMatch);
+        let response =
+            || AssistantContent::text("[[ ## answer ## ]]\nyes\n\n[[ ## completed ## ]]");
+        provider.push_response(response());
+        assert!(matches!(
+            engine.evaluate_child(&child, other, &[0], 1.0).await?,
+            GateOutcome::Rejected { .. }
+        ));
+        assert_eq!(engine.cache().len(), rows.len());
+        assert!(engine.matrix_for(&target).is_some());
+        assert!(engine.matrix_for(&child).is_none());
+
+        provider.push_response(response());
+        provider.push_response(response());
+        assert!(matches!(
+            engine.evaluate_child(&child, other, &[0], 0.0).await?,
+            GateOutcome::Promoted { .. }
+        ));
+        assert_eq!(engine.cache().len(), rows.len());
+        assert!(engine.matrix_for(&target).is_none());
+        assert!(engine.matrix_for(&child).is_some());
+        assert_eq!(engine.spend().metric_calls, 5);
         Ok(())
     }
 

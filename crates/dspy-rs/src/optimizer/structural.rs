@@ -708,7 +708,7 @@ impl Structural {
                     child_context,
                 );
                 engine
-                    .evaluate_gated(&child_target, child_row, &minibatch, threshold)
+                    .evaluate_child(&child_target, child_row, &minibatch, threshold)
                     .await?
             };
             match gate {

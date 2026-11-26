@@ -59,7 +59,7 @@ Owns the candidate registry, the score matrix, the rollout cache, and the budget
 | `register_overlay(overlay)` | Registers a program-lane `ir::Overlay`, deduplicating by `Overlay::hash()`. Returns its index. |
 | `candidate(i) -> Option<&Candidate>`, `candidate_hash(i)`, `num_candidates()` | Candidate registry access (`candidate` is `None` for an overlay entry). |
 | `config()`, `spend()`, `matrix()`, `cache()` | State access. |
-| `matrix_for(target)` | Returns the score matrix if the last completed evaluation matches the target's evaluation context, current baseline, ordered examples, validation layout, and sampling scope. |
+| `matrix_for(target)` | Returns the score matrix if the last completed evaluation matches the target's evaluation context, baseline, example order, validation layout, ambient LM binding, and sampling scope. |
 | `pareto()`, `pareto_over(columns)` | Dominance views over the score matrix (all columns, or a subset). |
 | `budget_allows(n)` | Whether `n` more rollouts fit the remaining budget. |
 | `charge(metric_calls, lm_calls)` | Charges auxiliary spend the engine did not run itself: reflection LM calls, teacher passes. |
@@ -130,7 +130,7 @@ The key recipe is `(baseline, candidate, example, salt)`, formatted as four 16-d
 | `baseline` | Content hash of the `predictors()` state snapshot (`{name → PredictState}`), refreshed from predictor state after winner installation. A changed baseline requires fresh scores. | `program.meta.program_hash`. |
 | `candidate` | `Candidate::stable_hash()` | `Overlay::hash()` |
 | `example` | Content hash of the example | Content hash of the `DemoRow` |
-| `salt` | Evaluation context, `EngineConfig::cache_salt`, and ambient sampling options | Same |
+| `salt` | Evaluation context, ambient LM binding, `EngineConfig::cache_salt`, and ambient sampling options | Same |
 
 Each new target gets an independent evaluation context by default. To reuse scores after rebuilding a target with reordered examples, pass the same `EvaluationContext` to `with_evaluation_context` on both targets. Create a fresh context when scoring behavior or runtime bindings change.
 

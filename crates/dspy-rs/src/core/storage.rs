@@ -4,14 +4,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::future::Future;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use tokio::runtime::{Builder, Handle, Runtime};
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
+
+mod writes;
+use writes::WriteQueue;
+pub(crate) use writes::{StoreWrite, start_write};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -37,6 +40,13 @@ pub trait InteractionStore: std::fmt::Debug + Send + Sync {
     fn recent(&self, limit: usize) -> Result<Vec<HistoryEntry>, StorageError>;
     fn upsert_trace(&self, trace: &crate::Trace) -> Result<(), StorageError>;
     fn get_trace(&self, id: &str) -> Result<Option<crate::Trace>, StorageError>;
+
+    /// A process-local key grouping handles that write to the same backend.
+    /// The default groups writes by the shared store instance.
+    #[doc(hidden)]
+    fn write_affinity(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// Versioned, append-only JSONL with durable updates and OS file locking.
@@ -47,6 +57,7 @@ pub trait InteractionStore: std::fmt::Debug + Send + Sync {
 #[derive(Debug)]
 pub struct JsonlInteractionStore {
     journal: Mutex<Journal>,
+    write_affinity: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -225,11 +236,23 @@ impl JsonlInteractionStore {
             .read(true)
             .write(true)
             .open(path)?;
+        // Use the open file's identity so aliases and independently opened
+        // handles share admission without retaining another file descriptor.
+        let write_affinity = file
+            .try_clone()
+            .and_then(same_file::Handle::from_file)
+            .ok()
+            .map(|handle| {
+                let mut hasher = DefaultHasher::new();
+                handle.hash(&mut hasher);
+                hasher.finish()
+            });
         let store = Self {
             journal: Mutex::new(Journal {
                 file,
                 index: JournalIndex::default(),
             }),
+            write_affinity,
         };
         store.locked(|_, _, _| Ok(()))?;
         Ok(store)
@@ -274,6 +297,10 @@ impl JsonlInteractionStore {
 }
 
 impl InteractionStore for JsonlInteractionStore {
+    fn write_affinity(&self) -> Option<u64> {
+        self.write_affinity
+    }
+
     fn upsert(&self, entry: &HistoryEntry) -> Result<(), StorageError> {
         self.append(Record::Invocation { entry })
     }
@@ -316,6 +343,7 @@ impl InteractionStore for JsonlInteractionStore {
 
 #[derive(Debug)]
 pub(crate) struct StoreSession {
+    queue: Arc<WriteQueue>,
     store: Arc<dyn InteractionStore>,
     errors: Mutex<SessionErrors>,
     pending: AtomicUsize,
@@ -358,66 +386,6 @@ impl StoreSession {
     }
 }
 
-/// A write may outlive its invocation when the caller cancels it. Its scope
-/// still waits for the registered work before returning storage errors.
-struct PendingWrites(Vec<Arc<StoreSession>>);
-
-impl Drop for PendingWrites {
-    fn drop(&mut self) {
-        for session in &self.0 {
-            if session.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
-                session.drained.notify_one();
-            }
-        }
-    }
-}
-
-pub(crate) enum StoreWrite<T> {
-    Ready(T),
-    Pending(JoinHandle<T>),
-}
-
-impl<T> StoreWrite<T> {
-    pub(crate) async fn finish(self) -> T {
-        match self {
-            Self::Ready(value) => value,
-            Self::Pending(task) => task.await.expect("interaction storage task failed"),
-        }
-    }
-}
-
-// A callback from blocking code can await a stored LM call. Run writes on
-// their own pool so a caller holding a blocking worker cannot stall them.
-static STORE_WRITER: LazyLock<std::io::Result<Runtime>> = LazyLock::new(|| {
-    Builder::new_current_thread()
-        .max_blocking_threads(4)
-        .thread_name("dsrs-store-writer")
-        .build()
-});
-
-pub(crate) fn start_write<T: Send + 'static>(
-    stores: Vec<Arc<StoreSession>>,
-    write: impl FnOnce(&[Arc<StoreSession>]) -> T + Send + 'static,
-) -> StoreWrite<T> {
-    let Ok(caller) = Handle::try_current() else {
-        return StoreWrite::Ready(write(&stores));
-    };
-    let writer = match &*STORE_WRITER {
-        Ok(writer) => writer,
-        Err(error) => {
-            tracing::error!(%error, "interaction writer unavailable");
-            return StoreWrite::Ready(write(&stores));
-        }
-    };
-    let pending = PendingWrites(stores);
-    for session in &pending.0 {
-        session.pending.fetch_add(1, Ordering::Relaxed);
-    }
-    StoreWrite::Pending(writer.spawn_blocking(move || {
-        let _caller = caller.enter();
-        write(&pending.0)
-    }))
-}
 tokio::task_local! { static STORES: Vec<Arc<StoreSession>>; }
 pub(crate) fn current_stores() -> Vec<Arc<StoreSession>> {
     STORES.try_with(Clone::clone).unwrap_or_default()
@@ -428,26 +396,23 @@ pub(crate) async fn persist_trace(trace: crate::Trace) -> crate::Trace {
     if stores.is_empty() {
         return trace;
     }
-    start_write(stores, move |stores| {
-        for session in stores {
-            session.persist_trace(&trace);
-        }
-        trace
-    })
-    .finish()
-    .await
+    start_write(stores, trace, StoreSession::persist_trace)
+        .finish()
+        .await
 }
 
 /// Persist calls, cache hits, failures, cancellation and subsequent parse results.
 /// History capacity may be zero. Nested scopes compose; spawned tasks need their
 /// own scope. Storage errors are returned after the future finishes (provider
 /// errors remain inside T). With Tokio, writes run on an independent blocking
-/// pool. A completed scope waits for durability, including writes from dropped calls.
+/// pool with per-backend admission. A completed scope waits for durability,
+/// including writes from dropped calls.
 pub async fn with_interaction_store<T>(
     store: Arc<dyn InteractionStore>,
     future: impl Future<Output = T>,
 ) -> Result<T, StorageError> {
     let session = Arc::new(StoreSession {
+        queue: WriteQueue::for_store(&store),
         store,
         errors: Mutex::default(),
         pending: AtomicUsize::new(0),

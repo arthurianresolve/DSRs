@@ -1,6 +1,6 @@
 //! Bounded execution history, independent of response caching and trace capture.
 use std::collections::VecDeque;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
@@ -50,11 +50,9 @@ impl HistoryRecord {
             return StoreWrite::Ready(());
         }
         let record = self.clone();
-        start_write(stores, move |stores| {
-            let entry = record.snapshot();
-            for store in stores {
-                store.persist(&entry);
-            }
+        let snapshot = OnceLock::new();
+        start_write(stores, (), move |store, ()| {
+            store.persist(snapshot.get_or_init(|| record.snapshot()));
         })
     }
     /// The invocation ID used to join prediction metadata to this record.

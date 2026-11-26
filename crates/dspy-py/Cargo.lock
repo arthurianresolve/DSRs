@@ -367,6 +367,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rig-core",
+ "same-file",
  "schemars",
  "serde",
  "serde_json",

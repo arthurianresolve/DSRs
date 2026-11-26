@@ -1017,6 +1017,7 @@ dependencies = [
  "reqwest 0.13.2",
  "rig-core",
  "rstest",
+ "same-file",
  "schemars",
  "serde",
  "serde_json",
