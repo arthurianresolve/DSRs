@@ -23,7 +23,7 @@ use std::time::Instant;
 use cranelift_entity::{PrimaryMap, SecondaryMap};
 use futures::future::BoxFuture;
 use indexmap::IndexMap;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::OnceCell;
 
 use crate::adapter::chat::{ChatAdapter, PreparedInputTemplates};
@@ -37,6 +37,7 @@ use crate::ir::sig::SignatureDef;
 use crate::ir::validate::{ValidateError, json_matches_type};
 use crate::trace::capture::{begin_span_lazy, in_span};
 use crate::trace::{JsonMap, SpanEvent, SpanGuard, SpanOutcome, SpanRequest};
+pub use crate::typesys::json_schema::input_schema_of;
 use crate::typesys::{FieldType, TypeTable, json_schema_compatible, json_schema_for_outputs};
 use crate::{
     Chat, LM, LMCallOptions, LMConfig, LmError, LmUsage, Message, Role, ToolLoopMode, ToolSet,
@@ -1360,7 +1361,7 @@ impl Interpreter {
             .parse_signature_tool_output(def, types, &response.tool_calls)
             .unwrap_or_else(|| parse_response(def, types, &response.output, format));
         if let Some(history) = &response.history {
-            history.parsed(&parsed);
+            history.parsed(&parsed).await;
         }
         match parsed {
             Ok((output, metas)) => {
@@ -2599,7 +2600,7 @@ impl Interpreter {
                 let raw = response.output.content();
                 let parsed = parse_response(lc.def, types, &response.output, format);
                 if let Some(history) = &response.history {
-                    history.parsed(&parsed);
+                    history.parsed(&parsed).await;
                 }
                 match parsed {
                     Ok((output, metas)) => {
@@ -2677,7 +2678,7 @@ impl Interpreter {
         let raw = response.output.content();
         let parsed = parse_response(lc.def, &self.program.types, &response.output, format);
         if let Some(history) = &response.history {
-            history.parsed(&parsed);
+            history.parsed(&parsed).await;
         }
         let (output, metas) = parsed.map_err(|err| RunError::Parse {
             at: lc.at.into(),
@@ -3546,75 +3547,6 @@ mod budget_meter_tests {
         meter.lm_calls.store(u32::MAX, Ordering::Relaxed);
         assert_eq!(meter.try_reserve_call(), Err(Exhausted));
         assert_eq!(meter.lm_calls(), u32::MAX);
-    }
-}
-
-/// Projects a tool/hole signature's *input* side to a JSON Schema object —
-/// the declared interface is the schema the model sees. Public because
-/// `#[tool]`-generated `rig::tool::Tool` impls build their definitions
-/// through it (RFC 0003 M-2).
-pub fn input_schema_of(def: &SignatureDef, types: &TypeTable) -> Value {
-    let mut properties = serde_json::Map::new();
-    let mut required = Vec::new();
-    for field in def.inputs.iter() {
-        let mut schema = json_schema_of(&field.ty, types);
-        if let Some(docs) = &field.docs
-            && let Some(obj) = schema.as_object_mut()
-        {
-            obj.insert("description".to_string(), json!(docs.as_ref()));
-        }
-        properties.insert(field.lm_name.to_string(), schema);
-        if !field.ty.is_optional() {
-            required.push(json!(field.lm_name.as_ref()));
-        }
-    }
-    json!({
-        "type": "object",
-        "properties": properties,
-        "required": required,
-    })
-}
-
-fn json_schema_of(ty: &FieldType, types: &TypeTable) -> Value {
-    match ty {
-        FieldType::String => json!({"type": "string"}),
-        FieldType::Int => json!({"type": "integer"}),
-        FieldType::Float => json!({"type": "number"}),
-        FieldType::Bool => json!({"type": "boolean"}),
-        FieldType::Literal(s) => json!({"type": "string", "const": s}),
-        FieldType::List(inner) => json!({"type": "array", "items": json_schema_of(inner, types)}),
-        FieldType::Optional(inner) => json_schema_of(inner, types),
-        FieldType::Map(_, value) => {
-            json!({"type": "object", "additionalProperties": json_schema_of(value, types)})
-        }
-        FieldType::Class(token) => match types.classes.get(token) {
-            Some(def) => {
-                let mut properties = serde_json::Map::new();
-                let mut required = Vec::new();
-                for field in &def.fields {
-                    properties.insert(
-                        field.rendered_name.clone(),
-                        json_schema_of(&field.field_type, types),
-                    );
-                    if !field.field_type.is_optional() {
-                        required.push(json!(field.rendered_name));
-                    }
-                }
-                json!({"type": "object", "properties": properties, "required": required})
-            }
-            None => json!({"type": "object"}),
-        },
-        FieldType::Enum(token) => match types.enums.get(token) {
-            Some(def) => {
-                let values: Vec<&str> = def.values.iter().map(|v| v.name.as_str()).collect();
-                json!({"type": "string", "enum": values})
-            }
-            None => json!({"type": "string"}),
-        },
-        FieldType::Union(items) => {
-            let any_of: Vec<Value> = items.iter().map(|i| json_schema_of(i, types)).collect();
-            json!({"anyOf": any_of})
-        }
     }
 }
 

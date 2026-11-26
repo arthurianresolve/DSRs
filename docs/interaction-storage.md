@@ -41,14 +41,17 @@ redacted configuration, input messages, tool events, usage and module path.
 Credentials are redacted from configuration; prompt/response content is retained.
 
 Nested storage scopes compose. Spawned tasks must establish their own scope.
-The outer `Result` reports persistence failures; an inner predictor/LM `Result`
-still reports execution failures. Cancelling the entire scope cannot return an
-error, so storage errors during cancellation are also emitted through tracing.
+The outer `Result` reports persistence failures. An inner predictor or LM
+`Result` carries execution failures. A completed scope waits for all its
+writes, including records from dropped calls. When the entire scope is
+cancelled, pending writes continue and failures are emitted through tracing.
 
 The journal uses OS file locks across handles/processes and syncs every revision.
 It recovers an incomplete final line before appending and rejects corrupt complete
 records or unknown versions as it validates the journal. Opening a handle scans
 the file once. Each handle then indexes appended revisions and reads the latest
-record by offset. Writes remain synchronous. Run retention or archival with all
-handles closed before editing or replacing the journal. Bounded in-memory
-history applies to inspection and leaves the stored records intact.
+record by offset. Individual store methods are synchronous. The async APIs
+dispatch scoped writes to Tokio's blocking pool when running in a Tokio
+runtime. Run retention or archival with all handles closed before editing or
+replacing the journal. Bounded in-memory history applies to inspection and
+leaves the stored records intact.

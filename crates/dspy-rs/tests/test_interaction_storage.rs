@@ -136,11 +136,15 @@ async fn torn_tail_is_recovered_but_corruption_is_rejected() {
 }
 
 #[test]
-fn writer_still_validates_revisions_that_cannot_round_trip() {
+fn invalid_revision_leaves_the_journal_readable() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("trace.jsonl");
     let store = JsonlInteractionStore::open(&path).unwrap();
     let mut trace = dspy_rs::Trace::default();
+    trace.meta.trace_id = "saved".into();
+    store.upsert_trace(&trace).unwrap();
+    let previous = std::fs::read(&path).unwrap();
+
     trace.meta.trace_id = "invalid-score".into();
     trace.outcome = Some(dspy_rs::TraceOutcome {
         eval: Some(dspy_rs::Eval::score(f64::NAN)),
@@ -148,9 +152,17 @@ fn writer_still_validates_revisions_that_cannot_round_trip() {
         output: None,
         error: None,
     });
+    assert!(matches!(
+        store.upsert_trace(&trace),
+        Err(dspy_rs::StorageError::Json(_))
+    ));
+    assert_eq!(std::fs::read(&path).unwrap(), previous);
+    assert!(store.get_trace("invalid-score").unwrap().is_none());
+    trace.outcome = None;
     store.upsert_trace(&trace).unwrap();
-    assert!(store.get_trace("invalid-score").is_err());
-    assert!(JsonlInteractionStore::open(&path).is_err());
+    let reopened = JsonlInteractionStore::open(&path).unwrap();
+    assert!(reopened.get_trace("saved").unwrap().is_some());
+    assert!(reopened.get_trace("invalid-score").unwrap().is_some());
 }
 
 #[tokio::test]
@@ -275,6 +287,83 @@ impl InteractionStore for Broken {
     }
 }
 
+#[derive(Debug)]
+struct WaitingStore {
+    started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+impl InteractionStore for WaitingStore {
+    fn upsert(&self, _: &dspy_rs::HistoryEntry) -> Result<(), dspy_rs::StorageError> {
+        self.started
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap()
+            .send(())
+            .unwrap();
+        self.release
+            .lock()
+            .unwrap()
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .map_err(std::io::Error::other)?;
+        Ok(())
+    }
+    fn get(&self, _: &str) -> Result<Option<dspy_rs::HistoryEntry>, dspy_rs::StorageError> {
+        unreachable!()
+    }
+    fn recent(&self, _: usize) -> Result<Vec<dspy_rs::HistoryEntry>, dspy_rs::StorageError> {
+        unreachable!()
+    }
+    fn upsert_trace(&self, _: &dspy_rs::Trace) -> Result<(), dspy_rs::StorageError> {
+        unreachable!()
+    }
+    fn get_trace(&self, _: &str) -> Result<Option<dspy_rs::Trace>, dspy_rs::StorageError> {
+        unreachable!()
+    }
+}
+
+#[rstest::rstest]
+#[case(false)]
+#[case(true)]
+#[tokio::test(flavor = "current_thread")]
+async fn pending_storage_io_allows_other_futures_to_progress(#[case] cancel: bool) {
+    let lm = if cancel {
+        lm(vec![])
+            .await
+            .with_client(LMClient::custom(Pending))
+            .await
+            .unwrap()
+    } else {
+        lm(vec![answer("Paris")]).await
+    };
+    let (started, waiting) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let store = Arc::new(WaitingStore {
+        started: std::sync::Mutex::new(Some(started)),
+        release: std::sync::Mutex::new(released),
+    });
+    let scope = with_interaction_store(store, async {
+        let mut call = std::pin::pin!(lm.call(Chat::new(vec![Message::user("?")]), vec![]));
+        if cancel {
+            assert!(futures::poll!(&mut call).is_pending());
+        } else {
+            call.await.unwrap();
+        }
+    });
+    let mut scope = std::pin::pin!(scope);
+    // The scope must be pending even when the LM call was already dropped.
+    assert!(futures::poll!(&mut scope).is_pending());
+    let (result, ()) = tokio::join!(scope, async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+            .await
+            .unwrap()
+            .unwrap();
+        release.send(()).unwrap();
+    });
+    result.unwrap();
+}
+
 #[tokio::test]
 async fn captured_traces_are_reopened_and_joined_to_call_ids() {
     let dir = tempfile::tempdir().unwrap();
@@ -292,7 +381,9 @@ async fn captured_traces_are_reopened_and_joined_to_call_ids() {
     .await
     .unwrap();
     let id = result.unwrap().metadata().call_ids[0].clone();
+    let handle = Arc::downgrade(&store);
     drop(store);
+    assert!(handle.upgrade().is_none(), "history retained the store");
     let reopened = JsonlInteractionStore::open(&path).unwrap();
     let entry = reopened.get(&id).unwrap().unwrap();
     assert_eq!(

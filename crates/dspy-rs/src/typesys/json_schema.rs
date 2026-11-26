@@ -1,40 +1,23 @@
-//! Provider-native JSON Schema projection from the owned signature IR.
+//! JSON Schema projections for provider output and tool inputs.
 
 use std::collections::HashSet;
 
 use serde_json::{Map, Value, json};
 
-use crate::ir::SignatureDef;
+use crate::ir::{FieldDef, SignatureDef};
 
 use super::{FieldType, TypeTable};
 
 /// Projects output fields and their reachable types into a strict JSON Schema.
 /// Object properties use LM-facing aliases; parsers map these back to canonical names.
 pub fn json_schema_for_outputs(def: &SignatureDef, types: &TypeTable) -> Value {
-    let mut defs = Map::new();
-    let mut visiting = Vec::new();
-    for field in def.outputs.iter() {
-        collect_defs(&field.ty, types, &mut defs, &mut visiting);
-    }
-    let mut properties = Map::new();
-    let mut required = Vec::new();
-    for field in def.outputs.iter() {
-        let mut schema = type_schema(&field.ty, types);
-        if let (Some(description), Some(obj)) = (field.docs.as_deref(), schema.as_object_mut()) {
-            obj.insert("description".into(), json!(description));
-        }
-        properties.insert(field.lm_name.to_string(), schema);
-        required.push(field.lm_name.to_string());
-    }
-    let mut root = Map::new();
-    root.insert("type".into(), json!("object"));
-    root.insert("properties".into(), Value::Object(properties));
-    root.insert("required".into(), json!(required));
-    root.insert("additionalProperties".into(), json!(false));
-    if !defs.is_empty() {
-        root.insert("$defs".into(), Value::Object(defs));
-    }
-    Value::Object(root)
+    project(&def.outputs, types, SchemaKind::StrictOutput)
+}
+
+/// Projects a tool or hole's inputs into a JSON Schema object.
+/// Optional arguments can be omitted. Recursive classes use local references.
+pub fn input_schema_of(def: &SignatureDef, types: &TypeTable) -> Value {
+    project(&def.inputs, types, SchemaKind::ToolInput)
 }
 
 /// Whether this signature fits the strict JSON Schema subset accepted by providers.
@@ -73,101 +56,177 @@ fn compatible_type<'a>(
     }
 }
 
-fn collect_defs<'a>(
-    ty: &'a FieldType,
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SchemaKind {
+    StrictOutput,
+    ToolInput,
+}
+
+fn project(fields: &[FieldDef], types: &TypeTable, kind: SchemaKind) -> Value {
+    let mut projection = SchemaProjection {
+        types,
+        kind,
+        defs: Map::new(),
+        active_classes: Vec::new(),
+    };
+    let mut root = projection.object(
+        fields
+            .iter()
+            .map(|field| (field.lm_name.as_ref(), &field.ty, field.docs.as_deref())),
+    );
+    if !projection.defs.is_empty() {
+        root["$defs"] = Value::Object(projection.defs);
+    }
+    root
+}
+
+struct SchemaProjection<'a> {
     types: &'a TypeTable,
-    defs: &mut Map<String, Value>,
-    visiting: &mut Vec<&'a str>,
-) {
-    match ty {
-        FieldType::Class(name) if !defs.contains_key(name) => {
-            let Some(class) = types.classes.get(name) else {
-                return;
+    kind: SchemaKind,
+    defs: Map<String, Value>,
+    active_classes: Vec<&'a str>,
+}
+
+impl<'a> SchemaProjection<'a> {
+    fn object(
+        &mut self,
+        fields: impl IntoIterator<Item = (&'a str, &'a FieldType, Option<&'a str>)>,
+    ) -> Value {
+        let mut properties = Map::new();
+        let mut required = Vec::new();
+        let strict = self.kind == SchemaKind::StrictOutput;
+        for (name, ty, docs) in fields {
+            properties.insert(name.to_owned(), described(self.ty(ty), docs));
+            if strict || !ty.is_optional() {
+                required.push(Value::String(name.to_owned()));
+            }
+        }
+        let mut object = json!({"type": "object"});
+        object["properties"] = Value::Object(properties);
+        object["required"] = Value::Array(required);
+        if strict {
+            object["additionalProperties"] = Value::Bool(false);
+        }
+        object
+    }
+
+    fn ty(&mut self, ty: &'a FieldType) -> Value {
+        match ty {
+            FieldType::String => json!({"type": "string"}),
+            FieldType::Int => json!({"type": "integer"}),
+            FieldType::Float => json!({"type": "number"}),
+            FieldType::Bool => json!({"type": "boolean"}),
+            FieldType::Literal(value) => json!({"type": "string", "const": value}),
+            FieldType::List(inner) => {
+                let mut schema = json!({"type": "array"});
+                schema["items"] = self.ty(inner);
+                schema
+            }
+            FieldType::Optional(inner) => {
+                let schema = self.ty(inner);
+                if self.kind == SchemaKind::StrictOutput {
+                    // Strict providers require every property, so optional outputs are nullable.
+                    alternatives(vec![schema, json!({"type": "null"})])
+                } else {
+                    schema
+                }
+            }
+            FieldType::Map(_, value) => {
+                let mut schema = json!({"type": "object"});
+                schema["additionalProperties"] = self.ty(value);
+                schema
+            }
+            FieldType::Class(name) => self.class(name),
+            FieldType::Enum(name) => self.enum_type(name),
+            FieldType::Union(items) => {
+                alternatives(items.iter().map(|item| self.ty(item)).collect())
+            }
+        }
+    }
+
+    fn class(&mut self, name: &'a str) -> Value {
+        if self.defs.contains_key(name) {
+            return reference(name);
+        }
+        let strict = self.kind == SchemaKind::StrictOutput;
+        let Some(class) = self.types.classes.get(name) else {
+            return if strict {
+                reference(name)
+            } else {
+                json!({"type": "object"})
             };
-            if visiting.contains(&name.as_str()) {
-                return;
-            }
-            visiting.push(name);
-            let mut properties = Map::new();
-            let mut required = Vec::new();
-            for field in &class.fields {
-                collect_defs(&field.field_type, types, defs, visiting);
-                let mut schema = type_schema(&field.field_type, types);
-                if let (Some(description), Some(obj)) =
-                    (field.docs.as_deref(), schema.as_object_mut())
-                {
-                    obj.insert("description".into(), json!(description));
-                }
-                properties.insert(field.rendered_name.clone(), schema);
-                required.push(field.rendered_name.clone());
-            }
-            let mut schema = Map::new();
-            schema.insert("type".into(), json!("object"));
-            schema.insert("properties".into(), Value::Object(properties));
-            schema.insert("required".into(), json!(required));
-            schema.insert("additionalProperties".into(), json!(false));
-            if let Some(description) = &class.docs {
-                schema.insert("description".into(), json!(description));
-            }
-            defs.insert(name.clone(), Value::Object(schema));
-            visiting.pop();
+        };
+        if self.active_classes.contains(&name) {
+            // The active projection will replace this entry when it unwinds.
+            self.defs.insert(name.to_owned(), Value::Null);
+            return reference(name);
         }
-        FieldType::Enum(name) if !defs.contains_key(name) => {
-            if let Some(enm) = types.enums.get(name) {
-                let mut schema = Map::new();
-                schema.insert("type".into(), json!("string"));
-                schema.insert(
-                    "enum".into(),
-                    json!(
-                        enm.values
-                            .iter()
-                            .map(|v| &v.rendered_name)
-                            .collect::<Vec<_>>()
-                    ),
-                );
-                if let Some(description) = &enm.docs {
-                    schema.insert("description".into(), json!(description));
-                }
-                defs.insert(name.clone(), Value::Object(schema));
-            }
+        self.active_classes.push(name);
+        let schema = self.object(class.fields.iter().map(|field| {
+            (
+                field.rendered_name.as_str(),
+                &field.field_type,
+                if strict { field.docs.as_deref() } else { None },
+            )
+        }));
+        self.active_classes.pop();
+        if strict || self.defs.contains_key(name) {
+            let docs = if strict { class.docs.as_deref() } else { None };
+            self.defs.insert(name.to_owned(), described(schema, docs));
+            reference(name)
+        } else {
+            schema
         }
-        FieldType::List(inner) | FieldType::Optional(inner) => {
-            collect_defs(inner, types, defs, visiting)
+    }
+
+    fn enum_type(&mut self, name: &str) -> Value {
+        let strict = self.kind == SchemaKind::StrictOutput;
+        if strict && self.defs.contains_key(name) {
+            return reference(name);
         }
-        FieldType::Map(key, value) => {
-            collect_defs(key, types, defs, visiting);
-            collect_defs(value, types, defs, visiting);
+        let mut schema = json!({"type": "string"});
+        let Some(enm) = self.types.enums.get(name) else {
+            return if strict { reference(name) } else { schema };
+        };
+        schema["enum"] = Value::Array(
+            enm.values
+                .iter()
+                .map(|value| {
+                    Value::String(if strict {
+                        value.rendered_name.clone()
+                    } else {
+                        value.name.clone()
+                    })
+                })
+                .collect(),
+        );
+        if strict {
+            self.defs
+                .insert(name.to_owned(), described(schema, enm.docs.as_deref()));
+            reference(name)
+        } else {
+            schema
         }
-        FieldType::Union(items) => {
-            for item in items {
-                collect_defs(item, types, defs, visiting);
-            }
-        }
-        _ => {}
     }
 }
 
-fn type_schema(ty: &FieldType, types: &TypeTable) -> Value {
-    match ty {
-        FieldType::String => json!({"type":"string"}),
-        FieldType::Int => json!({"type":"integer"}),
-        FieldType::Float => json!({"type":"number"}),
-        FieldType::Bool => json!({"type":"boolean"}),
-        FieldType::Literal(value) => json!({"type":"string", "const":value}),
-        FieldType::List(inner) => json!({"type":"array", "items":type_schema(inner, types)}),
-        // Strict providers require every property. Optionality is nullable here.
-        FieldType::Optional(inner) => json!({"anyOf":[type_schema(inner, types), {"type":"null"}]}),
-        FieldType::Map(key, value) => {
-            if !matches!(key.as_ref(), FieldType::String) {
-                return json!({"type":"object", "additionalProperties":type_schema(value, types)});
-            }
-            json!({"type":"object", "additionalProperties":type_schema(value, types)})
-        }
-        FieldType::Class(name) | FieldType::Enum(name) => json!({"$ref":format!("#/$defs/{name}")}),
-        FieldType::Union(items) => {
-            json!({"anyOf":items.iter().map(|item| type_schema(item, types)).collect::<Vec<_>>()})
-        }
+fn described(mut schema: Value, docs: Option<&str>) -> Value {
+    if let Some(docs) = docs {
+        schema["description"] = Value::String(docs.to_owned());
     }
+    schema
+}
+
+fn alternatives(schemas: Vec<Value>) -> Value {
+    Value::Object(Map::from_iter([(
+        "anyOf".to_owned(),
+        Value::Array(schemas),
+    )]))
+}
+
+fn reference(name: &str) -> Value {
+    let token = name.replace('~', "~0").replace('/', "~1");
+    json!({"$ref": format!("#/$defs/{token}")})
 }
 
 /// Maps LM-facing field aliases to canonical output keys recursively.
@@ -366,6 +425,24 @@ mod tests {
             },
         );
         types
+    }
+
+    #[test]
+    fn tool_input_schema_keeps_recursive_classes_and_optional_arguments() {
+        let def = SignatureDef::build("Tool")
+            .input("root", FieldType::Class("Node".into()))
+            .input("mood", FieldType::optional(FieldType::Enum("Mood".into())))
+            .output("result", FieldType::String)
+            .finish()
+            .unwrap();
+
+        let schema = input_schema_of(&def, &base_types());
+        assert_eq!(schema["required"], json!(["root"]));
+        assert_eq!(schema["properties"]["mood"]["enum"], json!(["Happy"]));
+        assert_eq!(schema["properties"]["root"]["$ref"], "#/$defs/Node");
+        let node = &schema["$defs"]["Node"];
+        assert_eq!(node["properties"]["next"]["$ref"], "#/$defs/Node");
+        assert_eq!(node["required"], json!(["label_alias"]));
     }
 
     #[test]

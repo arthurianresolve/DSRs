@@ -6,8 +6,12 @@ use std::fs::{File, OpenOptions};
 use std::future::Future;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
+use tokio::runtime::Handle;
+use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -246,9 +250,8 @@ impl JsonlInteractionStore {
     fn append(&self, record: Record<&HistoryEntry, &crate::Trace>) -> Result<(), StorageError> {
         let mut bytes = serde_json::to_vec(&Revision { version: 1, record })?;
         bytes.push(b'\n');
-        // Use the same v1 decoder as refresh before advancing the cursor. If
-        // the record cannot round-trip, refresh still reports the error.
-        let key = decode_record(&bytes).ok().map(Record::into_key);
+        // Validate the encoded revision before it can change the journal.
+        let key = decode_record(&bytes)?.into_key();
         self.locked(|file, index, len| {
             if len > index.complete {
                 file.set_len(index.complete)?;
@@ -256,19 +259,15 @@ impl JsonlInteractionStore {
             file.seek(SeekFrom::Start(index.complete))?;
             file.write_all(&bytes)?;
             file.sync_data()?;
-            if let Some(key) = key
-                && let Ok(modified) = file.metadata().and_then(|meta| meta.modified())
-            {
-                index.record(
-                    key,
-                    RecordLocation {
-                        offset: index.complete,
-                        len: bytes.len(),
-                    },
-                );
-                index.complete += bytes.len() as u64;
-                index.modified = Some(modified);
-            }
+            index.record(
+                key,
+                RecordLocation {
+                    offset: index.complete,
+                    len: bytes.len(),
+                },
+            );
+            index.complete += bytes.len() as u64;
+            index.modified = file.metadata().and_then(|meta| meta.modified()).ok();
             Ok(())
         })
     }
@@ -319,6 +318,8 @@ impl InteractionStore for JsonlInteractionStore {
 pub(crate) struct StoreSession {
     store: Arc<dyn InteractionStore>,
     errors: Mutex<SessionErrors>,
+    pending: AtomicUsize,
+    drained: Notify,
 }
 
 #[derive(Debug, Default)]
@@ -349,22 +350,80 @@ impl StoreSession {
             self.record_error(error);
         }
     }
+
+    async fn drain(&self) {
+        while self.pending.load(Ordering::Acquire) != 0 {
+            self.drained.notified().await;
+        }
+    }
+}
+
+/// A write may outlive its invocation when the caller cancels it. Its scope
+/// still waits for the registered work before returning storage errors.
+struct PendingWrites(Vec<Arc<StoreSession>>);
+
+impl Drop for PendingWrites {
+    fn drop(&mut self) {
+        for session in &self.0 {
+            if session.pending.fetch_sub(1, Ordering::AcqRel) == 1 {
+                session.drained.notify_one();
+            }
+        }
+    }
+}
+
+pub(crate) enum StoreWrite<T> {
+    Ready(T),
+    Pending(JoinHandle<T>),
+}
+
+impl<T> StoreWrite<T> {
+    pub(crate) async fn finish(self) -> T {
+        match self {
+            Self::Ready(value) => value,
+            Self::Pending(task) => task.await.expect("interaction storage task failed"),
+        }
+    }
+}
+
+pub(crate) fn start_write<T: Send + 'static>(
+    stores: Vec<Arc<StoreSession>>,
+    write: impl FnOnce(&[Arc<StoreSession>]) -> T + Send + 'static,
+) -> StoreWrite<T> {
+    let Ok(runtime) = Handle::try_current() else {
+        return StoreWrite::Ready(write(&stores));
+    };
+    let pending = PendingWrites(stores);
+    for session in &pending.0 {
+        session.pending.fetch_add(1, Ordering::Relaxed);
+    }
+    StoreWrite::Pending(runtime.spawn_blocking(move || write(&pending.0)))
 }
 tokio::task_local! { static STORES: Vec<Arc<StoreSession>>; }
 pub(crate) fn current_stores() -> Vec<Arc<StoreSession>> {
     STORES.try_with(Clone::clone).unwrap_or_default()
 }
 
-pub(crate) fn persist_trace(trace: &crate::Trace) {
-    for session in current_stores() {
-        session.persist_trace(trace);
+pub(crate) async fn persist_trace(trace: crate::Trace) -> crate::Trace {
+    let stores = current_stores();
+    if stores.is_empty() {
+        return trace;
     }
+    start_write(stores, move |stores| {
+        for session in stores {
+            session.persist_trace(&trace);
+        }
+        trace
+    })
+    .finish()
+    .await
 }
 
 /// Persist calls, cache hits, failures, cancellation and subsequent parse results.
 /// History capacity may be zero. Nested scopes compose; spawned tasks need their
 /// own scope. Storage errors are returned after the future finishes (provider
-/// errors remain inside T). Writes are synchronous and durable before return.
+/// errors remain inside T). With Tokio, writes run on its blocking pool. A
+/// completed scope waits for durability, including writes from dropped calls.
 pub async fn with_interaction_store<T>(
     store: Arc<dyn InteractionStore>,
     future: impl Future<Output = T>,
@@ -372,10 +431,13 @@ pub async fn with_interaction_store<T>(
     let session = Arc::new(StoreSession {
         store,
         errors: Mutex::default(),
+        pending: AtomicUsize::new(0),
+        drained: Notify::new(),
     });
     let mut stores = current_stores();
     stores.push(session.clone());
     let output = STORES.scope(stores, future).await;
+    session.drain().await;
     let mut errors = session.errors.lock().unwrap_or_else(|p| p.into_inner());
     match errors.first.take() {
         Some(source) => Err(StorageError::Session {

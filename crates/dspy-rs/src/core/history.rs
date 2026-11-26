@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
+use super::storage::{StoreSession, StoreWrite, current_stores, start_write};
 use crate::trace::{JsonMap, SpanError, SpanErrorKind, SpanEvent};
 use crate::{Chat, LMConfig, LMResponse, LmUsage, Message};
 
@@ -41,17 +42,20 @@ pub struct HistoryEntry {
 #[derive(Clone, Debug)]
 pub struct HistoryRecord {
     entry: Arc<Mutex<HistoryEntry>>,
-    stores: Vec<Arc<super::storage::StoreSession>>,
 }
 
 impl HistoryRecord {
-    fn persist(&self) {
-        if !self.stores.is_empty() {
-            let entry = self.snapshot();
-            for store in &self.stores {
+    fn persist(&self, stores: Vec<Arc<StoreSession>>) -> StoreWrite<()> {
+        if stores.is_empty() {
+            return StoreWrite::Ready(());
+        }
+        let record = self.clone();
+        start_write(stores, move |stores| {
+            let entry = record.snapshot();
+            for store in stores {
                 store.persist(&entry);
             }
-        }
+        })
     }
     /// The invocation ID used to join prediction metadata to this record.
     pub fn id(&self) -> String {
@@ -72,22 +76,23 @@ impl HistoryRecord {
         entry.clone()
     }
 
-    pub(crate) fn parsed<T, E: std::fmt::Display>(&self, result: &Result<(JsonMap, T), E>) {
-        let mut entry = self.entry.lock().unwrap_or_else(|p| p.into_inner());
-        match result {
-            Ok((output, _)) => {
-                entry.output = Some(output.clone());
-                entry.error = None;
-            }
-            Err(error) => {
-                entry.error = Some(SpanError {
-                    kind: SpanErrorKind::Parse,
-                    message: error.to_string(),
-                })
+    pub(crate) async fn parsed<T, E: std::fmt::Display>(&self, result: &Result<(JsonMap, T), E>) {
+        {
+            let mut entry = self.entry.lock().unwrap_or_else(|p| p.into_inner());
+            match result {
+                Ok((output, _)) => {
+                    entry.output = Some(output.clone());
+                    entry.error = None;
+                }
+                Err(error) => {
+                    entry.error = Some(SpanError {
+                        kind: SpanErrorKind::Parse,
+                        message: error.to_string(),
+                    })
+                }
             }
         }
-        drop(entry);
-        self.persist();
+        self.persist(current_stores()).finish().await;
     }
 }
 
@@ -218,21 +223,22 @@ impl CallProgress {
 
 struct HistoryCapture {
     record: HistoryRecord,
+    stores: Vec<Arc<StoreSession>>,
     sinks: Vec<HistoryBuffer>,
     started: Instant,
 }
 
 impl HistoryCapture {
-    fn publish(self, update: impl FnOnce(&mut HistoryEntry, &HistoryRecord)) {
+    fn publish(self, update: impl FnOnce(&mut HistoryEntry, &HistoryRecord)) -> StoreWrite<()> {
         {
             let mut entry = self.record.entry.lock().unwrap_or_else(|p| p.into_inner());
             update(&mut entry, &self.record);
             entry.duration_us = self.started.elapsed().as_micros() as u64;
         }
-        self.record.persist();
         for sink in self.sinks {
             sink.push(self.record.clone());
         }
+        self.record.persist(self.stores)
     }
 }
 
@@ -243,7 +249,7 @@ pub(crate) struct HistoryCall {
 
 impl HistoryCall {
     pub(crate) fn begin(config: &LMConfig, chat: &Chat, lm_history: &HistoryBuffer) -> Self {
-        let stores = super::storage::current_stores();
+        let stores = current_stores();
         let enabled = !stores.is_empty()
             || lm_history.is_enabled()
             || GLOBAL.is_enabled()
@@ -277,7 +283,6 @@ impl HistoryCall {
                 events: Vec::new(),
                 error: None,
             })),
-            stores,
         };
         let mut sinks = vec![lm_history.clone(), GLOBAL.clone()];
         for caller in callers {
@@ -292,15 +297,16 @@ impl HistoryCall {
             progress: CallProgress::default(),
             capture: Some(HistoryCapture {
                 record,
+                stores,
                 sinks,
                 started: Instant::now(),
             }),
         }
     }
 
-    pub(crate) fn finish(mut self, result: &mut anyhow::Result<LMResponse>) {
+    pub(crate) async fn finish(mut self, result: &mut anyhow::Result<LMResponse>) {
         if let Some(capture) = self.capture.take() {
-            capture.publish(|entry, record| match result {
+            let write = capture.publish(|entry, record| match result {
                 Ok(response) => {
                     entry.response = response
                         .events
@@ -329,6 +335,7 @@ impl HistoryCall {
                     },
                 ),
             });
+            write.finish().await;
         }
     }
 }
@@ -336,7 +343,7 @@ impl HistoryCall {
 impl Drop for HistoryCall {
     fn drop(&mut self) {
         if let Some(capture) = self.capture.take() {
-            capture.publish(|entry, _| {
+            let write = capture.publish(|entry, _| {
                 self.progress.record_error(
                     entry,
                     SpanError {
@@ -345,6 +352,8 @@ impl Drop for HistoryCall {
                     },
                 );
             });
+            // A dropped call still submits its record. The scope drains it.
+            drop(write);
         }
     }
 }

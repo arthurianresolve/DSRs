@@ -260,8 +260,7 @@ where
 {
     let sink = TraceSink::new(meta);
     let result = ACTIVE.scope(sink.clone(), f()).await;
-    let trace = sink.finish();
-    crate::core::storage::persist_trace(&trace);
+    let trace = crate::core::storage::persist_trace(sink.finish()).await;
     (result, trace)
 }
 

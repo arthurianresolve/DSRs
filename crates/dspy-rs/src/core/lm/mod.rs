@@ -1,11 +1,13 @@
 pub mod chat;
 pub mod client_registry;
+mod tool_loop;
 pub mod usage;
 
 pub use chat::{Chat, ContentBlock, Message, Role};
 pub use client_registry::{
     CompletionProvider, CustomCompletionModel, LMClient, TestCompletionModel,
 };
+pub use tool_loop::{ToolLoopError, ToolLoopMode, ToolSet};
 pub use usage::LmUsage;
 
 use anyhow::Result;
@@ -18,7 +20,11 @@ use rig::{
 
 use bon::Builder;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
+use tool_loop::{
+    ChoiceAction, ToolLoopResult, ToolRound, classify_choice, decode_prompt_tools,
+    format_prompt_tools,
+};
 use tracing::{debug, trace, warn};
 
 #[cfg(feature = "cache")]
@@ -52,97 +58,6 @@ pub struct LMResponse {
     /// that round-trip's own usage, `ToolRun` entries interleaved in execution
     /// order. Cache-served responses synthesize a single `Exchange`.
     pub events: Vec<SpanEvent>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ToolLoopMode {
-    Auto,
-    CallerManaged,
-}
-
-/// Failures of the automatic tool loop. Missing tools are sent back to the
-/// model as recoverable feedback; limit and execution failures stop the call.
-#[derive(Debug, thiserror::Error)]
-pub enum ToolLoopError {
-    #[error("Max tool iterations reached (limit {limit})")]
-    IterationLimit { limit: usize },
-    #[error("Tool '{name}' not found")]
-    UnknownTool { name: String },
-    #[error("tool `{name}` execution failed ({context}): {source}")]
-    Execution {
-        name: String,
-        context: String,
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-}
-
-/// Pre-fetched tool definitions plus name-indexed executors.
-///
-/// Fetching a rig `ToolDyn` definition costs a boxed-future allocation and a
-/// fresh `ToolDefinition` build — doing that per tool on every LM call is pure
-/// waste when the tool set is fixed. Build a `ToolSet` once (e.g.
-/// [`Predict`](crate::Predict) caches one per instance) and reuse it across calls
-/// via [`LM::call_with_toolset`].
-#[derive(Clone, Default)]
-pub struct ToolSet {
-    definitions: Vec<rig::completion::ToolDefinition>,
-    by_name: HashMap<String, Arc<dyn ToolDyn>>,
-}
-
-impl ToolSet {
-    /// Fetches every tool's definition once and indexes the executors by
-    /// definition name. Duplicate names keep the first tool.
-    pub async fn build(tools: &[Arc<dyn ToolDyn>]) -> Self {
-        let mut definitions = Vec::with_capacity(tools.len());
-        let mut by_name: HashMap<String, Arc<dyn ToolDyn>> = HashMap::with_capacity(tools.len());
-        for tool in tools {
-            let definition = tool.definition(String::new()).await;
-            by_name
-                .entry(definition.name.clone())
-                .or_insert_with(|| Arc::clone(tool));
-            definitions.push(definition);
-        }
-        Self {
-            definitions,
-            by_name,
-        }
-    }
-
-    /// Builds a `ToolSet` from pre-built definitions with **no executors** —
-    /// for caller-managed loops where the caller executes tools itself (the IR
-    /// interpreter's `AgentLoop` builds definitions from declared tool
-    /// signatures and overlay-resolved descriptions).
-    pub fn from_definitions(definitions: Vec<rig::completion::ToolDefinition>) -> Self {
-        Self {
-            definitions,
-            by_name: HashMap::new(),
-        }
-    }
-
-    /// Collapses `tools` into a single sandboxed `run_js` tool (Code Mode):
-    /// instead of emitting one JSON tool call per step, the model writes
-    /// JavaScript against the tools as a JS API and composes their results in
-    /// one execution. Drop the returned set into any tool loop
-    /// ([`LM::call_with_toolset`], `Predict`) exactly like a normal `ToolSet`.
-    ///
-    /// Errors if two tool names mangle to the same JS identifier (see
-    /// [`dsrs_tools::js_identifier`]).
-    pub async fn code_mode(
-        tools: Vec<Arc<dyn ToolDyn>>,
-        config: dsrs_tools::SandboxConfig,
-    ) -> Result<Self> {
-        let tool = dsrs_tools::CodeModeTool::new(tools, config).await?;
-        Ok(Self::build(&[Arc::new(tool) as Arc<dyn ToolDyn>]).await)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.definitions.is_empty()
-    }
-
-    pub fn definitions(&self) -> &[rig::completion::ToolDefinition] {
-        &self.definitions
-    }
 }
 
 /// The data half of an LM: every generation parameter, no live state.
@@ -503,64 +418,10 @@ impl<S: l_m_config_builder::State> LMConfigBuilder<S> {
     }
 }
 
-struct ToolLoopResult {
-    message: Message,
-    chat_history: Vec<rig::message::Message>,
-    tool_calls: Vec<ToolCall>,
-    tool_executions: Vec<String>,
-}
-
 #[derive(Clone, Copy, Debug)]
 struct PreparedCallOptions<'a> {
     json_mode: bool,
     output_schema: Option<&'a schemars::Schema>,
-}
-
-/// One executed tool call with the details the trace format records.
-struct ToolRunRecord {
-    call: ToolCall,
-    result: String,
-    duration_us: u64,
-    /// Failure reported back to the model as text (e.g. tool not found).
-    error: Option<String>,
-}
-
-impl ToolRunRecord {
-    fn to_event(&self) -> SpanEvent {
-        SpanEvent::ToolRun {
-            id: self.call.id.clone(),
-            name: self.call.function.name.clone(),
-            args: self.call.function.arguments.clone(),
-            result: self.result.clone(),
-            duration_us: self.duration_us,
-            error: self.error.clone(),
-        }
-    }
-}
-
-/// Converts grouped rig assistant content into a single [`Message`] for event
-/// recording, preserving reasoning and tool-call blocks.
-fn assistant_message_from_content(content: &rig::OneOrMany<AssistantContent>) -> Message {
-    Message::from(rig::message::Message::Assistant {
-        id: None,
-        content: content.clone(),
-    })
-}
-
-/// What the model actually wants to do, extracted from a potentially multi-block response.
-/// Reasoning blocks are preserved in `full_content` for faithful history replay.
-enum ChoiceAction {
-    /// Terminal text response (possibly preceded by reasoning).
-    Text(String),
-    /// One or more tool calls to execute. Carries the full `OneOrMany` so
-    /// reasoning blocks are preserved when we push the assistant turn into
-    /// chat history. Supports parallel tool calling (Anthropic multi-tool-use,
-    /// OpenAI parallel function calls).
-    ToolCalls {
-        calls: Vec<ToolCall>,
-        full_content: Box<rig::OneOrMany<AssistantContent>>,
-        assistant_text: Option<String>,
-    },
 }
 
 fn validate_cache_setting(enabled: bool) -> Result<()> {
@@ -574,214 +435,6 @@ fn validate_cache_setting(enabled: bool) -> Result<()> {
 /// Anthropic returns `[Reasoning, ToolCall]` or `[Reasoning, Text]`;
 /// OpenAI Responses API returns `[Reasoning, FunctionCall]`.
 /// Multiple tool calls in one response are supported (parallel tool calling).
-fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> Result<ChoiceAction> {
-    let mut text: Option<String> = None;
-    let mut tool_calls: Vec<ToolCall> = Vec::new();
-    let mut has_image = false;
-
-    for item in choice.iter() {
-        match item {
-            AssistantContent::ToolCall(tc) => {
-                tool_calls.push(tc.clone());
-            }
-            AssistantContent::Text(t) => {
-                text = Some(t.text.clone());
-            }
-            AssistantContent::Reasoning(_) => {}
-            AssistantContent::Image(_) => has_image = true,
-        }
-    }
-
-    if !tool_calls.is_empty() {
-        return Ok(ChoiceAction::ToolCalls {
-            calls: tool_calls,
-            full_content: Box::new(choice),
-            assistant_text: text,
-        });
-    }
-
-    if let Some(t) = text {
-        return Ok(ChoiceAction::Text(t));
-    }
-
-    if has_image {
-        return Err(crate::LmCallError::UnsupportedContent.into());
-    }
-
-    // Fallback: only reasoning blocks — extract display text
-    let display = choice
-        .iter()
-        .filter_map(|item| match item {
-            AssistantContent::Reasoning(r) => Some(r.display_text()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok(ChoiceAction::Text(display))
-}
-
-/// Render tools and exchanges for endpoints accepting ordinary chat messages only.
-fn format_prompt_tools(request: &mut CompletionRequest) -> Result<()> {
-    if !request.tools.is_empty() {
-        let declarations = serde_json::to_string(&request.tools)?;
-        let instruction = format!(
-            "Available tools: {declarations}\nTo request tools return ONLY a JSON object {{\"tool_calls\":[{{\"id\":\"unique-id\",\"name\":\"tool-name\",\"arguments\":{{}}}}]}}. Arguments must be a JSON object. Tool results will be supplied as text. When no tool is needed, follow the task's final output format. Tool choice policy: {:?}.",
-            request.tool_choice
-        );
-        request.preamble = Some(match request.preamble.take() {
-            Some(preamble) => format!("{preamble}\n\n{instruction}"),
-            None => instruction,
-        });
-        request.tools.clear();
-        request.tool_choice = None;
-        request.output_schema = None;
-        request.additional_params = None;
-    }
-    request.chat_history = rig::OneOrMany::many(
-        request
-            .chat_history
-            .iter()
-            .cloned()
-            .map(prompt_tool_message),
-    )
-    .expect("nonempty chat history");
-    Ok(())
-}
-
-fn prompt_tool_message(message: rig::message::Message) -> rig::message::Message {
-    match message {
-        rig::message::Message::Assistant { id, content } => {
-            let has_calls = content
-                .iter()
-                .any(|c| matches!(c, AssistantContent::ToolCall(_)));
-            let content = content.into_iter().filter_map(|item| match item {
-                AssistantContent::Text(text) => {
-                    if has_calls
-                        && prompt_tool_value(&text.text)
-                            .is_some_and(|v| v.get("tool_calls").is_some())
-                    {
-                        None
-                    } else {
-                        Some(AssistantContent::Text(text))
-                    }
-                }
-                AssistantContent::ToolCall(call) => {
-                    let value = serde_json::json!({"tool_calls":[{
-                        "id":call.id, "name":call.function.name,
-                        "arguments":call.function.arguments
-                    }]});
-                    Some(AssistantContent::text(value.to_string()))
-                }
-                other => Some(other),
-            });
-            rig::message::Message::Assistant {
-                id,
-                content: rig::OneOrMany::many(content).expect("nonempty assistant content"),
-            }
-        }
-        rig::message::Message::User { content } => {
-            let content = content.into_iter().map(|item| match item {
-                rig::message::UserContent::ToolResult(result) => {
-                    rig::message::UserContent::text(format!(
-                        "Tool result: {}",
-                        serde_json::to_string(&result).expect("serializable tool result")
-                    ))
-                }
-                other => other,
-            });
-            rig::message::Message::User {
-                content: rig::OneOrMany::many(content).expect("nonempty user content"),
-            }
-        }
-    }
-}
-
-/// Accept field/code-fence wrappers and trailing commas. Quoted arguments are
-/// preserved byte-for-byte; invalid argument types are still rejected.
-fn prompt_tool_value(text: &str) -> Option<serde_json::Value> {
-    if let Ok(value) = serde_json::from_str(text) {
-        return Some(value);
-    }
-    let start = text.find('{')?;
-    let end = text.rfind('}')?;
-    let bytes = text.get(start..=end)?.as_bytes();
-    let mut repaired = Vec::with_capacity(bytes.len());
-    let (mut quoted, mut escaped) = (false, false);
-    for (index, byte) in bytes.iter().copied().enumerate() {
-        if escaped {
-            escaped = false;
-            repaired.push(byte);
-            continue;
-        }
-        if quoted && byte == b'\\' {
-            escaped = true;
-            repaired.push(byte);
-            continue;
-        }
-        if byte == b'"' {
-            quoted = !quoted;
-        }
-        if !quoted
-            && byte == b','
-            && bytes[index + 1..]
-                .iter()
-                .find(|b| !b.is_ascii_whitespace())
-                .is_some_and(|b| *b == b'}' || *b == b']')
-        {
-            continue;
-        }
-        repaired.push(byte);
-    }
-    serde_json::from_slice(&repaired).ok()
-}
-
-fn decode_prompt_tools(response: &mut CompletionResponse<()>, required: bool) -> Result<()> {
-    let mut choice = Vec::new();
-    let mut ids = std::collections::HashSet::new();
-    for item in response.choice.iter() {
-        choice.push(item.clone());
-        let AssistantContent::Text(text) = item else {
-            continue;
-        };
-        let Some(value) = prompt_tool_value(&text.text) else {
-            continue;
-        };
-        let Some(calls) = value.get("tool_calls") else {
-            continue;
-        };
-        let calls = calls
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("tool_calls must be an array"))?;
-        for call in calls {
-            let id = call
-                .get("id")
-                .and_then(serde_json::Value::as_str)
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| anyhow::anyhow!("tool call needs an id"))?;
-            anyhow::ensure!(ids.insert(id.to_string()), "duplicate tool call id");
-            let name = call
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .filter(|s| !s.is_empty())
-                .ok_or_else(|| anyhow::anyhow!("tool call needs a name"))?;
-            let arguments = call
-                .get("arguments")
-                .filter(|v| v.is_object())
-                .ok_or_else(|| anyhow::anyhow!("tool arguments must be an object"))?;
-            choice.push(AssistantContent::tool_call(id, name, arguments.clone()));
-        }
-    }
-    anyhow::ensure!(
-        !required
-            || choice
-                .iter()
-                .any(|c| matches!(c, AssistantContent::ToolCall(_))),
-        "a tool call was required"
-    );
-    response.choice = rig::OneOrMany::many(choice).expect("provider choice is nonempty");
-    Ok(())
-}
-
 /// Keep provider URLs, credentials, and response bodies out of logs and run errors.
 pub(crate) fn safe_completion_error_kind(err: &CompletionError) -> &'static str {
     match err {
@@ -878,15 +531,13 @@ impl LM {
         hasher.finish()
     }
 
-    fn chat_from_rig_history(system_prompt: &str, history: &[rig::message::Message]) -> Chat {
-        let mut chat = Chat::new(Vec::new());
+    fn chat_from_rig_history(system_prompt: String, history: Vec<rig::message::Message>) -> Chat {
+        let mut messages = Vec::with_capacity(history.len() + 2);
         if !system_prompt.is_empty() {
-            chat.push_message(Message::system(system_prompt.to_string()));
+            messages.push(Message::system(system_prompt));
         }
-        for message in history {
-            chat.push_message(Message::from(message.clone()));
-        }
-        chat
+        messages.extend(history.into_iter().map(Message::from));
+        Chat::new(messages)
     }
 
     /// Builds a rig completion request from borrowed parts.
@@ -999,228 +650,6 @@ impl LM {
         }
     }
 
-    /// Execute all tool calls in a batch concurrently, returning results paired with
-    /// their calls in request order.
-    async fn execute_tool_batch(
-        tools_by_name: &HashMap<String, Arc<dyn ToolDyn>>,
-        calls: &[ToolCall],
-        context: &str,
-    ) -> Result<Vec<ToolRunRecord>> {
-        let executions = calls.iter().map(|tc| {
-            let tool = tools_by_name.get(&tc.function.name).cloned();
-            async move {
-                let started = std::time::Instant::now();
-                let (result, error) = match tool {
-                    Some(tool) => {
-                        let result =
-                            tool.call(tc.function.arguments.to_string())
-                                .await
-                                .map_err(|err| ToolLoopError::Execution {
-                                    name: tc.function.name.clone(),
-                                    context: context.to_owned(),
-                                    source: Box::new(err),
-                                })?;
-                        (result, None)
-                    }
-                    None => {
-                        warn!(tool = %tc.function.name, context, "tool not found");
-                        let message = ToolLoopError::UnknownTool {
-                            name: tc.function.name.clone(),
-                        }
-                        .to_string();
-                        (message.clone(), Some(message))
-                    }
-                };
-                trace!(tool = %tc.function.name, result_len = result.len(), "tool executed");
-                Ok::<_, anyhow::Error>(ToolRunRecord {
-                    call: tc.clone(),
-                    result,
-                    duration_us: started.elapsed().as_micros() as u64,
-                    error,
-                })
-            }
-        });
-
-        futures::future::try_join_all(executions).await
-    }
-
-    /// Push tool results into chat history as a single User message.
-    fn push_tool_results(chat_history: &mut Vec<rig::message::Message>, results: &[ToolRunRecord]) {
-        use rig::OneOrMany;
-        use rig::message::UserContent;
-
-        let tool_result_contents: Vec<UserContent> = results
-            .iter()
-            .map(|record| {
-                let tc = &record.call;
-                if let Some(call_id) = &tc.call_id {
-                    UserContent::tool_result_with_call_id(
-                        tc.id.clone(),
-                        call_id.clone(),
-                        OneOrMany::one(record.result.clone().into()),
-                    )
-                } else {
-                    UserContent::tool_result(
-                        tc.id.clone(),
-                        OneOrMany::one(record.result.clone().into()),
-                    )
-                }
-            })
-            .collect();
-
-        chat_history.push(rig::message::Message::User {
-            content: OneOrMany::many(tool_result_contents).expect("results should not be empty"),
-        });
-    }
-
-    #[tracing::instrument(
-        name = "dsrs.lm.tools.loop",
-        level = "debug",
-        skip(
-            self,
-            initial_calls,
-            initial_assistant_content,
-            tools,
-            chat_history,
-            system_prompt,
-            progress
-        ),
-        fields(
-            initial_tool_count = initial_calls.len(),
-            max_iterations = self.config.max_tool_iterations as usize
-        )
-    )]
-    #[allow(clippy::too_many_arguments)]
-    async fn execute_tool_loop(
-        &self,
-        initial_calls: &[ToolCall],
-        initial_assistant_content: rig::OneOrMany<AssistantContent>,
-        initial_usage: LmUsage,
-        tools: &ToolSet,
-        mut chat_history: Vec<rig::message::Message>,
-        system_prompt: String,
-        options: PreparedCallOptions<'_>,
-        progress: &mut CallProgress,
-    ) -> Result<ToolLoopResult> {
-        let max_iterations = self.config.max_tool_iterations as usize;
-        progress.events.push(SpanEvent::Exchange {
-            message: assistant_message_from_content(&initial_assistant_content),
-            usage: initial_usage,
-        });
-        if max_iterations == 0 {
-            return Err(ToolLoopError::IterationLimit {
-                limit: max_iterations,
-            }
-            .into());
-        }
-        let mut all_tool_calls = Vec::new();
-        let mut all_tool_executions = Vec::new();
-
-        // Execute the initial tool call batch
-        debug!(count = initial_calls.len(), "executing initial tool calls");
-        let results = Self::execute_tool_batch(&tools.by_name, initial_calls, "initial").await?;
-        for record in &results {
-            all_tool_calls.push(record.call.clone());
-            all_tool_executions.push(record.result.clone());
-            progress.events.push(record.to_event());
-        }
-
-        // Add initial assistant turn to history, preserving ALL content blocks
-        // (reasoning + tool calls) so providers like Anthropic get their thinking
-        // blocks back with signatures intact.
-        chat_history.push(rig::message::Message::Assistant {
-            id: None,
-            content: initial_assistant_content,
-        });
-        Self::push_tool_results(&mut chat_history, &results);
-
-        // Now loop until we get a text response
-        for iteration in 1..=max_iterations {
-            let response = self
-                .completion_with_retry(
-                    || {
-                        self.build_completion_request(
-                            &system_prompt,
-                            &chat_history,
-                            tools.definitions(),
-                            Some(ToolChoice::Auto),
-                            options,
-                        )
-                    },
-                    progress,
-                )
-                .await?;
-
-            let round_usage = LmUsage::from(response.usage);
-            let accumulated_usage = progress.total_usage();
-            debug!(
-                iteration,
-                prompt_tokens = accumulated_usage.prompt_tokens,
-                completion_tokens = accumulated_usage.completion_tokens,
-                total_tokens = accumulated_usage.total_tokens,
-                "tool loop usage updated"
-            );
-
-            // Scan ALL content blocks — don't just look at .first(), since
-            // responses can be [Reasoning, ToolCall] or [Reasoning, Text].
-            match classify_choice(response.choice)? {
-                ChoiceAction::Text(text) => {
-                    debug!(iteration, "tool loop completed with text");
-                    let message = Message::assistant(&text);
-                    progress.events.push(SpanEvent::Exchange {
-                        message: message.clone(),
-                        usage: round_usage,
-                    });
-                    return Ok(ToolLoopResult {
-                        message,
-                        chat_history,
-                        tool_calls: all_tool_calls,
-                        tool_executions: all_tool_executions,
-                    });
-                }
-                ChoiceAction::ToolCalls {
-                    calls,
-                    full_content,
-                    ..
-                } => {
-                    progress.events.push(SpanEvent::Exchange {
-                        message: assistant_message_from_content(&full_content),
-                        usage: round_usage,
-                    });
-                    if iteration == max_iterations {
-                        warn!(max_iterations, "max tool iterations reached");
-                        return Err(ToolLoopError::IterationLimit {
-                            limit: max_iterations,
-                        }
-                        .into());
-                    }
-                    let context = format!("iteration {}", iteration);
-                    debug!(iteration, count = calls.len(), "executing tool calls");
-                    let results =
-                        Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
-                    for record in &results {
-                        all_tool_calls.push(record.call.clone());
-                        all_tool_executions.push(record.result.clone());
-                        progress.events.push(record.to_event());
-                    }
-
-                    // Preserve full content (reasoning + tool calls) in history
-                    chat_history.push(rig::message::Message::Assistant {
-                        id: None,
-                        content: *full_content,
-                    });
-                    Self::push_tool_results(&mut chat_history, &results);
-                }
-            }
-        }
-
-        warn!(max_iterations, "max tool iterations reached");
-        Err(ToolLoopError::IterationLimit {
-            limit: max_iterations,
-        }
-        .into())
-    }
-
     pub async fn call(&self, messages: Chat, tools: Vec<Arc<dyn ToolDyn>>) -> Result<LMResponse> {
         self.call_with_options(
             messages,
@@ -1273,7 +702,7 @@ impl LM {
         fields(
             model = %self.config.model,
             message_count = messages.len(),
-            tool_count = tools.definitions.len(),
+            tool_count = tools.definitions().len(),
             cache_enabled = self.config.cache,
             tool_loop_mode = ?tool_loop_mode
         )
@@ -1322,7 +751,7 @@ impl LM {
                 &mut history.progress,
             )
             .await;
-        history.finish(&mut result);
+        history.finish(&mut result).await;
         if let Ok(response) = &result {
             debug!(target: "dsrs::content", response = %response.output.to_json(), "raw LM response");
         }
@@ -1428,147 +857,124 @@ impl LM {
 
         let first_usage = LmUsage::from(response.usage);
 
-        // Scan ALL content blocks in the response — don't just look at .first().
-        // Responses can be [Reasoning, ToolCall] or [Reasoning, Text].
-        let mut tool_loop_result = None;
-        let mut returned_tool_calls = Vec::new();
-        let mut assistant_content_for_history: Option<rig::OneOrMany<AssistantContent>> = None;
-        let mut append_output_after_history = false;
-        let classified = classify_choice(response.choice)?;
-        let first_choice = match classified {
+        let (output, chat, tool_calls, tool_executions) = match classify_choice(response.choice)? {
             ChoiceAction::Text(text) => {
-                let message = Message::assistant(&text);
+                // Only a plain completion can populate the response cache.
+                #[cfg(feature = "cache")]
+                if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref()) {
+                    cache.insert_entry(
+                        key,
+                        CacheEntry {
+                            prompt: messages.to_json().to_string(),
+                            usage: progress.total_usage(),
+                            raw_output: Some(text.clone()),
+                        },
+                    );
+                    trace!("lm response cached");
+                }
+                #[cfg(feature = "inflight-dedup")]
+                drop(pending);
+
+                let output = Message::assistant(text);
                 progress.events.push(SpanEvent::Exchange {
-                    message: message.clone(),
+                    message: output.clone(),
                     usage: first_usage,
                 });
-                message
-            }
-            ChoiceAction::ToolCalls {
-                calls,
-                full_content,
-                assistant_text: _,
-            } if tool_loop_mode == ToolLoopMode::Auto && !tools.is_empty() => {
-                debug!(count = calls.len(), "entering tool loop");
-                let result = self
-                    .execute_tool_loop(
-                        &calls,
-                        *full_content,
-                        first_usage,
-                        tools,
-                        chat_history,
-                        system_prompt.clone(),
-                        prepared,
-                        progress,
-                    )
-                    .await?;
-                let message = result.message.clone();
-                tool_loop_result = Some(result);
-                append_output_after_history = true;
-                message
-            }
-            ChoiceAction::ToolCalls { calls, .. }
-                if tool_loop_mode == ToolLoopMode::Auto && tools.is_empty() =>
-            {
-                let names: Vec<_> = calls.iter().map(|tc| tc.function.name.as_str()).collect();
-                warn!(?names, "tools requested but no tools available");
-                let msg = format!("Tool calls requested: {:?}, but no tools available", names);
-                let content = rig::OneOrMany::many(
-                    calls
-                        .into_iter()
-                        .map(AssistantContent::ToolCall)
-                        .collect::<Vec<_>>(),
-                )?;
-                progress.events.push(SpanEvent::Exchange {
-                    message: assistant_message_from_content(&content),
-                    usage: first_usage,
-                });
-                assistant_content_for_history = Some(content);
-                append_output_after_history = true;
-                Message::assistant(&msg)
+                let mut chat = messages;
+                chat.push_message(output.clone());
+                (output, chat, Vec::new(), Vec::new())
             }
             ChoiceAction::ToolCalls {
                 calls,
                 assistant_text,
                 full_content,
             } => {
-                progress.events.push(SpanEvent::Exchange {
-                    message: assistant_message_from_content(&full_content),
-                    usage: first_usage,
-                });
-                returned_tool_calls = calls;
-                assistant_content_for_history = Some(*full_content);
-                Message::assistant(assistant_text.unwrap_or_default())
+                #[cfg(feature = "inflight-dedup")]
+                if let Some(pending) = pending {
+                    pending.finish_uncached();
+                }
+                match tool_loop_mode {
+                    ToolLoopMode::Auto if !tools.is_empty() => {
+                        debug!(count = calls.len(), "entering tool loop");
+                        let ToolLoopResult {
+                            message,
+                            chat_history,
+                            tool_calls,
+                            tool_executions,
+                        } = self
+                            .execute_tool_loop(
+                                ToolRound {
+                                    calls,
+                                    content: *full_content,
+                                    usage: first_usage,
+                                },
+                                tools,
+                                chat_history,
+                                &system_prompt,
+                                prepared,
+                                progress,
+                            )
+                            .await?;
+                        let mut chat = Self::chat_from_rig_history(system_prompt, chat_history);
+                        chat.push_message(message.clone());
+                        (message, chat, tool_calls, tool_executions)
+                    }
+                    ToolLoopMode::Auto => {
+                        let names: Vec<_> =
+                            calls.iter().map(|tc| tc.function.name.as_str()).collect();
+                        warn!(?names, "tools requested but no tools available");
+                        let output = Message::assistant(format!(
+                            "Tool calls requested: {names:?}, but no tools available"
+                        ));
+                        let content = rig::OneOrMany::many(
+                            calls.into_iter().map(AssistantContent::ToolCall),
+                        )?;
+                        let assistant =
+                            Message::from(rig::message::Message::Assistant { id: None, content });
+                        progress.events.push(SpanEvent::Exchange {
+                            message: assistant.clone(),
+                            usage: first_usage,
+                        });
+                        let mut chat = messages;
+                        chat.push_message(assistant);
+                        chat.push_message(output.clone());
+                        (output, chat, Vec::new(), Vec::new())
+                    }
+                    ToolLoopMode::CallerManaged => {
+                        let assistant = Message::from(rig::message::Message::Assistant {
+                            id: None,
+                            content: *full_content,
+                        });
+                        progress.events.push(SpanEvent::Exchange {
+                            message: assistant.clone(),
+                            usage: first_usage,
+                        });
+                        let mut chat = messages;
+                        chat.push_message(assistant);
+                        (
+                            Message::assistant(assistant_text.unwrap_or_default()),
+                            chat,
+                            calls,
+                            Vec::new(),
+                        )
+                    }
+                }
             }
         };
-        let accumulated_usage = progress.total_usage();
-
-        // Populate the cache on the plain-text path only: `append_output_after_history`
-        // covers the tool-loop and "no tools available" fallbacks, and
-        // `returned_tool_calls` covers caller-managed tool responses. This runs
-        // before `messages` is moved into the returned chat below.
-        #[cfg(feature = "cache")]
-        let cacheable = returned_tool_calls.is_empty() && !append_output_after_history;
-        #[cfg(feature = "cache")]
-        if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref())
-            && cacheable
-        {
-            let entry = CacheEntry {
-                prompt: messages.to_json().to_string(),
-                usage: accumulated_usage,
-                raw_output: Some(first_choice.content()),
-            };
-            cache.insert_entry(key, entry);
-            trace!("lm response cached");
-        }
-        #[cfg(feature = "inflight-dedup")]
-        if cacheable {
-            drop(pending);
-        } else if let Some(pending) = pending {
-            pending.finish_uncached();
-        }
-
-        let mut full_chat = if let Some(result) = tool_loop_result.as_ref() {
-            Self::chat_from_rig_history(&system_prompt, &result.chat_history)
-        } else {
-            let mut chat = messages;
-            if let Some(content) = assistant_content_for_history {
-                // Convert grouped rig content into a single grouped Message.
-                let rig_msg = rig::message::Message::Assistant { id: None, content };
-                chat.push_message(Message::from(rig_msg));
-            } else {
-                // Text-only path: preserve a single assistant response turn.
-                chat.push_message(first_choice.clone());
-            }
-            chat
-        };
-        if append_output_after_history {
-            full_chat.push_message(first_choice.clone());
-        }
-
+        let usage = progress.total_usage();
         debug!(
-            tool_calls = tool_loop_result
-                .as_ref()
-                .map(|result| result.tool_calls.len())
-                .unwrap_or(0),
-            tool_executions = tool_loop_result
-                .as_ref()
-                .map(|result| result.tool_executions.len())
-                .unwrap_or(0),
-            total_tokens = accumulated_usage.total_tokens,
+            tool_calls = tool_calls.len(),
+            tool_executions = tool_executions.len(),
+            total_tokens = usage.total_tokens,
             "lm call completed"
         );
 
-        let (tool_calls, tool_executions) = match tool_loop_result {
-            Some(result) => (result.tool_calls, result.tool_executions),
-            None => (returned_tool_calls, Vec::new()),
-        };
         Ok(LMResponse {
             cache_hit: false,
             history: None,
-            output: first_choice,
-            usage: accumulated_usage,
-            chat: full_chat,
+            output,
+            usage,
+            chat,
             tool_calls,
             tool_executions,
             events: std::mem::take(&mut progress.events),
@@ -1611,27 +1017,6 @@ impl LM {
 pub(crate) mod tests {
     use super::*;
 
-    #[test]
-    fn prompt_tools_enforce_required_calls_and_unique_ids_across_blocks() {
-        let mut response = CompletionResponse {
-            choice: rig::OneOrMany::one(AssistantContent::text("done")),
-            usage: rig::completion::Usage::new(),
-            raw_response: (),
-            message_id: None,
-        };
-        assert!(decode_prompt_tools(&mut response, true).is_err());
-        let text = AssistantContent::text(
-            r#"{"tool_calls":[{"id":"same","name":"echo","arguments":{}}]}"#,
-        );
-        response.choice = rig::OneOrMany::many([text.clone(), text]).unwrap();
-        assert!(decode_prompt_tools(&mut response, false).is_err());
-    }
-
-    #[test]
-    fn prompt_envelopes_allow_wrappers_without_modifying_argument_strings() {
-        let value = prompt_tool_value("[[ ## calls ## ]]\n{\"tool_calls\":[{\"id\":\"id\",\"name\":\"echo\",\"arguments\":{\"text\":\",}\",},},],}\n[[ ## completed ## ]]").unwrap();
-        assert_eq!(value["tool_calls"][0]["arguments"]["text"], ",}");
-    }
     use rig::OneOrMany;
     use rig::completion::AssistantContent;
     use rig::completion::ToolDefinition;
