@@ -919,6 +919,7 @@ pub struct Engine {
     candidates: Vec<(u64, CandidatePayload)>,
     candidate_indices: HashMap<(CandidateKind, u64), usize>,
     scores: ScoredRollouts,
+    record_matrix: bool,
     spend: Spend,
     /// High-water mark of *distinct candidates* with rollouts in flight at
     /// the same instant (see [`peak_candidate_concurrency`](Self::peak_candidate_concurrency)).
@@ -958,8 +959,17 @@ impl Engine {
             candidates: Vec::new(),
             candidate_indices: HashMap::new(),
             scores: ScoredRollouts::default(),
+            record_matrix: true,
             spend: Spend::default(),
             peak_candidates_in_flight: 0,
+        }
+    }
+
+    /// Structural search uses the returned rollouts and cache directly.
+    pub(super) fn for_structural(config: EngineConfig) -> Self {
+        Self {
+            record_matrix: false,
+            ..Self::new(config)
         }
     }
 
@@ -1084,7 +1094,9 @@ impl Engine {
         };
 
         self.candidates.push((hash, payload()));
-        self.scores.matrix.ensure_rows(index + 1);
+        if self.record_matrix {
+            self.scores.matrix.ensure_rows(index + 1);
+        }
         if let Some(entry) = entry {
             entry.insert(index);
         }
@@ -1252,16 +1264,19 @@ impl Engine {
         let cache_hits = cached.len();
         self.spend.cache_hits += cache_hits;
 
-        if self.scores.matrix_scope != Some(scope) {
-            self.scores.matrix = ScoreMatrix::new(0);
-            self.scores.matrix.ensure_rows(self.candidates.len());
-            self.scores.matrix_scope = Some(scope);
-        }
-
-        // Bookkeeping: cache inserts + matrix records.
-        for (&(candidate, idx), eval) in &cached {
-            self.scores.matrix.record(candidate, idx, eval.score);
-        }
+        let mut matrix = if self.record_matrix {
+            if self.scores.matrix_scope != Some(scope) {
+                self.scores.matrix = ScoreMatrix::new(0);
+                self.scores.matrix.ensure_rows(self.candidates.len());
+                self.scores.matrix_scope = Some(scope);
+            }
+            for (&(candidate, idx), eval) in &cached {
+                self.scores.matrix.record(candidate, idx, eval.score);
+            }
+            Some(&mut self.scores.matrix)
+        } else {
+            None
+        };
         let mut fresh_by_key = HashMap::with_capacity(fresh.rollouts.len());
         for FreshRollout {
             candidate,
@@ -1277,7 +1292,9 @@ impl Engine {
                 salt,
                 eval.clone(),
             );
-            self.scores.matrix.record(candidate, idx, eval.score);
+            if let Some(matrix) = matrix.as_deref_mut() {
+                matrix.record(candidate, idx, eval.score);
+            }
             fresh_by_key.insert((candidate, idx), (eval, trace));
         }
 
@@ -1826,8 +1843,13 @@ mod tests {
             .collect()
     }
 
+    #[rstest::rstest]
+    #[case::with_matrix(true)]
+    #[case::structural(false)]
     #[tokio::test]
-    async fn scoring_batches_keep_order_cache_and_usage_after_releasing_traces() -> Result<()> {
+    async fn scoring_batches_keep_order_cache_and_usage_after_releasing_traces(
+        #[case] record_matrix: bool,
+    ) -> Result<()> {
         use crate::core::lm::tests::test_lm_with_model;
         use crate::ir::{
             self, DemoRow, FieldType, Interpreter, ProgramBuilder, RuntimeEnv, SignatureDef,
@@ -1897,13 +1919,18 @@ mod tests {
             },
         ];
         let target = OptimizeTarget::program(&interp, &rows, &ExactMatch);
-        let mut engine = Engine::new(EngineConfig {
+        let config = EngineConfig {
             budget: Budget {
                 max_metric_calls: Some(2),
                 ..Budget::default()
             },
             ..EngineConfig::default()
-        });
+        };
+        let mut engine = if record_matrix {
+            Engine::new(config)
+        } else {
+            Engine::for_structural(config)
+        };
         let base = engine.register(Candidate::new());
         let evals = engine
             .evaluate_scores_many(&target, &[base, base], Some(&[1, 0, 1]))
@@ -1916,7 +1943,9 @@ mod tests {
             assert_eq!(evaluation.scores(), [0.0, 1.0, 0.0]);
             assert!(evaluation.rollouts.iter().all(|r| r.trace.is_none()));
         }
-        assert_eq!(engine.matrix().row(base), &[Some(1.0), Some(0.0)]);
+        if record_matrix {
+            assert_eq!(engine.matrix().row(base), &[Some(1.0), Some(0.0)]);
+        }
         assert_eq!(engine.spend().metric_calls, 2);
         assert_eq!(engine.spend().lm_calls, 2);
         assert_eq!(engine.spend().lm_spans, 2);
@@ -1948,7 +1977,7 @@ mod tests {
             GateOutcome::Rejected { .. }
         ));
         assert_eq!(engine.cache().len(), rows.len());
-        assert!(engine.matrix_for(&target).is_some());
+        assert_eq!(engine.matrix_for(&target).is_some(), record_matrix);
         assert!(engine.matrix_for(&child).is_none());
 
         provider.push_response(response());
@@ -1959,8 +1988,12 @@ mod tests {
         ));
         assert_eq!(engine.cache().len(), rows.len());
         assert!(engine.matrix_for(&target).is_none());
-        assert!(engine.matrix_for(&child).is_some());
+        assert_eq!(engine.matrix_for(&child).is_some(), record_matrix);
         assert_eq!(engine.spend().metric_calls, 5);
+        if !record_matrix {
+            assert_eq!(engine.matrix().candidates(), 0);
+            assert_eq!(engine.matrix().examples(), 0);
+        }
         Ok(())
     }
 

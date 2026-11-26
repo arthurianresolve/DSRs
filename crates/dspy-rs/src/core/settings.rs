@@ -24,15 +24,15 @@ tokio::task_local! {
 /// precedence. Nested scopes restore automatically on return, error, panic, or
 /// cancellation. Spawned tasks do not inherit the scope.
 pub async fn with_lm<F: std::future::Future>(lm: impl Into<Arc<LM>>, future: F) -> F::Output {
-    with_default_lm(Some(lm.into()), future).await
+    SCOPED_LM.scope(Some(lm.into()), future).await
 }
 
 /// Pins the default binding, including its absence, for one evaluation.
-pub(crate) async fn with_default_lm<F: std::future::Future>(
+pub(crate) fn with_default_lm<F: std::future::Future>(
     lm: Option<Arc<LM>>,
     future: F,
-) -> F::Output {
-    SCOPED_LM.scope(lm, future).await
+) -> impl std::future::Future<Output = F::Output> {
+    SCOPED_LM.scope(lm, future)
 }
 
 pub(crate) async fn with_call_lm<F: std::future::Future>(

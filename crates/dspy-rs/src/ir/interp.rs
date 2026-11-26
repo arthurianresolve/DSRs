@@ -728,6 +728,15 @@ impl Interpreter {
             }
         }
 
+        let mut input_templates = SecondaryMap::new();
+        let mut schemas = PrimaryMap::new();
+        for (sig, def) in program.sigs.iter() {
+            schemas.push(PreparedSchemas::new(def));
+            if let Some(templates) = PreparedInputTemplates::new(def) {
+                input_templates[sig] = Some(Arc::new(templates));
+            }
+        }
+
         let sandbox = env.sandbox;
         let mut registered = HashMap::new();
         if !sandboxed.is_empty() {
@@ -741,8 +750,11 @@ impl Interpreter {
                     &base,
                     source,
                     *hash,
-                    &program.sigs[sig],
-                    &program.types,
+                    || {
+                        schemas[sig]
+                            .tool_input(&program.sigs[sig], &program.types)
+                            .clone()
+                    },
                     &caps,
                 )
                 .await
@@ -754,14 +766,6 @@ impl Interpreter {
             }
         }
 
-        let mut input_templates = SecondaryMap::new();
-        let mut schemas = PrimaryMap::new();
-        for (sig, def) in program.sigs.iter() {
-            schemas.push(PreparedSchemas::new(def));
-            if let Some(templates) = PreparedInputTemplates::new(def) {
-                input_templates[sig] = Some(Arc::new(templates));
-            }
-        }
         Ok(Self {
             program,
             system_prompts: RwLock::new(HashMap::new()),
@@ -835,12 +839,7 @@ impl Interpreter {
     }
 
     fn tool_input_schema(&self, sig: SigId) -> &Value {
-        self.schemas[sig].tool_input.get_or_init(|| {
-            Box::new(input_schema_of(
-                &self.program.sigs[sig],
-                &self.program.types,
-            ))
-        })
+        self.schemas[sig].tool_input(&self.program.sigs[sig], &self.program.types)
     }
 
     fn system_prompt(&self, sig: SigId, instruction: &str, format: OutputFormat) -> String {
@@ -995,7 +994,7 @@ impl Interpreter {
             overlay,
             meter,
             run_meter,
-            guard,
+            mut guard,
             mut run,
             next_turn,
             prefix_len,
@@ -1043,11 +1042,16 @@ impl Interpreter {
             });
             run.tool_calls.push(call.clone());
             run.tool_executions.push(result.clone());
-            blocks.push(tool_result_block(call, result));
+            blocks.push(crate::ContentBlock::tool_result_text(
+                &call.id,
+                call.call_id.as_deref(),
+                result,
+            ));
         }
         chat.push_message(Message::with_content(Role::User, blocks));
 
-        let surface = self.build_agent_surface(&at, &cx, &agent).await?;
+        let surface = run
+            .finish_on_setup_error(&mut guard, self.build_agent_surface(&at, &cx, &agent).await)?;
         let lc = AgentLoopCx {
             at: &at,
             n,
@@ -1187,7 +1191,7 @@ impl Interpreter {
             Node::AgentLoop(n) => Some(self.prepare_agent(n, &cx, !suspend_on_tools)),
             _ => None,
         };
-        let (guard, replay) = match &agent {
+        let (mut guard, replay) = match &agent {
             Some(agent) => self.begin_agent_request(&cx, agent, opening),
             None => (
                 opening.open_span(|| None),
@@ -1243,7 +1247,11 @@ impl Interpreter {
             }
             Some(agent) => {
                 let n = agent.node;
-                let surface = self.build_agent_surface(&at, &cx, &agent).await?;
+                let mut run = AgentRun::default();
+                let surface = run.finish_on_setup_error(
+                    &mut guard,
+                    self.build_agent_surface(&at, &cx, &agent).await,
+                )?;
                 let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
                 let lc = AgentLoopCx {
                     at: &at,
@@ -1260,7 +1268,6 @@ impl Interpreter {
                     policy: &agent.policy,
                     code_mode: surface.code_mode.as_ref(),
                 };
-                let mut run = AgentRun::default();
                 let outcome = in_span(
                     guard.as_ref(),
                     pin!(self.agent_loop(&lc, Chat::new(messages), &mut run, 0, suspend_on_tools)),
@@ -1416,10 +1423,7 @@ impl Interpreter {
         }
     }
 
-    /// Serves one conversation turn from a recorded span: the chat extends
-    /// with the recorded completion (exchanges verbatim, tool results
-    /// batched), and the [`LeafOutcome`] carries the recorded usage with no
-    /// per-field parse metadata — the same contract as every served leaf.
+    /// Serves one conversation turn from the recorded output and chat edits.
     fn serve_conversation_turn(
         &self,
         at: &str,
@@ -1428,20 +1432,31 @@ impl Interpreter {
         messages: Vec<Message>,
         guard: Option<crate::trace::SpanGuard>,
     ) -> Result<ConversationTurn, RunError> {
+        let Some(chat) = span.replay_chat(messages) else {
+            let source = crate::trace::ReplayError::Incomplete {
+                component: at.to_string(),
+                seq: span.seq,
+                span: span.id,
+            };
+            if let Some(guard) = guard {
+                guard.finish(span_error(
+                    crate::trace::SpanErrorKind::Lm,
+                    source.to_string(),
+                    Vec::new(),
+                    None,
+                    LmUsage::default(),
+                ));
+            }
+            return Err(RunError::Replay {
+                at: at.into(),
+                source,
+            });
+        };
         let output = span
             .output
             .clone()
             .expect("replay serves only spans with parsed output");
-        let mut completion = span.completion_messages();
-        if completion.is_empty()
-            && let Some(raw) = span.raw_output.as_deref().filter(|raw| !raw.is_empty())
-        {
-            completion.push(Message::assistant(raw));
-        }
-        let tool_calls: Vec<rig::message::ToolCall> = completion
-            .iter()
-            .flat_map(|message| message.tool_calls().into_iter().cloned())
-            .collect();
+        let tool_calls = span.recorded_tool_calls();
         let tool_executions: Vec<String> = span
             .events
             .iter()
@@ -1450,10 +1465,6 @@ impl Interpreter {
                 _ => None,
             })
             .collect();
-        let mut chat = Chat::new(messages);
-        for message in &completion {
-            chat.push_message(message.clone());
-        }
         let leaf = LeafOutcome {
             name: at.to_string(),
             raw_response: span.raw_output.clone().unwrap_or_default(),
@@ -2230,7 +2241,7 @@ impl Interpreter {
         let observation = guard.map(|guard| (guard, Value::Object(input.clone()), Instant::now()));
         let result = in_span(
             observation.as_ref().map(|(guard, _, _)| guard),
-            pin!(self.execute_hole_impl(at, &imp, input, def, &n.caps)),
+            pin!(self.execute_hole_impl(at, &imp, input, n.sig, &n.caps)),
         )
         .await;
         let observation = observation
@@ -2292,7 +2303,7 @@ impl Interpreter {
         at: &str,
         imp: &ResolvedHoleImpl<'_>,
         input: JsonMap,
-        def: &SignatureDef,
+        sig: SigId,
         caps: &CapSet,
     ) -> Result<(String, Value), RunError> {
         match imp {
@@ -2305,7 +2316,7 @@ impl Interpreter {
                     message: "hole evaluated without a sandbox (load should have refused)".into(),
                 })?;
                 let name = self
-                    .ensure_registered(at, sandbox.as_ref(), *code, (source, *hash), def, caps)
+                    .ensure_registered(at, sandbox.as_ref(), *code, (source, *hash), sig, caps)
                     .await?;
                 let value = sandbox
                     .execute_scoped(
@@ -2363,7 +2374,7 @@ impl Interpreter {
             input: Some(&input),
             model: &lm.config,
         };
-        let (guard, replay) = self.begin_agent_request(cx, &agent, opening);
+        let (mut guard, replay) = self.begin_agent_request(cx, &agent, opening);
 
         match replay {
             Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
@@ -2426,7 +2437,9 @@ impl Interpreter {
             Some(crate::trace::replay::ReplayDirective::Live) | None => {}
         }
 
-        let surface = self.build_agent_surface(&at, cx, &agent).await?;
+        let mut run = AgentRun::default();
+        let surface =
+            run.finish_on_setup_error(&mut guard, self.build_agent_surface(&at, cx, &agent).await)?;
         let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
         let loop_cx = AgentLoopCx {
             at: &at,
@@ -2443,7 +2456,6 @@ impl Interpreter {
             policy: &agent.policy,
             code_mode: surface.code_mode.as_ref(),
         };
-        let mut run = AgentRun::default();
         let outcome = in_span(
             guard.as_ref(),
             pin!(self.agent_loop(&loop_cx, chat, &mut run, 0, false)),
@@ -2535,12 +2547,13 @@ impl Interpreter {
                 };
             }
 
-            chat = truncate_history(chat, lc.prefix_len, lc.policy);
+            run.events
+                .extend(prune_history(&mut chat, lc.prefix_len, lc.policy));
             let options = self.output_options(lc.n.sig, format);
             let response = lm_call_toolset(lc.lm, chat, lc.toolset, lc.at, options).await?;
             lc.meter.record_usage(&response.usage);
             run.usage = run.usage + response.usage;
-            run.events.extend(response.events.clone());
+            run.events.extend(response.events);
             run.call_ids.extend(response.history.iter().map(|h| h.id()));
             chat = response.chat;
 
@@ -2584,7 +2597,11 @@ impl Interpreter {
                     });
                     run.tool_calls.push(call.clone());
                     run.tool_executions.push(result.clone());
-                    blocks.push(tool_result_block(call, result));
+                    blocks.push(crate::ContentBlock::tool_result_text(
+                        &call.id,
+                        call.call_id.as_deref(),
+                        result,
+                    ));
                 }
                 chat.push_message(Message::with_content(Role::User, blocks));
                 continue;
@@ -2607,11 +2624,14 @@ impl Interpreter {
                         });
                     }
                     Err(err) if turn + 1 < lc.n.stop.max_turns.get() => {
-                        chat.push_message(Message::user(format!(
-                            "Your response could not be parsed: {err}. Respond again, \
+                        run.push_prompt(
+                            &mut chat,
+                            format!(
+                                "Your response could not be parsed: {err}. Respond again, \
                              producing every output field in the required \
                              required output format."
-                        )));
+                            ),
+                        );
                     }
                     Err(err) => {
                         return Err(RunError::Parse {
@@ -2645,10 +2665,11 @@ impl Interpreter {
             .map_err(|_| RunError::Budget { at: lc.at.into() })?;
         let format = self.output_format(lc.n.sig, lc.lm, false);
         let options = self.output_options(lc.n.sig, format);
-        chat.push_message(Message::user(
+        run.push_prompt(
+            &mut chat,
             "Budget exhausted — wrap up now. Produce the final output fields in the required \
              required output format, without calling any tools.",
-        ));
+        );
         let response = lc
             .lm
             .call_with_toolset_and_options_ref(
@@ -2668,7 +2689,7 @@ impl Interpreter {
             })?;
         lc.run_meter.record_usage(&response.usage);
         run.usage = run.usage + response.usage;
-        run.events.extend(response.events.clone());
+        run.events.extend(response.events);
         run.call_ids.extend(response.history.iter().map(|h| h.id()));
         let raw = response.output.content();
         let parsed = parse_response(lc.def, &self.program.types, &response.output, format);
@@ -2754,7 +2775,7 @@ impl Interpreter {
                 sandbox.as_ref(),
                 code,
                 (source, *hash),
-                &self.program.sigs[tool.sig],
+                tool.sig,
                 &tool.caps,
             )
             .await
@@ -2966,7 +2987,7 @@ impl Interpreter {
                             sandbox.as_ref(),
                             *code,
                             (source, *hash),
-                            &p.sigs[p.tools[tool_id].sig],
+                            p.tools[tool_id].sig,
                             &p.tools[tool_id].caps,
                         )
                         .await?;
@@ -3093,7 +3114,7 @@ impl Interpreter {
         sandbox: &dyn dsrs_tools::Executor,
         code: ParamId,
         (source, hash): (&str, u64),
-        sig: &SignatureDef,
+        sig: SigId,
         caps: &CapSet,
     ) -> Result<String, RunError> {
         self.registered
@@ -3102,7 +3123,15 @@ impl Interpreter {
                     ParamOwner::Node(_) => at,
                     ParamOwner::Tool(id) => self.program.syms.get(self.program.tools[id].name),
                 };
-                register_code(sandbox, base, source, hash, sig, &self.program.types, caps).await
+                register_code(
+                    sandbox,
+                    base,
+                    source,
+                    hash,
+                    || self.tool_input_schema(sig).clone(),
+                    caps,
+                )
+                .await
             })
             .await
             .map_err(|err| RunError::Hole {
@@ -3182,6 +3211,34 @@ struct AgentRun {
     usage: LmUsage,
     tool_calls: Vec<rig::message::ToolCall>,
     tool_executions: Vec<String>,
+}
+
+impl AgentRun {
+    fn push_prompt(&mut self, chat: &mut Chat, prompt: impl Into<String>) {
+        let message = Message::user(prompt);
+        self.events.push(SpanEvent::ChatMessage {
+            message: message.clone(),
+        });
+        chat.push_message(message);
+    }
+
+    fn finish_on_setup_error(
+        &mut self,
+        guard: &mut Option<SpanGuard>,
+        surface: Result<AgentSurface, RunError>,
+    ) -> Result<AgentSurface, RunError> {
+        surface.inspect_err(|err| {
+            if let Some(guard) = guard.take() {
+                guard.finish(span_error(
+                    crate::trace::SpanErrorKind::Tool,
+                    err.to_string(),
+                    std::mem::take(&mut self.events),
+                    None,
+                    self.usage,
+                ));
+            }
+        })
+    }
 }
 
 /// How one `agent_loop` invocation ended (short of an error): the accepted
@@ -3382,6 +3439,11 @@ impl PreparedSchemas {
             scalar_options: OnceLock::new(),
             tool_input: OnceLock::new(),
         }
+    }
+
+    fn tool_input(&self, def: &SignatureDef, types: &TypeTable) -> &Value {
+        self.tool_input
+            .get_or_init(|| Box::new(input_schema_of(def, types)))
     }
 }
 
@@ -3668,21 +3730,20 @@ fn node_budget(budget: &crate::ir::graph::NodeBudget) -> Budget {
 
 /// `ContextPolicy.max_history_turns`: keep the rendered prefix plus the
 /// trailing N conversation messages.
-fn truncate_history(chat: Chat, prefix_len: usize, policy: &ContextPolicy) -> Chat {
-    let Some(max_turns) = policy.max_history_turns else {
-        return chat;
-    };
-    let max_turns = max_turns as usize;
-    let tail = chat.messages.len().saturating_sub(prefix_len);
-    if tail <= max_turns {
-        return chat;
+fn prune_history(chat: &mut Chat, prefix_len: usize, policy: &ContextPolicy) -> Option<SpanEvent> {
+    let max_turns = policy.max_history_turns? as usize;
+    let count = chat
+        .len()
+        .saturating_sub(prefix_len)
+        .saturating_sub(max_turns);
+    if count == 0 {
+        return None;
     }
-    let mut messages = chat.messages;
-    let mut kept: Vec<Message> = messages.drain(..prefix_len).collect();
-    // `messages` is now the conversation tail; keep its last `max_turns`.
-    let skip = messages.len() - max_turns;
-    kept.extend(messages.into_iter().skip(skip));
-    Chat::new(kept)
+    chat.messages.drain(prefix_len..prefix_len + count);
+    Some(SpanEvent::HistoryPruned {
+        start: prefix_len,
+        count,
+    })
 }
 
 /// Applies `ContextPolicy.tool_result_max_bytes` to one tool result — the
@@ -3701,24 +3762,6 @@ fn clip_tool_result(mut text: String, policy: &ContextPolicy) -> String {
         }
     }
     text
-}
-
-/// Builds a tool-result content block for the conversation.
-fn tool_result_block(call: &rig::message::ToolCall, result: String) -> crate::ContentBlock {
-    use rig::OneOrMany;
-    use rig::message::UserContent;
-    let content = match &call.call_id {
-        Some(call_id) => UserContent::tool_result_with_call_id(
-            call.id.clone(),
-            call_id.clone(),
-            OneOrMany::one(result.into()),
-        ),
-        None => UserContent::tool_result(call.id.clone(), OneOrMany::one(result.into())),
-    };
-    match content {
-        UserContent::ToolResult(tool_result) => crate::ContentBlock::tool_result(tool_result),
-        _ => unreachable!("tool_result constructors return ToolResult"),
-    }
 }
 
 /// A hole's implementation, resolved through the overlay (sandboxed code may
@@ -3767,8 +3810,7 @@ async fn register_code(
     base: &str,
     source: &str,
     hash: u64,
-    sig: &SignatureDef,
-    types: &TypeTable,
+    params: impl FnOnce() -> Value,
     caps: &CapSet,
 ) -> Result<String, dsrs_tools::RegisterError> {
     let sanitized: String = base
@@ -3787,11 +3829,10 @@ async fn register_code(
         // Content-addressed: same name ⇒ same source hash ⇒ already usable.
         return Ok(name);
     }
-    let params = input_schema_of(sig, types);
     let tool_source = dsrs_tools::ToolSource::new(
         name.clone(),
         format!("dsrs code gene `{base}`"),
-        params,
+        params(),
         source,
     );
     let allowed: Vec<String> = caps.iter().map(str::to_string).collect();

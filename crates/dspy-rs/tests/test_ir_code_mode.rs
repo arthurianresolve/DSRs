@@ -10,7 +10,7 @@ use dspy_rs::ir::{
     self, Budget, FieldType as T, Interpreter, LoadError, Program, ProgramBuilder, RuntimeEnv,
     SignatureDef,
 };
-use dspy_rs::trace::{ReplayMode, SpanEvent, capture, replay};
+use dspy_rs::trace::{ReplayMode, SpanErrorKind, SpanEvent, capture, replay};
 use dspy_rs::{LM, LMClient, LMConfig, RUN_JS_TOOL_NAME, SandboxConfig, TestCompletionModel};
 use dsrs_tools::Executor as _;
 use rig::completion::{AssistantContent, ToolDefinition};
@@ -546,6 +546,41 @@ async fn sandboxed_tools_join_the_js_api() {
     );
     assert_eq!(first.unwrap()["answer"], "live output");
     assert_eq!(second.unwrap()["answer"], "live output");
+    assert_eq!(sandbox.tools().len(), registered + 1);
+
+    let mut invalid = ir::Overlay::new(program);
+    invalid
+        .set(program, code, ir::ParamValue::code(ir::CodeLang::Js, "42"))
+        .unwrap();
+    let invalid = Arc::new(invalid);
+    let (run, graph_trace) =
+        capture(|| interp.run(input(), Some(Arc::clone(&invalid)), Budget::unlimited())).await;
+    let graph_error = run.unwrap_err();
+    assert!(matches!(graph_error, ir::RunError::Hole { .. }));
+    let (turn, conversation_trace) = capture(|| {
+        interp.run_conversation(
+            dspy_rs::Chat::new(vec![]),
+            Some(input()),
+            Some(invalid),
+            Budget::unlimited(),
+        )
+    })
+    .await;
+    let conversation_error = turn.unwrap_err();
+    assert!(matches!(conversation_error, ir::RunError::Hole { .. }));
+    for (trace, returned_error) in [
+        (graph_trace, graph_error),
+        (conversation_trace, conversation_error),
+    ] {
+        let [span] = trace.spans.as_slice() else {
+            panic!("expected one failed span");
+        };
+        let error = span.error.as_ref().expect("tool setup failure recorded");
+        assert_eq!(error.kind, SpanErrorKind::Tool);
+        assert_eq!(error.message, returned_error.to_string());
+        assert!(span.events.is_empty());
+    }
+    assert_eq!(client.call_count(), 4);
     assert_eq!(sandbox.tools().len(), registered + 1);
 }
 

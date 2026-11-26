@@ -172,6 +172,13 @@ fn truncate_messages(messages: &mut [Message]) -> bool {
     truncated
 }
 
+fn messages_over_budget(messages: &[Message]) -> bool {
+    messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .any(|block| matches!(block, ContentBlock::Text { text } if text.len() > TEXT_BUDGET))
+}
+
 #[derive(Default)]
 struct ByteCount(usize);
 
@@ -194,11 +201,7 @@ fn tool_args_over_budget(args: &serde_json::Value) -> bool {
 /// Returns a budget-respecting copy of the span when any field overflows,
 /// `None` when the span fits as-is. Truncation clears `complete`.
 fn truncated_span(span: &Span) -> Option<Span> {
-    let over_budget = span
-        .suffix
-        .iter()
-        .flat_map(|message| &message.content)
-        .any(|block| matches!(block, ContentBlock::Text { text } if text.len() > TEXT_BUDGET))
+    let over_budget = messages_over_budget(&span.suffix)
         || span
             .raw_output
             .as_ref()
@@ -206,6 +209,9 @@ fn truncated_span(span: &Span) -> Option<Span> {
         || span.events.iter().any(|event| match event {
             SpanEvent::ToolRun { args, result, .. } => {
                 result.len() > TOOL_BUDGET || tool_args_over_budget(args)
+            }
+            SpanEvent::ChatMessage { message } => {
+                messages_over_budget(std::slice::from_ref(message))
             }
             _ => false,
         });
@@ -219,12 +225,18 @@ fn truncated_span(span: &Span) -> Option<Span> {
         truncate_text(raw_output, TEXT_BUDGET);
     }
     for event in &mut span.events {
-        if let SpanEvent::ToolRun { args, result, .. } = event {
-            truncate_text(result, TOOL_BUDGET);
-            let serialized = serde_json::to_string(args).unwrap_or_default();
-            if serialized.len() > TOOL_BUDGET {
-                *args = serde_json::Value::String(truncate_marker(&serialized, TOOL_BUDGET));
+        match event {
+            SpanEvent::ToolRun { args, result, .. } => {
+                truncate_text(result, TOOL_BUDGET);
+                let serialized = serde_json::to_string(args).unwrap_or_default();
+                if serialized.len() > TOOL_BUDGET {
+                    *args = serde_json::Value::String(truncate_marker(&serialized, TOOL_BUDGET));
+                }
             }
+            SpanEvent::ChatMessage { message } => {
+                truncate_messages(std::slice::from_mut(message));
+            }
+            _ => {}
         }
     }
     span.complete = false;
@@ -322,6 +334,21 @@ mod tests {
         assert!(text.len() < big.len());
         assert!(text.contains("truncated fnv1a="));
         assert!(text.contains(&format!("len={}", big.len())));
+    }
+
+    #[test]
+    fn oversized_chat_edit_is_truncated_and_marked_incomplete() {
+        let mut span = test_span("hello");
+        span.events.push(SpanEvent::ChatMessage {
+            message: Message::user("x".repeat(TEXT_BUDGET * 2)),
+        });
+        let parsed = Trace::from_jsonl(&test_trace(span).to_jsonl().unwrap()).unwrap();
+        let span = &parsed.spans[0];
+        assert!(!span.complete);
+        let Some(SpanEvent::ChatMessage { message }) = span.events.last() else {
+            panic!("expected a chat edit");
+        };
+        assert!(message.text_content().contains("truncated fnv1a="));
     }
 
     #[test]

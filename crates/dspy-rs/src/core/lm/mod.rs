@@ -963,6 +963,9 @@ impl LM {
                             message: assistant.clone(),
                             usage: first_usage,
                         });
+                        progress.events.push(SpanEvent::ChatMessage {
+                            message: output.clone(),
+                        });
                         let mut chat = messages;
                         chat.push_message(assistant);
                         chat.push_message(output.clone());
@@ -1272,7 +1275,7 @@ pub(crate) mod tests {
         assert_eq!(response.usage.total_tokens, 0);
         assert!(response.events.iter().all(|event| match event {
             SpanEvent::Exchange { usage, .. } => usage.total_tokens == 0,
-            SpanEvent::ToolRun { .. } | SpanEvent::Unknown => true,
+            _ => true,
         }));
         let entry = cache.get_entry(key).await.unwrap().unwrap();
         assert_eq!(entry.usage.total_tokens, original.total_tokens);

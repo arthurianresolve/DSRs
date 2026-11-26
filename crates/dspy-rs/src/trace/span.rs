@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::lm::url_origin;
 use crate::utils::hash::{HashWriter, StableHasher, stable_hash_debug};
-use crate::{LMConfig, LmUsage, Message};
+use crate::{Chat, ContentBlock, LMConfig, LmUsage, Message, Role};
 
 /// Index of a span within its trace. Dense, assigned in insertion order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -74,8 +74,7 @@ pub struct Span {
     pub request_hash: u64,
 
     // ---- execution (filled at span close) ----
-    /// Ordered inner events: provider round-trips and tool executions.
-    /// Always ends with the final `Exchange` on success.
+    /// Ordered provider exchanges, tool executions, and orchestration edits.
     pub events: Vec<SpanEvent>,
     /// Final assistant text, pre-parse.
     pub raw_output: Option<String>,
@@ -128,6 +127,11 @@ pub enum SpanEvent {
         /// Tool-level failure that was reported back to the model as text.
         error: Option<String>,
     },
+    /// History removed before a provider exchange. Indices refer to the chat
+    /// after applying preceding events in this span.
+    HistoryPruned { start: usize, count: usize },
+    /// A message added by orchestration outside a provider exchange.
+    ChatMessage { message: Message },
     /// Unknown tag from a newer writer; preserved as a placeholder on read,
     /// dropped from the canonical JSONL on re-serialize.
     #[doc(hidden)]
@@ -372,44 +376,67 @@ impl Span {
     /// `ToolRun`s batched into a single user-role tool-result turn — the same
     /// shape the live tool loop feeds back to the model.
     ///
-    /// Appending this to [`Trace::prompt`] reconstructs the full conversation.
-    /// Used by replay to rebuild the returned chat and by the RL export's
-    /// `completion` field.
+    /// Used by the RL export's `completion` field. Orchestration edits affect
+    /// the continuation chat independently of the policy's completions.
     pub fn completion_messages(&self) -> Vec<Message> {
-        use rig::OneOrMany;
-        use rig::message::UserContent;
+        let mut messages = Vec::new();
+        self.append_messages(&mut messages, false)
+            .expect("completion export does not apply history edits");
+        messages
+    }
 
-        fn flush(out: &mut Vec<Message>, pending: &mut Vec<UserContent>) {
-            if pending.is_empty() {
-                return;
+    pub(crate) fn replay_chat(&self, mut messages: Vec<Message>) -> Option<Chat> {
+        if !self.append_messages(&mut messages, true)?
+            && let Some(raw) = self.raw_output.as_deref().filter(|raw| !raw.is_empty())
+        {
+            messages.push(Message::assistant(raw));
+        }
+        Some(Chat::new(messages))
+    }
+
+    /// Returns whether an event appended a message. A malformed history range
+    /// in an imported trace cannot produce a replayable chat.
+    fn append_messages(&self, out: &mut Vec<Message>, apply_edits: bool) -> Option<bool> {
+        fn flush(out: &mut Vec<Message>, pending: &mut Vec<ContentBlock>) {
+            if !pending.is_empty() {
+                out.push(Message::with_content(Role::User, std::mem::take(pending)));
             }
-            let contents = std::mem::take(pending);
-            let rig_msg = rig::message::Message::User {
-                content: OneOrMany::many(contents)
-                    .expect("flush is only called with a non-empty batch"),
-            };
-            out.push(Message::from(rig_msg));
         }
 
-        let mut out = Vec::new();
-        let mut pending: Vec<UserContent> = Vec::new();
+        let mut pending = Vec::new();
+        let mut appended = false;
+        let mut exchange: Option<&Message> = None;
         for event in &self.events {
             match event {
                 SpanEvent::Exchange { message, .. } => {
-                    flush(&mut out, &mut pending);
+                    flush(out, &mut pending);
                     out.push(message.clone());
+                    exchange = Some(message);
+                    appended = true;
                 }
                 SpanEvent::ToolRun { id, result, .. } => {
-                    pending.push(UserContent::tool_result(
-                        id.clone(),
-                        OneOrMany::one(result.clone().into()),
-                    ));
+                    let call_id = exchange
+                        .and_then(|message| message.tool_calls_iter().find(|call| call.id == *id))
+                        .and_then(|call| call.call_id.as_deref());
+                    pending.push(ContentBlock::tool_result_text(id, call_id, result.clone()));
+                    appended = true;
+                }
+                SpanEvent::HistoryPruned { start, count } if apply_edits => {
+                    flush(out, &mut pending);
+                    let range = *start..start.checked_add(*count)?;
+                    out.get(range.clone())?;
+                    out.drain(range);
+                }
+                SpanEvent::ChatMessage { message } if apply_edits => {
+                    flush(out, &mut pending);
+                    out.push(message.clone());
+                    appended = true;
                 }
                 _ => {}
             }
         }
-        flush(&mut out, &mut pending);
-        out
+        flush(out, &mut pending);
+        Some(appended)
     }
 
     pub(crate) fn recorded_tool_calls(&self) -> Vec<rig::message::ToolCall> {

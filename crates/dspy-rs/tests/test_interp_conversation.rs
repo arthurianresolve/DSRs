@@ -8,10 +8,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dspy_rs::ir::{
-    self, Budget, BudgetPolicy, ConversationTurn, FieldType as T, Interpreter, NodeBudget, Program,
-    ProgramBuilder, RunError, RuntimeEnv, SignatureDef,
+    self, Budget, BudgetPolicy, ContextPolicy, ConversationTurn, FieldType as T, Interpreter,
+    NodeBudget, Program, ProgramBuilder, RunError, RuntimeEnv, SignatureDef,
 };
-use dspy_rs::trace::{ReplayMode, SpanEvent, capture, replay};
+use dspy_rs::trace::{ReplayMode, SpanEvent, Trace, capture, replay};
 use dspy_rs::{LM, LMClient, LMConfig, Message, Role, TestCompletionModel};
 use rig::completion::{AssistantContent, ToolDefinition};
 use rig::message::{Text, ToolCall, ToolFunction};
@@ -975,4 +975,88 @@ async fn caller_managed_turns_never_suspend_under_replay() {
     // The served chat carries the recorded tool-call turn and result.
     assert!(chat.messages.iter().any(|m| m.has_tool_calls()));
     assert!(chat.messages.iter().any(|m| m.has_tool_results()));
+}
+
+#[rstest::rstest]
+#[case::parse_repair(false)]
+#[case::budget_finalization(true)]
+#[tokio::test]
+async fn agent_replay_preserves_edited_chat(#[case] finalize: bool) {
+    let budget = finalize.then_some(NodeBudget {
+        max_lm_calls: Some(1),
+        max_tokens: None,
+        deadline_ms: None,
+        on_exhausted: BudgetPolicy::Finalize,
+    });
+    let program = agent_program(budget, false);
+    let mut overlay = ir::Overlay::new(&program);
+    overlay
+        .set(
+            &program,
+            program.param_id("researcher.context").unwrap(),
+            ir::ParamValue::ContextPolicy {
+                policy: ContextPolicy {
+                    max_history_turns: Some(4),
+                    ..ContextPolicy::default()
+                },
+            },
+        )
+        .unwrap();
+    let overlay = Arc::new(overlay);
+    let mut search = tool_call("search", json!({"query": "dsrs"}));
+    if let AssistantContent::ToolCall(call) = &mut search {
+        call.call_id = Some("provider-search-id".into());
+    }
+    let mut responses = vec![search];
+    if !finalize {
+        responses.push(text("no field markers here at all"));
+    }
+    responses.extend([
+        text(fields(&[("answer", "first")])),
+        text(fields(&[("answer", "second")])),
+    ]);
+    let (lm, client) = canned_lm(responses).await;
+    let executed = Arc::new(AtomicUsize::new(0));
+    let interp = load_agent(program, lm, &executed).await;
+
+    let turns = async || {
+        let (first, mut chat) = interp
+            .run_conversation(
+                dspy_rs::Chat::new(vec![]),
+                Some(obj(&[("question", json!("q"))])),
+                Some(Arc::clone(&overlay)),
+                Budget::unlimited(),
+            )
+            .await?;
+        let continuation = chat.to_json();
+        chat.push_message(Message::user("follow up"));
+        let (second, chat) = interp
+            .run_conversation(chat, None, Some(Arc::clone(&overlay)), Budget::unlimited())
+            .await?;
+        Ok::<_, RunError>((first.output, continuation, second.output, chat.to_json()))
+    };
+
+    let (live, recording) = capture(&turns).await;
+    let live = live.unwrap();
+    assert_eq!(live.0["answer"], "first");
+    assert_eq!(live.2["answer"], "second");
+    assert!(recording.spans[0].events.iter().any(|event| matches!(
+        event,
+        SpanEvent::ChatMessage { message } if message.text_content().contains(
+            if finalize { "Budget exhausted" } else { "could not be parsed" }
+        )
+    )));
+    assert!(recording.spans.iter().any(|span| {
+        span.events
+            .iter()
+            .any(|event| matches!(event, SpanEvent::HistoryPruned { .. }))
+    }));
+    let count = client.call_count();
+    let recording = Trace::from_jsonl(&recording.to_jsonl().unwrap()).unwrap();
+    let (served, report) = replay(&recording, ReplayMode::Strict, turns).await;
+    assert_eq!(served.unwrap(), live);
+    assert_eq!(report.served, 2);
+    assert_eq!(report.live, 0);
+    assert_eq!(client.call_count(), count);
+    assert_eq!(executed.load(Ordering::SeqCst), 1);
 }

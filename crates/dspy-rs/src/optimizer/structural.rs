@@ -550,7 +550,7 @@ impl Structural {
             ));
         }
 
-        let mut engine = Engine::new(self.engine_config());
+        let mut engine = Engine::for_structural(self.engine_config());
         let reflector = self
             .prompt_model
             .as_ref()

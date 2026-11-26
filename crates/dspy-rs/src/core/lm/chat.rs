@@ -33,6 +33,14 @@ impl ContentBlock {
         ContentBlock::ToolResult { tool_result: tr }
     }
 
+    pub(crate) fn tool_result_text(id: &str, call_id: Option<&str>, text: String) -> Self {
+        Self::tool_result(ToolResult {
+            id: id.to_owned(),
+            call_id: call_id.map(str::to_owned),
+            content: OneOrMany::one(text.into()),
+        })
+    }
+
     pub fn reasoning(r: Reasoning) -> Self {
         ContentBlock::Reasoning { reasoning: r }
     }
