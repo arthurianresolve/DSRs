@@ -58,8 +58,9 @@ use std::sync::{Arc, Mutex};
 
 use tokio::task_local;
 
+use crate::trace::TRACE_FORMAT_VERSION;
 use crate::trace::span::{CompId, ModelEntry, Span, SpanId, Trace, request_hash};
-use crate::{LMConfig, Message};
+use crate::{LMConfig, Message, Role};
 
 task_local! {
     static ACTIVE: ReplaySession;
@@ -96,11 +97,10 @@ pub enum ReplayError {
         got_hash: u64,
     },
 
-    /// The recorded span is unusable: truncated/redacted (`complete == false`)
-    /// or it has no parsed output (the recorded call failed).
+    /// The recorded span is unusable due to missing output, an unsupported
+    /// trace version, invalid chat edits, truncation, or redaction.
     #[error(
-        "recorded span {span:?} for `{component}` seq {seq} is incomplete \
-         (truncated, redacted, or no parsed output) and cannot be replayed"
+        "recorded span {span:?} for `{component}` seq {seq} is incomplete or incompatible and cannot be replayed"
     )]
     Incomplete {
         component: String,
@@ -214,8 +214,9 @@ impl ReplaySession {
         // The same preimage `TraceSink::close` hashes: redacted-config hash ++
         // full rendered prompt. The prefix/suffix split does not matter — the
         // hash streams prefix ++ suffix, and `chat` is exactly that.
-        self.decide_hashed(component, || {
-            request_hash(ModelEntry::from_config(config).config_hash, &[], chat)
+        self.decide_request(component, Some(chat.len()), |_, recorded| {
+            let current = request_hash(ModelEntry::from_config(config).config_hash, &[], chat);
+            (current != recorded.request_hash).then_some(current)
         })
     }
 
@@ -224,16 +225,17 @@ impl ReplaySession {
     /// input ++ caps, RFC 0003 §4.4). The recorded span's `request_hash` was
     /// stamped from the same preimage at capture time.
     fn decide_hashed(&self, component: &str, hash: impl FnOnce() -> u64) -> ReplayDirective {
-        self.decide_request(component, |recorded| {
+        self.decide_request(component, None, |_, recorded| {
             let current = hash();
-            (current != recorded).then_some(current)
+            (current != recorded.request_hash).then_some(current)
         })
     }
 
     fn decide_request(
         &self,
         component: &str,
-        mismatch: impl FnOnce(u64) -> Option<u64>,
+        chat_len: Option<usize>,
+        mismatch: impl FnOnce(&Trace, &Span) -> Option<u64>,
     ) -> ReplayDirective {
         let mut inner = self.0.lock().unwrap();
 
@@ -270,32 +272,33 @@ impl ReplaySession {
             }
         };
         let span = &inner.trace.spans[position];
+        let span_id = span.id;
+        let incomplete = || ReplayError::Incomplete {
+            component: component.to_string(),
+            seq,
+            span: span_id,
+        };
 
-        if !span.complete || span.output.is_none() {
-            let id = span.id;
-            return inner.mismatch(
-                Some(id),
-                ReplayError::Incomplete {
-                    component: component.to_string(),
-                    seq,
-                    span: id,
-                },
-            );
+        if !span.complete || span.output.is_none() || inner.trace.meta.v > TRACE_FORMAT_VERSION {
+            return inner.mismatch(Some(span_id), incomplete());
         }
 
-        if let Some(got_hash) = mismatch(span.request_hash) {
-            let id = span.id;
+        if let Some(got_hash) = mismatch(&inner.trace, span) {
             let expected_hash = span.request_hash;
             return inner.mismatch(
-                Some(id),
+                Some(span_id),
                 ReplayError::Divergence {
                     component: component.to_string(),
                     seq,
-                    expected_span: id,
+                    expected_span: span_id,
                     expected_hash,
                     got_hash,
                 },
             );
+        }
+
+        if chat_len.is_some_and(|len| !span.chat_edits_valid(len)) {
+            return inner.mismatch(Some(span_id), incomplete());
         }
 
         let span = RecordedSpan {
@@ -391,21 +394,48 @@ pub(crate) fn intercept_hashed(
     Some(session.decide_hashed(component, hash))
 }
 
-/// New agent requests have a domain-separated fingerprint. Existing agent
-/// recordings can still match their original prompt-only fingerprint.
+/// Earlier agent hashes can match when the recording protects the same
+/// opening prefix. A supplied continuation protects its leading systems.
 pub(crate) fn intercept_agent(
     component: &str,
+    chat_len: usize,
+    protected_prefix_len: Option<usize>,
     opening_hash: impl FnOnce() -> u64,
+    legacy_agent_hash: impl FnOnce() -> u64,
     request_hash: impl FnOnce() -> u64,
 ) -> Option<ReplayDirective> {
     let session = ACTIVE.try_with(Clone::clone).ok()?;
-    Some(session.decide_request(component, |recorded| {
-        if opening_hash() == recorded {
-            return None;
-        }
-        let current = request_hash();
-        (current != recorded).then_some(current)
-    }))
+    Some(
+        session.decide_request(component, Some(chat_len), |trace, span| {
+            let same_prefix = |len| {
+                let recorded_len = match span.prefix {
+                    Some(id) => trace
+                        .prefixes
+                        .get(id.0 as usize)
+                        .map(|entry| entry.messages.len()),
+                    None => Some(
+                        span.suffix
+                            .iter()
+                            .take_while(|msg| msg.role == Role::System)
+                            .count(),
+                    ),
+                };
+                recorded_len == Some(len)
+            };
+            if opening_hash() == span.request_hash && protected_prefix_len.is_none_or(same_prefix) {
+                return None;
+            }
+            let current = request_hash();
+            if current == span.request_hash
+                || (legacy_agent_hash() == span.request_hash
+                    && protected_prefix_len.is_none_or(same_prefix))
+            {
+                None
+            } else {
+                Some(current)
+            }
+        }),
+    )
 }
 
 #[cfg(test)]
@@ -437,12 +467,58 @@ mod tests {
         let (result, report) = replay(&trace, ReplayMode::Strict, || async {
             intercept_agent(
                 "agent",
+                0,
+                None,
                 || 1,
+                || panic!("legacy match needs only the opening hash"),
                 || panic!("legacy match needs only the opening hash"),
             )
         })
         .await;
         assert!(matches!(result, Some(ReplayDirective::Serve(_))));
+        assert_eq!(report.served, 1);
+    }
+
+    #[tokio::test]
+    async fn legacy_agent_keys_also_require_the_same_protected_prefix() {
+        let prefix = [
+            Message::system("agent"),
+            Message::user("demo"),
+            Message::assistant("example"),
+        ];
+        let (_, trace) = capture(|| async {
+            begin_span(SpanRequest {
+                component: "agent",
+                prefix: Some(&prefix),
+                suffix: &[Message::user("question")],
+                input: None,
+                model: &LMConfig::default(),
+                request_hash: Some(2),
+            })
+            .unwrap()
+            .finish(crate::trace::SpanOutcome {
+                events: Vec::new(),
+                raw_output: None,
+                output: Some(crate::trace::JsonMap::new()),
+                usage: crate::LmUsage::default(),
+                error: None,
+            });
+        })
+        .await;
+        let (different, report) = replay(&trace, ReplayMode::Strict, || async {
+            intercept_agent("agent", 4, Some(1), || 1, || 2, || 3)
+        })
+        .await;
+        assert!(matches!(
+            different,
+            Some(ReplayDirective::Refuse(ReplayError::Divergence { .. }))
+        ));
+        assert_eq!(report.served, 0);
+        let (same, report) = replay(&trace, ReplayMode::Strict, || async {
+            intercept_agent("agent", 4, Some(3), || 1, || 2, || 4)
+        })
+        .await;
+        assert!(matches!(same, Some(ReplayDirective::Serve(_))));
         assert_eq!(report.served, 1);
     }
 

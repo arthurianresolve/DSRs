@@ -640,6 +640,7 @@ Feature `otel`. One-way mapping onto the GenAI semantic conventions:
 - `Trace` also derives plain `Serialize`/`Deserialize` as a single document — used when embedding traces in other artifacts (`GEPAResult`, checkpoint files). JSONL is canonical for disk/wire (`.trace.jsonl`); the single-doc form is a convenience, same types.
 - Components are written as table indices on span lines (compact) but the header carries the string table, so files stay greppable via one line. The in-memory form is always the interned id — string-keyed data exists only at this boundary, per the vision's data-structure principle.
 - Unknown fields and unknown `SpanEvent` tags are skipped on read (`#[serde(other)]` fallback variant `SpanEvent::Unknown` marked `#[doc(hidden)]`, dropped on re-serialize). Same-major-version forward compatibility = additive fields only; anything else bumps `v`.
+- Traces with `history_pruned` or `chat_message` events use version 2. These events are required to reconstruct a continuation chat. The version 2 reader still accepts version 1 files, including files that already contain those events.
 
 ### 5.2 Versioning
 

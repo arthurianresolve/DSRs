@@ -198,10 +198,10 @@ pub struct LeafOutcome {
     /// The trace span this evaluation recorded, when a capture scope was
     /// active — what `Predict` surfaces as `CallMetadata::span_id`.
     pub span_id: Option<crate::trace::SpanId>,
-    /// Tool calls the model requested during an `AgentLoop` evaluation, in
-    /// execution order (stop-tool calls excluded). Empty for `Predict` leaves.
+    /// Executed calls in an `AgentLoop` and requested signature tools in a
+    /// `Predict` leaf. Agent stop tools remain in the chat transcript.
     pub tool_calls: Vec<rig::message::ToolCall>,
-    /// Results of executed tool calls, aligned with [`tool_calls`](Self::tool_calls).
+    /// Results of executed tool calls. For agents these align with [`tool_calls`](Self::tool_calls).
     pub tool_executions: Vec<String>,
 }
 
@@ -243,7 +243,7 @@ pub enum ConversationTurn {
 pub struct ToolSuspension {
     calls: Vec<rig::message::ToolCall>,
     chat: Chat,
-    state: SuspendState,
+    state: Box<SuspendState>,
 }
 
 impl ToolSuspension {
@@ -271,17 +271,9 @@ impl std::fmt::Debug for ToolSuspension {
 /// The private half of a [`ToolSuspension`]: resumption state for
 /// [`Interpreter::resume_conversation`].
 struct SuspendState {
-    node: NodeId,
-    overlay: Option<Arc<Overlay>>,
-    /// The loop's child meter — chained under `run_meter` exactly as in
-    /// dispatching mode.
-    meter: Arc<BudgetMeter>,
-    run_meter: Arc<BudgetMeter>,
-    guard: Option<crate::trace::SpanGuard>,
-    run: AgentRun,
+    turn: AgentTurn,
     /// The loop turn `resume_conversation` re-enters at.
     next_turn: u32,
-    prefix_len: usize,
     /// When the loop suspended — the `ToolRun` events recorded at resume
     /// meter the time the calls were outstanding.
     suspended_at: Instant,
@@ -972,6 +964,7 @@ impl Interpreter {
 
     /// Continues a suspended caller-managed turn with the results of the
     /// pending tool calls, aligned with [`ToolSuspension::calls`].
+    /// Resume against the same loaded program that produced the suspension.
     ///
     /// Results land in the conversation and the trace exactly as dispatched
     /// executions would: one `ToolRun` event per call (metering the time the
@@ -990,102 +983,46 @@ impl Interpreter {
             state,
         } = suspension;
         let SuspendState {
-            node,
-            overlay,
-            meter,
-            run_meter,
-            mut guard,
-            mut run,
+            mut turn,
             next_turn,
-            prefix_len,
             suspended_at,
-        } = state;
-        let p = &*self.program;
-        let at = p
-            .leaf_name(node)
-            .expect("conversation leaves are named")
-            .to_string();
-        let Node::AgentLoop(n) = &p.nodes[node] else {
-            return Err(RunError::Internal {
-                at: at.into(),
-                message: "suspension does not reference an agent leaf".to_string(),
-            });
+        } = *state;
+        let invalid = if !Arc::ptr_eq(&turn.program, &self.program) {
+            Some("suspension belongs to another loaded program".to_string())
+        } else if results.len() != calls.len() {
+            Some(format!(
+                "expected {} tool results, got {}",
+                calls.len(),
+                results.len()
+            ))
+        } else {
+            None
         };
-        if results.len() != calls.len() {
-            return Err(RunError::Input {
-                at: at.into(),
-                message: format!(
-                    "expected {} tool results, got {}",
-                    calls.len(),
-                    results.len()
-                ),
-            });
+        if let Some(message) = invalid {
+            let error = RunError::Input {
+                at: turn.at.into(),
+                message,
+            };
+            return Err(turn.run.finish_error(
+                turn.guard,
+                crate::trace::SpanErrorKind::Tool,
+                error,
+            ));
         }
-        let cx = self.conversation_cx(overlay.clone(), Arc::clone(&run_meter));
-        let def = &p.sigs[n.sig];
-        let lm = self.p_model(&at, &cx, n.model)?;
-        let agent = self.prepare_agent(n, &cx, false);
 
         // Feed the caller's results back: same event, record, and
         // conversation shape as dispatched executions.
         let duration_us = suspended_at.elapsed().as_micros() as u64;
-        let mut blocks = Vec::with_capacity(calls.len());
-        for (call, result) in calls.iter().zip(results) {
-            let result = clip_tool_result(result, &agent.policy);
-            run.events.push(SpanEvent::ToolRun {
-                id: call.id.clone(),
-                name: call.function.name.clone(),
-                args: call.function.arguments.clone(),
-                result: result.clone(),
-                duration_us,
-                error: None,
-            });
-            run.tool_calls.push(call.clone());
-            run.tool_executions.push(result.clone());
-            blocks.push(crate::ContentBlock::tool_result_text(
-                &call.id,
-                call.call_id.as_deref(),
-                result,
-            ));
-        }
+        let blocks = calls
+            .iter()
+            .zip(results)
+            .map(|(call, result)| {
+                let result = clip_tool_result(result, &turn.surface.policy);
+                turn.run.record_tool_result(call, result, duration_us, None)
+            })
+            .collect();
         chat.push_message(Message::with_content(Role::User, blocks));
-
-        let surface = run
-            .finish_on_setup_error(&mut guard, self.build_agent_surface(&at, &cx, &agent).await)?;
-        let lc = AgentLoopCx {
-            at: &at,
-            n,
-            def,
-            lm: &lm,
-            toolset: &surface.toolset,
-            by_name: &surface.by_name,
-            sandbox_code: &surface.sandbox_code,
-            stop_names: &surface.stop_names,
-            prefix_len,
-            meter: &meter,
-            run_meter: &run_meter,
-            policy: &agent.policy,
-            code_mode: None,
-        };
-        let outcome = in_span(
-            guard.as_ref(),
-            pin!(self.agent_loop(&lc, chat, &mut run, next_turn, true)),
-        )
-        .await;
-        self.conclude_agent_turn(
-            &at,
-            &lm,
-            guard,
-            run,
-            outcome,
-            AgentTurnCtx {
-                node,
-                overlay,
-                meter: Arc::clone(&meter),
-                run_meter,
-                prefix_len,
-            },
-        )
+        self.drive_agent_turn(turn, chat, next_turn).await
     }
 
     /// Renders the opening [`Chat`] of a conversation with the program's
@@ -1192,7 +1129,7 @@ impl Interpreter {
             _ => None,
         };
         let (mut guard, replay) = match &agent {
-            Some(agent) => self.begin_agent_request(&cx, agent, opening),
+            Some(agent) => self.begin_agent_request(&cx, agent, opening, prefix_len),
             None => (
                 opening.open_span(|| None),
                 crate::trace::replay::intercept(&at, &lm.config, &messages),
@@ -1200,7 +1137,14 @@ impl Interpreter {
         };
         match replay {
             Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
-                return self.serve_conversation_turn(&at, &lm, span.span(), messages, guard);
+                return Ok(self.serve_conversation_turn(
+                    &at,
+                    &lm,
+                    span.span(),
+                    messages,
+                    guard,
+                    agent.is_some(),
+                ));
             }
             Some(crate::trace::replay::ReplayDirective::Refuse(err)) => {
                 if let Some(guard) = guard {
@@ -1250,43 +1194,26 @@ impl Interpreter {
                 let mut run = AgentRun::default();
                 let surface = run.finish_on_setup_error(
                     &mut guard,
-                    self.build_agent_surface(&at, &cx, &agent).await,
+                    self.build_agent_surface(&at, &cx, agent).await,
                 )?;
                 let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
-                let lc = AgentLoopCx {
-                    at: &at,
-                    n,
-                    def,
-                    lm: &lm,
-                    toolset: &surface.toolset,
-                    by_name: &surface.by_name,
-                    sandbox_code: &surface.sandbox_code,
-                    stop_names: &surface.stop_names,
-                    prefix_len,
-                    meter: &meter,
-                    run_meter: &cx.meter,
-                    policy: &agent.policy,
-                    code_mode: surface.code_mode.as_ref(),
-                };
-                let outcome = in_span(
-                    guard.as_ref(),
-                    pin!(self.agent_loop(&lc, Chat::new(messages), &mut run, 0, suspend_on_tools)),
-                )
-                .await;
-                self.conclude_agent_turn(
-                    &at,
-                    &lm,
-                    guard,
-                    run,
-                    outcome,
-                    AgentTurnCtx {
+                self.drive_agent_turn(
+                    AgentTurn {
+                        program: Arc::clone(&self.program),
                         node,
-                        overlay,
-                        meter: Arc::clone(&meter),
+                        at,
+                        lm,
+                        surface,
+                        meter,
                         run_meter: Arc::clone(&cx.meter),
                         prefix_len,
+                        guard,
+                        run,
                     },
+                    Chat::new(messages),
+                    0,
                 )
+                .await
             }
         }
     }
@@ -1431,40 +1358,18 @@ impl Interpreter {
         span: &crate::trace::Span,
         messages: Vec<Message>,
         guard: Option<crate::trace::SpanGuard>,
-    ) -> Result<ConversationTurn, RunError> {
-        let Some(chat) = span.replay_chat(messages) else {
-            let source = crate::trace::ReplayError::Incomplete {
-                component: at.to_string(),
-                seq: span.seq,
-                span: span.id,
-            };
-            if let Some(guard) = guard {
-                guard.finish(span_error(
-                    crate::trace::SpanErrorKind::Lm,
-                    source.to_string(),
-                    Vec::new(),
-                    None,
-                    LmUsage::default(),
-                ));
-            }
-            return Err(RunError::Replay {
-                at: at.into(),
-                source,
-            });
-        };
+        agent: bool,
+    ) -> ConversationTurn {
+        let chat = span.replay_chat(messages);
         let output = span
             .output
             .clone()
             .expect("replay serves only spans with parsed output");
-        let tool_calls = span.recorded_tool_calls();
-        let tool_executions: Vec<String> = span
-            .events
-            .iter()
-            .filter_map(|event| match event {
-                SpanEvent::ToolRun { result, .. } => Some(result.clone()),
-                _ => None,
-            })
-            .collect();
+        let (tool_calls, tool_executions) = if agent {
+            span.recorded_tools()
+        } else {
+            (span.requested_tool_calls(), Vec::new())
+        };
         let leaf = LeafOutcome {
             name: at.to_string(),
             raw_response: span.raw_output.clone().unwrap_or_default(),
@@ -1485,61 +1390,49 @@ impl Interpreter {
                 error: None,
             });
         }
-        Ok(ConversationTurn::Complete {
+        ConversationTurn::Complete {
             run: RunOutput {
                 output,
                 leaves: vec![leaf],
             },
             chat,
-        })
+        }
     }
 
-    /// Closes out an agent-leaf conversation turn: finishes the span and
-    /// builds the [`ConversationTurn`] — `Complete` on `Done`, a
-    /// [`ToolSuspension`] carrying the open span and meters on `Suspend`.
-    /// Shared by [`conversation_turn`](Self::conversation_turn) and
-    /// [`resume_conversation`](Self::resume_conversation).
-    fn conclude_agent_turn(
+    /// Starts or resumes a conversation with the same resolved agent state.
+    async fn drive_agent_turn(
         &self,
-        at: &str,
-        lm: &Arc<LM>,
-        guard: Option<crate::trace::SpanGuard>,
-        run: AgentRun,
-        outcome: Result<LoopOutcome, RunError>,
-        ctx: AgentTurnCtx,
+        mut turn: AgentTurn,
+        chat: Chat,
+        next_turn: u32,
     ) -> Result<ConversationTurn, RunError> {
+        let Node::AgentLoop(n) = &turn.program.nodes[turn.node] else {
+            unreachable!("agent turns start at an agent leaf");
+        };
+        let lc = AgentLoopCx {
+            at: &turn.at,
+            n,
+            def: &turn.program.sigs[n.sig],
+            lm: &turn.lm,
+            surface: &turn.surface,
+            prefix_len: turn.prefix_len,
+            meter: &turn.meter,
+            run_meter: &turn.run_meter,
+        };
+        let outcome = in_span(
+            turn.guard.as_ref(),
+            pin!(self.agent_loop(&lc, chat, &mut turn.run, next_turn)),
+        )
+        .await;
         match outcome {
-            Ok(LoopOutcome::Done {
-                output,
-                raw,
-                field_meta,
-                chat,
-            }) => {
-                let leaf = LeafOutcome {
-                    name: at.to_string(),
-                    raw_response: raw.clone(),
-                    field_meta,
-                    call_ids: run.call_ids,
-                    usage: run.usage,
-                    model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
-                        .config_hash,
-                    span_id: guard.as_ref().map(|guard| guard.id()),
-                    tool_calls: run.tool_calls,
-                    tool_executions: run.tool_executions,
-                };
-                if let Some(guard) = guard {
-                    guard.finish(SpanOutcome {
-                        events: run.events,
-                        raw_output: Some(raw),
-                        output: Some(output.clone()),
-                        usage: run.usage,
-                        error: None,
-                    });
-                }
+            Ok(LoopOutcome::Done(done)) => {
+                let (output, leaf, chat) =
+                    turn.run
+                        .finish(turn.guard, done, Some((&turn.at, &turn.lm.config)));
                 Ok(ConversationTurn::Complete {
                     run: RunOutput {
                         output,
-                        leaves: vec![leaf],
+                        leaves: leaf.into_iter().collect(),
                     },
                     chat,
                 })
@@ -1551,35 +1444,13 @@ impl Interpreter {
             }) => Ok(ConversationTurn::Suspended(ToolSuspension {
                 calls,
                 chat,
-                state: SuspendState {
-                    node: ctx.node,
-                    overlay: ctx.overlay,
-                    meter: ctx.meter,
-                    run_meter: ctx.run_meter,
-                    guard,
-                    run,
+                state: Box::new(SuspendState {
+                    turn,
                     next_turn,
-                    prefix_len: ctx.prefix_len,
                     suspended_at: Instant::now(),
-                },
+                }),
             })),
-            Err(err) => {
-                if let Some(guard) = guard {
-                    let kind = match &err {
-                        RunError::Parse { .. } => crate::trace::SpanErrorKind::Parse,
-                        RunError::Tool { .. } => crate::trace::SpanErrorKind::Tool,
-                        _ => crate::trace::SpanErrorKind::Lm,
-                    };
-                    guard.finish(span_error(
-                        kind,
-                        err.to_string(),
-                        run.events,
-                        None,
-                        run.usage,
-                    ));
-                }
-                Err(err)
-            }
+            Err(err) => Err(turn.run.finish_loop_error(turn.guard, err)),
         }
     }
 
@@ -2092,7 +1963,7 @@ impl Interpreter {
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
                         span_id: guard.as_ref().map(|guard| guard.id()),
-                        tool_calls: span.recorded_tool_calls(),
+                        tool_calls: span.requested_tool_calls(),
                         tool_executions: Vec::new(),
                     });
                 }
@@ -2374,7 +2245,7 @@ impl Interpreter {
             input: Some(&input),
             model: &lm.config,
         };
-        let (mut guard, replay) = self.begin_agent_request(cx, &agent, opening);
+        let (mut guard, replay) = self.begin_agent_request(cx, &agent, opening, prefix_len);
 
         match replay {
             Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
@@ -2386,15 +2257,7 @@ impl Interpreter {
                 if let Some(leaves) = cx.leaves.as_mut() {
                     // Served evaluations carry no per-field parse metadata;
                     // the tool record is reconstructed from the recording.
-                    let tool_calls = span.recorded_tool_calls();
-                    let tool_executions = span
-                        .events
-                        .iter()
-                        .filter_map(|event| match event {
-                            SpanEvent::ToolRun { result, .. } => Some(result.clone()),
-                            _ => None,
-                        })
-                        .collect();
+                    let (tool_calls, tool_executions) = span.recorded_tools();
                     leaves.push(LeafOutcome {
                         name: at.clone(),
                         raw_response: span.raw_output.clone().unwrap_or_default(),
@@ -2439,91 +2302,42 @@ impl Interpreter {
 
         let mut run = AgentRun::default();
         let surface =
-            run.finish_on_setup_error(&mut guard, self.build_agent_surface(&at, cx, &agent).await)?;
+            run.finish_on_setup_error(&mut guard, self.build_agent_surface(&at, cx, agent).await)?;
         let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
         let loop_cx = AgentLoopCx {
             at: &at,
             n,
             def,
             lm: &lm,
-            toolset: &surface.toolset,
-            by_name: &surface.by_name,
-            sandbox_code: &surface.sandbox_code,
-            stop_names: &surface.stop_names,
+            surface: &surface,
             prefix_len,
             meter: &meter,
             run_meter: &cx.meter,
-            policy: &agent.policy,
-            code_mode: surface.code_mode.as_ref(),
         };
         let outcome = in_span(
             guard.as_ref(),
-            pin!(self.agent_loop(&loop_cx, chat, &mut run, 0, false)),
+            pin!(self.agent_loop(&loop_cx, chat, &mut run, 0)),
         )
         .await;
-        let outcome = match outcome {
-            Ok(LoopOutcome::Done {
-                output,
-                raw,
-                field_meta,
-                ..
-            }) => Ok((output, raw, field_meta)),
-            Ok(LoopOutcome::Suspend { .. }) => {
-                unreachable!("dispatching loops never suspend")
-            }
-            Err(err) => Err(err),
-        };
-
         match outcome {
-            Ok((output, raw, field_meta)) => {
+            Ok(LoopOutcome::Done(done)) => {
+                let collect = cx.leaves.is_some().then_some((at.as_str(), &lm.config));
+                let (output, leaf, _) = run.finish(guard, done, collect);
                 if let Some(leaves) = cx.leaves.as_mut() {
-                    leaves.push(LeafOutcome {
-                        name: at.clone(),
-                        raw_response: raw.clone(),
-                        field_meta,
-                        call_ids: run.call_ids,
-                        usage: run.usage,
-                        model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
-                            .config_hash,
-                        span_id: guard.as_ref().map(|guard| guard.id()),
-                        tool_calls: run.tool_calls,
-                        tool_executions: run.tool_executions,
-                    });
-                }
-                if let Some(guard) = guard {
-                    guard.finish(SpanOutcome {
-                        events: run.events,
-                        raw_output: Some(raw),
-                        output: Some(output.clone()),
-                        usage: run.usage,
-                        error: None,
-                    });
+                    leaves.extend(leaf);
                 }
                 Ok(output)
             }
-            Err(err) => {
-                if let Some(guard) = guard {
-                    let kind = match &err {
-                        RunError::Parse { .. } => crate::trace::SpanErrorKind::Parse,
-                        RunError::Tool { .. } => crate::trace::SpanErrorKind::Tool,
-                        _ => crate::trace::SpanErrorKind::Lm,
-                    };
-                    guard.finish(span_error(
-                        kind,
-                        err.to_string(),
-                        run.events,
-                        None,
-                        run.usage,
-                    ));
-                }
-                Err(err)
+            Ok(LoopOutcome::Suspend { .. }) => {
+                unreachable!("dispatching loops never suspend")
             }
+            Err(err) => Err(run.finish_loop_error(guard, err)),
         }
     }
 
     /// Runs the agent loop from `start_turn`. Dispatching mode
-    /// (`suspend_on_tools = false`) executes tool calls through their bound
-    /// executors; suspending mode returns [`LoopOutcome::Suspend`] instead,
+    /// executes tool calls through its dispatcher. Caller-managed turns
+    /// return [`LoopOutcome::Suspend`],
     /// leaving execution to the caller
     /// ([`resume_conversation`](Self::resume_conversation) re-enters here at
     /// `next_turn`). Stop-tool and budget semantics are identical in both
@@ -2534,7 +2348,6 @@ impl Interpreter {
         mut chat: Chat,
         run: &mut AgentRun,
         start_turn: u32,
-        suspend_on_tools: bool,
     ) -> Result<LoopOutcome, RunError> {
         let types = &self.program.types;
         let format = self.output_format(lc.n.sig, lc.lm, false);
@@ -2548,9 +2361,10 @@ impl Interpreter {
             }
 
             run.events
-                .extend(prune_history(&mut chat, lc.prefix_len, lc.policy));
+                .extend(prune_history(&mut chat, lc.prefix_len, &lc.surface.policy));
             let options = self.output_options(lc.n.sig, format);
-            let response = lm_call_toolset(lc.lm, chat, lc.toolset, lc.at, options).await?;
+            let response =
+                lm_call_toolset(lc.lm, chat, &lc.surface.toolset, lc.at, options).await?;
             lc.meter.record_usage(&response.usage);
             run.usage = run.usage + response.usage;
             run.events.extend(response.events);
@@ -2562,45 +2376,36 @@ impl Interpreter {
                 if let Some(call) = response
                     .tool_calls
                     .iter()
-                    .find(|call| lc.stop_names.contains(&call.function.name))
+                    .find(|call| lc.surface.stop_names.contains(&call.function.name))
                 {
                     let args = call.function.arguments.clone();
                     let raw = args.to_string();
                     let output = coerce_outputs(lc.at, lc.def, types, args, &raw)?;
-                    return Ok(LoopOutcome::Done {
+                    return Ok(LoopOutcome::Done(AgentCompletion {
                         output,
                         raw,
                         field_meta: IndexMap::new(),
                         chat,
-                    });
+                    }));
                 }
 
-                if suspend_on_tools {
+                let Some(dispatch) = &lc.surface.dispatch else {
                     return Ok(LoopOutcome::Suspend {
                         calls: response.tool_calls,
                         chat,
                         next_turn: turn + 1,
                     });
-                }
+                };
 
                 let mut blocks = Vec::with_capacity(response.tool_calls.len());
                 for call in &response.tool_calls {
                     let started = Instant::now();
-                    let (result, error) = self.execute_agent_tool(lc, call).await;
-                    run.events.push(SpanEvent::ToolRun {
-                        id: call.id.clone(),
-                        name: call.function.name.clone(),
-                        args: call.function.arguments.clone(),
-                        result: result.clone(),
-                        duration_us: started.elapsed().as_micros() as u64,
-                        error,
-                    });
-                    run.tool_calls.push(call.clone());
-                    run.tool_executions.push(result.clone());
-                    blocks.push(crate::ContentBlock::tool_result_text(
-                        &call.id,
-                        call.call_id.as_deref(),
+                    let (result, error) = self.execute_agent_tool(lc, dispatch, call).await;
+                    blocks.push(run.record_tool_result(
+                        call,
                         result,
+                        started.elapsed().as_micros() as u64,
+                        error,
                     ));
                 }
                 chat.push_message(Message::with_content(Role::User, blocks));
@@ -2616,12 +2421,12 @@ impl Interpreter {
                 }
                 match parsed {
                     Ok((output, metas)) => {
-                        return Ok(LoopOutcome::Done {
+                        return Ok(LoopOutcome::Done(AgentCompletion {
                             output,
                             raw,
                             field_meta: metas,
                             chat,
-                        });
+                        }));
                     }
                     Err(err) if turn + 1 < lc.n.stop.max_turns.get() => {
                         run.push_prompt(
@@ -2702,12 +2507,12 @@ impl Interpreter {
             source: Some(Box::new(err)),
             usage: run.usage,
         })?;
-        Ok(LoopOutcome::Done {
+        Ok(LoopOutcome::Done(AgentCompletion {
             output,
             raw,
             field_meta: metas,
             chat: response.chat,
-        })
+        }))
     }
 
     /// Executes one agent tool call. Failures are conversational: the error
@@ -2715,30 +2520,32 @@ impl Interpreter {
     async fn execute_agent_tool(
         &self,
         lc: &AgentLoopCx<'_>,
+        dispatch: &AgentDispatch,
         call: &rig::message::ToolCall,
     ) -> (String, Option<String>) {
-        let outcome: Result<String, String> = match lc.code_mode {
+        let outcome: Result<String, String> = match dispatch.code_mode.as_ref() {
             Some(surface) if call.function.name == dsrs_tools::RUN_JS_TOOL_NAME => {
                 execute_code_mode_script(surface, &call.function.arguments).await
             }
-            _ => self.dispatch_agent_tool(lc, call).await,
+            _ => self.dispatch_agent_tool(lc.at, dispatch, call).await,
         };
         let (text, error) = match outcome {
             Ok(text) => (text, None),
             Err(message) => (message.clone(), Some(message)),
         };
-        (clip_tool_result(text, lc.policy), error)
+        (clip_tool_result(text, &lc.surface.policy), error)
     }
 
     /// Routes one tool call to its bound executor (host `ToolDyn` or the
     /// sandbox), by declared name.
     async fn dispatch_agent_tool(
         &self,
-        lc: &AgentLoopCx<'_>,
+        at: &str,
+        dispatch: &AgentDispatch,
         call: &rig::message::ToolCall,
     ) -> Result<String, String> {
         let name = call.function.name.as_str();
-        match lc.by_name.get(name) {
+        match dispatch.by_name.get(name) {
             None => Err(format!("Tool '{name}' not found")),
             Some(&tool_id) => match &self.tool_exec[tool_id] {
                 Some(ToolExec::Host(tool)) => tool
@@ -2746,7 +2553,8 @@ impl Interpreter {
                     .await
                     .map_err(|err| format!("tool `{name}` failed: {err}")),
                 Some(ToolExec::Sandboxed(code)) => {
-                    self.execute_sandboxed_tool(lc, tool_id, *code, call).await
+                    self.execute_sandboxed_tool(at, dispatch, tool_id, *code, call)
+                        .await
                 }
                 None => Err(format!("tool `{name}` is not bound")),
             },
@@ -2755,7 +2563,8 @@ impl Interpreter {
 
     async fn execute_sandboxed_tool(
         &self,
-        lc: &AgentLoopCx<'_>,
+        at: &str,
+        dispatch: &AgentDispatch,
         tool_id: ToolId,
         code: ParamId,
         call: &rig::message::ToolCall,
@@ -2764,14 +2573,14 @@ impl Interpreter {
             .sandbox
             .as_ref()
             .ok_or_else(|| "sandbox unavailable".to_string())?;
-        let (source, hash) = lc
+        let (source, hash) = dispatch
             .sandbox_code
             .get(&tool_id)
             .ok_or_else(|| "sandboxed tool has no code".to_string())?;
         let tool = &self.program.tools[tool_id];
         let registered_name = self
             .ensure_registered(
-                lc.at,
+                at,
                 sandbox.as_ref(),
                 code,
                 (source, *hash),
@@ -2794,16 +2603,16 @@ impl Interpreter {
         &self,
         node: &'a AgentLoopNode,
         cx: &Cx<'_>,
-        allow_code_mode: bool,
+        dispatch_tools: bool,
     ) -> PreparedAgent<'a> {
         PreparedAgent {
             node,
             tools: self.p_tool_set(cx, node.tool_set, &node.tools),
             policy: self.p_context(cx, node.context_policy),
-            code_mode: if allow_code_mode {
-                self.code_mode
+            execution: if dispatch_tools {
+                AgentExecution::Dispatch(self.code_mode)
             } else {
-                None
+                AgentExecution::CallerManaged
             },
         }
     }
@@ -2813,6 +2622,7 @@ impl Interpreter {
         cx: &Cx<'_>,
         agent: &PreparedAgent<'_>,
         opening: TurnRequest<'_>,
+        prefix_len: usize,
     ) -> (
         Option<SpanGuard>,
         Option<crate::trace::replay::ReplayDirective>,
@@ -2822,14 +2632,31 @@ impl Interpreter {
 
         let prompt = OnceCell::new();
         let opening_hash = || *prompt.get_or_init(|| opening.prompt_hash());
-        let fingerprint = OnceCell::new();
-        let request_hash =
-            || *fingerprint.get_or_init(|| self.agent_request_hash(cx, agent, opening_hash()));
-        let replay = intercept_agent(opening.at, opening_hash, request_hash);
+        let legacy = OnceCell::new();
+        let legacy_agent_hash =
+            || *legacy.get_or_init(|| self.agent_request_hash_v2(cx, agent, opening_hash()));
+        let protected_prefix_len = agent.policy.max_history_turns.map(|_| prefix_len);
+        let request_hash = || {
+            crate::utils::hash::stable_hash_debug(&(
+                "dsrs-agent-v3",
+                legacy_agent_hash(),
+                protected_prefix_len.map(|length| length as u64),
+            ))
+        };
+        let replay = intercept_agent(
+            opening.at,
+            opening.prefix.len() + opening.suffix.len(),
+            protected_prefix_len,
+            opening_hash,
+            legacy_agent_hash,
+            request_hash,
+        );
         let guard = opening.open_span(|| {
-            // Copies of legacy spans retain the original matching contract.
+            // Copies without chat edits retain their original matching contract.
             Some(match &replay {
-                Some(ReplayDirective::Serve(span)) => span.span().request_hash,
+                Some(ReplayDirective::Serve(span)) if !span.span().has_chat_edits() => {
+                    span.span().request_hash
+                }
                 _ => request_hash(),
             })
         });
@@ -2841,27 +2668,31 @@ impl Interpreter {
         &self,
         at: &str,
         cx: &Cx<'_>,
-        agent: &PreparedAgent<'_>,
+        agent: PreparedAgent<'_>,
     ) -> Result<AgentSurface, RunError> {
         let p = &*self.program;
         let tools = &agent.tools;
         let mut definitions = Vec::with_capacity(tools.len());
-        let mut by_name: HashMap<String, ToolId> = HashMap::new();
-        let mut sandbox_code: HashMap<ToolId, (String, u64)> = HashMap::new();
+        let mut dispatch =
+            matches!(agent.execution, AgentExecution::Dispatch(_)).then(AgentDispatch::default);
         for &tool_id in tools.iter() {
             let tool = &p.tools[tool_id];
             let name = p.syms.get(tool.name).to_string();
+            if let Some(dispatch) = &mut dispatch {
+                dispatch.by_name.insert(name.clone(), tool_id);
+                if let ToolKind::Sandboxed { code } = tool.kind
+                    && let ParamValue::Code { source, hash, .. } = self.p_value(cx, code)
+                {
+                    dispatch
+                        .sandbox_code
+                        .insert(tool_id, (source.clone(), *hash));
+                }
+            }
             definitions.push(rig::completion::ToolDefinition {
-                name: name.clone(),
+                name,
                 description: self.p_text(cx, tool.desc),
                 parameters: self.tool_input_schema(tool.sig).clone(),
             });
-            by_name.insert(name, tool_id);
-            if let ToolKind::Sandboxed { code } = tool.kind
-                && let ParamValue::Code { source, hash, .. } = self.p_value(cx, code)
-            {
-                sandbox_code.insert(tool_id, (source.clone(), *hash));
-            }
         }
         let stop_names: Vec<String> = agent
             .node
@@ -2873,29 +2704,34 @@ impl Interpreter {
         // Code Mode: collapse the non-stop tool surface into one `run_js`
         // definition (stop tools stay individual — the loop must see their
         // calls by name to end).
-        let code_mode = if let Some(config) = agent.code_mode {
-            self.build_code_mode_surface(
-                at,
-                config,
-                tools,
-                &mut definitions,
-                &sandbox_code,
-                &stop_names,
-            )
-            .await?
-        } else {
-            None
-        };
+        if let Some(dispatch) = &mut dispatch
+            && let Some(config) = agent.execution.code_mode()
+        {
+            dispatch.code_mode = self
+                .build_code_mode_surface(
+                    at,
+                    config,
+                    tools,
+                    &mut definitions,
+                    &dispatch.sandbox_code,
+                    &stop_names,
+                )
+                .await?;
+        }
         Ok(AgentSurface {
             toolset: ToolSet::from_definitions(definitions),
-            by_name,
-            sandbox_code,
             stop_names,
-            code_mode,
+            policy: agent.policy,
+            dispatch,
         })
     }
 
-    fn agent_request_hash(&self, cx: &Cx<'_>, agent: &PreparedAgent<'_>, opening_hash: u64) -> u64 {
+    fn agent_request_hash_v2(
+        &self,
+        cx: &Cx<'_>,
+        agent: &PreparedAgent<'_>,
+        opening_hash: u64,
+    ) -> u64 {
         use crate::utils::hash::{HashWriter, StableHasher};
         use std::fmt::Write as _;
         use std::hash::Hasher as _;
@@ -2907,7 +2743,11 @@ impl Interpreter {
         let _ = write!(
             writer,
             "dsrs-agent-v2 {opening_hash:016x} {:?} {:?} {:?} {} {}",
-            agent.policy, agent.code_mode, n.budget, n.stop.max_turns, n.stop.until_parse
+            agent.policy,
+            agent.execution.code_mode(),
+            n.budget,
+            n.stop.max_turns,
+            n.stop.until_parse
         );
         for &id in n.stop.stop_tools.iter() {
             let _ = write!(writer, " stop {:?}", p.syms.get(p.tools[id].name));
@@ -3214,6 +3054,26 @@ struct AgentRun {
 }
 
 impl AgentRun {
+    fn record_tool_result(
+        &mut self,
+        call: &rig::message::ToolCall,
+        result: String,
+        duration_us: u64,
+        error: Option<String>,
+    ) -> crate::ContentBlock {
+        self.events.push(SpanEvent::ToolRun {
+            id: call.id.clone(),
+            name: call.function.name.clone(),
+            args: call.function.arguments.clone(),
+            result: result.clone(),
+            duration_us,
+            error,
+        });
+        self.tool_calls.push(call.clone());
+        self.tool_executions.push(result.clone());
+        crate::ContentBlock::tool_result_text(&call.id, call.call_id.as_deref(), result)
+    }
+
     fn push_prompt(&mut self, chat: &mut Chat, prompt: impl Into<String>) {
         let message = Message::user(prompt);
         self.events.push(SpanEvent::ChatMessage {
@@ -3227,17 +3087,72 @@ impl AgentRun {
         guard: &mut Option<SpanGuard>,
         surface: Result<AgentSurface, RunError>,
     ) -> Result<AgentSurface, RunError> {
-        surface.inspect_err(|err| {
-            if let Some(guard) = guard.take() {
-                guard.finish(span_error(
-                    crate::trace::SpanErrorKind::Tool,
-                    err.to_string(),
-                    std::mem::take(&mut self.events),
-                    None,
-                    self.usage,
-                ));
-            }
+        surface.map_err(|err| {
+            std::mem::take(self).finish_error(guard.take(), crate::trace::SpanErrorKind::Tool, err)
         })
+    }
+
+    fn finish(
+        self,
+        guard: Option<SpanGuard>,
+        done: AgentCompletion,
+        leaf: Option<(&str, &LMConfig)>,
+    ) -> (JsonMap, Option<LeafOutcome>, Chat) {
+        let AgentCompletion {
+            output,
+            raw,
+            field_meta,
+            chat,
+        } = done;
+        let leaf = leaf.map(|(at, config)| LeafOutcome {
+            name: at.to_string(),
+            raw_response: raw.clone(),
+            field_meta,
+            call_ids: self.call_ids,
+            usage: self.usage,
+            model_config_hash: crate::trace::ModelEntry::from_config(config).config_hash,
+            span_id: guard.as_ref().map(SpanGuard::id),
+            tool_calls: self.tool_calls,
+            tool_executions: self.tool_executions,
+        });
+        if let Some(guard) = guard {
+            guard.finish(SpanOutcome {
+                events: self.events,
+                raw_output: Some(raw),
+                output: Some(output.clone()),
+                usage: self.usage,
+                error: None,
+            });
+        }
+        (output, leaf, chat)
+    }
+
+    fn finish_loop_error(self, guard: Option<SpanGuard>, error: RunError) -> RunError {
+        use crate::trace::SpanErrorKind;
+        let kind = match &error {
+            RunError::Parse { .. } => SpanErrorKind::Parse,
+            RunError::Tool { .. } => SpanErrorKind::Tool,
+            _ => SpanErrorKind::Lm,
+        };
+        self.finish_error(guard, kind, error)
+    }
+
+    fn finish_error(
+        self,
+        guard: Option<SpanGuard>,
+        kind: crate::trace::SpanErrorKind,
+        error: RunError,
+    ) -> RunError {
+        if let Some(guard) = guard {
+            guard.finish(span_error(
+                kind,
+                error.to_string(),
+                self.events,
+                None,
+                self.usage,
+            ));
+        }
+        error
     }
 }
 
@@ -3245,14 +3160,7 @@ impl AgentRun {
 /// final output, or — caller-managed conversations only — a suspension on
 /// pending tool calls.
 enum LoopOutcome {
-    Done {
-        output: JsonMap,
-        raw: String,
-        field_meta: IndexMap<String, FieldMeta>,
-        /// The conversation as of the accepting turn — what the conversation
-        /// surface returns; map-in/map-out evaluation drops it.
-        chat: Chat,
-    },
+    Done(AgentCompletion),
     Suspend {
         calls: Vec<rig::message::ToolCall>,
         chat: Chat,
@@ -3260,13 +3168,26 @@ enum LoopOutcome {
     },
 }
 
+struct AgentCompletion {
+    output: JsonMap,
+    raw: String,
+    field_meta: IndexMap<String, FieldMeta>,
+    chat: Chat,
+}
+
 /// One agent loop's resolved tool surface (see
 /// [`Interpreter::build_agent_surface`]).
 struct AgentSurface {
     toolset: ToolSet,
+    stop_names: Vec<String>,
+    policy: ContextPolicy,
+    dispatch: Option<AgentDispatch>,
+}
+
+#[derive(Default)]
+struct AgentDispatch {
     by_name: HashMap<String, ToolId>,
     sandbox_code: HashMap<ToolId, (String, u64)>,
-    stop_names: Vec<String>,
     code_mode: Option<CodeModeSurface>,
 }
 
@@ -3274,7 +3195,21 @@ struct PreparedAgent<'a> {
     node: &'a AgentLoopNode,
     tools: Box<[ToolId]>,
     policy: ContextPolicy,
-    code_mode: Option<dsrs_tools::SandboxConfig>,
+    execution: AgentExecution,
+}
+
+enum AgentExecution {
+    CallerManaged,
+    Dispatch(Option<dsrs_tools::SandboxConfig>),
+}
+
+impl AgentExecution {
+    fn code_mode(&self) -> Option<dsrs_tools::SandboxConfig> {
+        match self {
+            Self::CallerManaged => None,
+            Self::Dispatch(config) => *config,
+        }
+    }
 }
 
 struct TurnRequest<'a> {
@@ -3312,14 +3247,18 @@ struct PredictExchange<'a> {
     guard: Option<SpanGuard>,
 }
 
-/// Owned context threaded into [`Interpreter::conclude_agent_turn`] — what a
-/// [`ToolSuspension`] needs to carry when the loop suspends.
-struct AgentTurnCtx {
+/// Resolved conversation state retained across caller-managed tool rounds.
+struct AgentTurn {
+    program: Arc<Program>,
     node: NodeId,
-    overlay: Option<Arc<Overlay>>,
+    at: String,
+    lm: Arc<LM>,
+    surface: AgentSurface,
     meter: Arc<BudgetMeter>,
     run_meter: Arc<BudgetMeter>,
     prefix_len: usize,
+    guard: Option<SpanGuard>,
+    run: AgentRun,
 }
 
 /// Borrowed context for one agent-loop invocation — keeps `agent_loop` and
@@ -3329,15 +3268,10 @@ struct AgentLoopCx<'a> {
     n: &'a AgentLoopNode,
     def: &'a SignatureDef,
     lm: &'a Arc<LM>,
-    toolset: &'a ToolSet,
-    by_name: &'a HashMap<String, ToolId>,
-    sandbox_code: &'a HashMap<ToolId, (String, u64)>,
-    stop_names: &'a [String],
+    surface: &'a AgentSurface,
     prefix_len: usize,
     meter: &'a Arc<BudgetMeter>,
     run_meter: &'a Arc<BudgetMeter>,
-    policy: &'a ContextPolicy,
-    code_mode: Option<&'a CodeModeSurface>,
 }
 
 /// One agent loop's Code Mode surface: the wrapped tool capabilities and the

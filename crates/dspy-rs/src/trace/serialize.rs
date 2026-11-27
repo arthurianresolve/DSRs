@@ -11,6 +11,7 @@
 //! serialization time (never during capture) with a content-hash marker;
 //! truncated spans are marked `complete = false` and refuse strict replay.
 
+use std::borrow::Cow;
 use std::io::{self, Write};
 
 use anyhow::{Context, Result, anyhow};
@@ -23,7 +24,9 @@ use crate::utils::hash::stable_hash_debug;
 use crate::{ContentBlock, Message};
 
 /// Highest format version this reader understands.
-pub const TRACE_FORMAT_VERSION: u32 = 1;
+pub const TRACE_FORMAT_VERSION: u32 = 2;
+
+const CHAT_EDIT_VERSION: u32 = 2;
 
 /// Per-message-text and raw-output budget (bytes).
 const TEXT_BUDGET: usize = 64 * 1024;
@@ -60,14 +63,27 @@ struct Footer<T> {
 }
 
 impl Trace {
+    pub(crate) fn wire_version(&self) -> u32 {
+        if self.meta.v < CHAT_EDIT_VERSION && self.spans.iter().any(Span::has_chat_edits) {
+            CHAT_EDIT_VERSION
+        } else {
+            self.meta.v
+        }
+    }
+
     /// Serializes to canonical JSONL: one header line, one line per span, one
     /// footer line when an outcome is recorded.
     pub fn to_jsonl(&self) -> Result<String> {
+        let mut meta = Cow::Borrowed(&self.meta);
+        let version = self.wire_version();
+        if version != meta.v {
+            meta.to_mut().v = version;
+        }
         let mut out = Vec::new();
         serde_json::to_writer(
             &mut out,
             &HeaderRef {
-                h: &self.meta,
+                h: &meta,
                 components: &self.components,
                 param_ids: &self.param_ids,
                 models: &self.models,
@@ -135,6 +151,7 @@ impl Trace {
                 .retain(|event| !matches!(event, SpanEvent::Unknown));
             trace.spans.push(span);
         }
+        trace.meta.v = trace.wire_version();
         Ok(trace)
     }
 }
@@ -343,12 +360,26 @@ mod tests {
             message: Message::user("x".repeat(TEXT_BUDGET * 2)),
         });
         let parsed = Trace::from_jsonl(&test_trace(span).to_jsonl().unwrap()).unwrap();
+        assert_eq!(parsed.meta.v, CHAT_EDIT_VERSION);
         let span = &parsed.spans[0];
         assert!(!span.complete);
         let Some(SpanEvent::ChatMessage { message }) = span.events.last() else {
             panic!("expected a chat edit");
         };
         assert!(message.text_content().contains("truncated fnv1a="));
+    }
+
+    #[test]
+    fn version_one_files_with_chat_edits_are_upgraded_on_read() {
+        let mut span = test_span("hello");
+        span.events
+            .insert(0, SpanEvent::HistoryPruned { start: 0, count: 1 });
+        let current = test_trace(span).to_jsonl().unwrap();
+        assert!(current.starts_with(r#"{"h":{"v":2,"#));
+        let legacy = current.replacen(r#""v":2"#, r#""v":1"#, 1);
+        let trace = Trace::from_jsonl(&legacy).unwrap();
+        assert_eq!(trace.meta.v, CHAT_EDIT_VERSION);
+        assert_eq!(trace.to_jsonl().unwrap(), current);
     }
 
     #[test]

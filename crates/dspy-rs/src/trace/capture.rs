@@ -124,11 +124,13 @@ impl TraceSink {
     }
 
     fn finish(self) -> Trace {
-        match Arc::try_unwrap(self.0) {
+        let mut trace = match Arc::try_unwrap(self.0) {
             Ok(mutex) => mutex.into_inner().unwrap().trace,
             // Fallback: clone if an orphaned task still holds a reference.
             Err(arc) => arc.lock().unwrap().trace.clone(),
-        }
+        };
+        trace.meta.v = trace.wire_version();
+        trace
     }
 
     fn tag(&self, key: String, value: String) {

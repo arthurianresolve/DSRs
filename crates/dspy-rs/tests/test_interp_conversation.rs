@@ -11,7 +11,7 @@ use dspy_rs::ir::{
     self, Budget, BudgetPolicy, ContextPolicy, ConversationTurn, FieldType as T, Interpreter,
     NodeBudget, Program, ProgramBuilder, RunError, RuntimeEnv, SignatureDef,
 };
-use dspy_rs::trace::{ReplayMode, SpanEvent, Trace, capture, replay};
+use dspy_rs::trace::{ReplayError, ReplayMode, SpanEvent, Trace, capture, replay};
 use dspy_rs::{LM, LMClient, LMConfig, Message, Role, TestCompletionModel};
 use rig::completion::{AssistantContent, ToolDefinition};
 use rig::message::{Text, ToolCall, ToolFunction};
@@ -474,7 +474,8 @@ async fn conversation_surface_refuses_multi_node_programs_and_empty_turns() {
 
 #[tokio::test]
 async fn caller_managed_turn_suspends_on_tool_calls_and_resumes_with_results() {
-    let (lm, _client) = canned_lm(vec![
+    let (lm, client) = canned_lm(vec![
+        tool_call("search", json!({"query": "rust"})),
         tool_call("search", json!({"query": "dsrs"})),
         text(fields(&[("answer", "dsrs is a rust dspy")])),
     ])
@@ -501,8 +502,20 @@ async fn caller_managed_turn_suspends_on_tool_calls_and_resumes_with_results() {
             suspension.chat().messages.last().unwrap().has_tool_calls(),
             "the assistant tool-call turn is already in the conversation"
         );
+        let tools = serde_json::to_value(client.last_request().unwrap().tools).unwrap();
 
         // The caller executes the tool and feeds the result back.
+        let turn = interp
+            .resume_conversation(suspension, vec!["caller says: rust".to_string()])
+            .await?;
+        let ConversationTurn::Suspended(suspension) = turn else {
+            panic!("expected a second suspension");
+        };
+        assert_eq!(suspension.calls()[0].function.arguments["query"], "dsrs");
+        assert_eq!(
+            serde_json::to_value(client.last_request().unwrap().tools).unwrap(),
+            tools
+        );
         let turn = interp
             .resume_conversation(
                 suspension,
@@ -515,10 +528,10 @@ async fn caller_managed_turn_suspends_on_tool_calls_and_resumes_with_results() {
         };
         assert_eq!(run.output["answer"], "dsrs is a rust dspy");
         assert_eq!(run.leaves.len(), 1);
-        assert_eq!(run.leaves[0].tool_calls.len(), 1);
+        assert_eq!(run.leaves[0].tool_calls.len(), 2);
         assert_eq!(
             run.leaves[0].tool_executions,
-            vec!["caller says: dsrs is a rust dspy".to_string()]
+            vec!["caller says: rust", "caller says: dsrs is a rust dspy"]
         );
         // ... conversation shape: tool-result turn then the final answer.
         let roles: Vec<Role> = chat.messages.iter().map(|m| m.role).collect();
@@ -529,10 +542,13 @@ async fn caller_managed_turn_suspends_on_tool_calls_and_resumes_with_results() {
                 Role::User,
                 Role::Assistant,
                 Role::User,
+                Role::Assistant,
+                Role::User,
                 Role::Assistant
             ]
         );
         assert!(chat.messages[3].has_tool_results());
+        assert!(chat.messages[5].has_tool_results());
         Ok::<_, RunError>(())
     })
     .await;
@@ -554,8 +570,11 @@ async fn caller_managed_turn_suspends_on_tool_calls_and_resumes_with_results() {
             _ => "other",
         })
         .collect();
-    assert_eq!(kinds, vec!["exchange", "tool_run", "exchange"]);
-    match &span.events[1] {
+    assert_eq!(
+        kinds,
+        vec!["exchange", "tool_run", "exchange", "tool_run", "exchange"]
+    );
+    match &span.events[3] {
         SpanEvent::ToolRun {
             name,
             result,
@@ -704,22 +723,38 @@ async fn suspending_and_dispatching_modes_record_identical_spans() {
 async fn stop_tool_completes_the_turn_in_both_modes_without_suspending() {
     let stop_call = || tool_call("submit", json!({"answer": "42"}));
 
-    let (lm, _client) = canned_lm(vec![stop_call()]).await;
+    let (lm, client) = canned_lm(vec![
+        tool_call("search", json!({"query": "q"})),
+        stop_call(),
+    ])
+    .await;
     let executed = Arc::new(AtomicUsize::new(0));
     let interp = load_agent(agent_program(None, true), lm, &executed).await;
-    let (dispatched, _) = capture(|| {
+    let run_turn = || {
         interp.run_conversation(
             dspy_rs::Chat::new(Vec::new()),
             Some(obj(&[("question", json!("q"))])),
             None,
             Budget::unlimited(),
         )
-    })
-    .await;
+    };
+    let (dispatched, dispatched_trace) = capture(run_turn).await;
     let (run, _) = dispatched.unwrap();
     assert_eq!(run.output["answer"], "42");
+    let (replayed, report) = replay(&dispatched_trace, ReplayMode::Strict, run_turn).await;
+    let (replayed, _) = replayed.unwrap();
+    assert_eq!(report.served, 1);
+    assert_eq!(client.call_count(), 2);
+    let live_leaf = &run.leaves[0];
+    let replayed_leaf = &replayed.leaves[0];
+    assert_eq!(live_leaf.tool_calls.len(), 1);
+    assert_eq!(replayed_leaf.tool_calls.len(), 1);
+    assert_eq!(replayed_leaf.tool_calls[0].function.name, "search");
+    assert_eq!(replayed_leaf.tool_executions, live_leaf.tool_executions);
+    assert_eq!(executed.load(Ordering::SeqCst), 1);
 
     let (lm, _client) = canned_lm(vec![stop_call()]).await;
+    let executed = Arc::new(AtomicUsize::new(0));
     let interp = load_agent(agent_program(None, true), lm, &executed).await;
     let (turn, trace) = capture(|| {
         interp.run_conversation_caller_managed(
@@ -1038,6 +1073,7 @@ async fn agent_replay_preserves_edited_chat(#[case] finalize: bool) {
 
     let (live, recording) = capture(&turns).await;
     let live = live.unwrap();
+    assert_eq!(recording.meta.v, 2);
     assert_eq!(live.0["answer"], "first");
     assert_eq!(live.2["answer"], "second");
     assert!(recording.spans[0].events.iter().any(|event| matches!(
@@ -1059,4 +1095,135 @@ async fn agent_replay_preserves_edited_chat(#[case] finalize: bool) {
     assert_eq!(report.live, 0);
     assert_eq!(client.call_count(), count);
     assert_eq!(executed.load(Ordering::SeqCst), 1);
+}
+
+#[rstest::rstest]
+#[case::pruning(Some(1))]
+#[case::unbounded(None)]
+#[tokio::test]
+async fn agent_replay_checks_the_protected_prefix_when_pruning(
+    #[case] max_history_turns: Option<u32>,
+) {
+    let program = agent_program(None, false);
+    let mut overlay = ir::Overlay::new(&program);
+    overlay
+        .set(
+            &program,
+            program.param_id("researcher.demos").unwrap(),
+            ir::ParamValue::Demos {
+                rows: vec![ir::DemoRow {
+                    input: obj(&[("question", json!("demo"))]),
+                    output: obj(&[("answer", json!("demonstration"))]),
+                }],
+            },
+        )
+        .unwrap();
+    overlay
+        .set(
+            &program,
+            program.param_id("researcher.context").unwrap(),
+            ir::ParamValue::ContextPolicy {
+                policy: ContextPolicy {
+                    max_history_turns,
+                    ..ContextPolicy::default()
+                },
+            },
+        )
+        .unwrap();
+    let overlay = Some(Arc::new(overlay));
+    let response = || text(fields(&[("answer", "42")]));
+    let (lm, client) = canned_lm(vec![response(), response()]).await;
+    let interp = load_agent(program, lm, &Arc::new(AtomicUsize::new(0))).await;
+    let (opening, trace) = capture(|| {
+        interp.run_conversation(
+            dspy_rs::Chat::new(Vec::new()),
+            Some(obj(&[("question", json!("q"))])),
+            overlay.clone(),
+            Budget::unlimited(),
+        )
+    })
+    .await;
+    let (_, opening_chat) = opening.unwrap();
+    let prompt = trace.prompt(&trace.spans[0]);
+    let supplied = || {
+        interp.run_conversation(
+            dspy_rs::Chat::new(prompt.clone()),
+            None,
+            overlay.clone(),
+            Budget::unlimited(),
+        )
+    };
+    let (_, continuation) = supplied().await.unwrap();
+    assert_eq!(
+        opening_chat.to_json() != continuation.to_json(),
+        max_history_turns.is_some()
+    );
+
+    let (result, report) = replay(&trace, ReplayMode::Strict, supplied).await;
+    if max_history_turns.is_some() {
+        assert!(matches!(
+            result,
+            Err(RunError::Replay {
+                source: ReplayError::Divergence { .. },
+                ..
+            })
+        ));
+        assert_eq!(report.served, 0);
+    } else {
+        assert_eq!(result.unwrap().1.to_json(), continuation.to_json());
+        assert_eq!(report.served, 1);
+    }
+    assert_eq!((report.live, client.call_count()), (0, 2));
+}
+
+#[tokio::test]
+async fn invalid_chat_edits_follow_replay_mode_before_consuming_the_span() {
+    let (lm, client) = canned_lm(vec![
+        text(fields(&[("answer", "recorded")])),
+        text(fields(&[("answer", "live")])),
+    ])
+    .await;
+    let interp = load_agent(
+        agent_program(None, false),
+        lm,
+        &Arc::new(AtomicUsize::new(0)),
+    )
+    .await;
+    let run = || {
+        interp.run_conversation(
+            dspy_rs::Chat::new(Vec::new()),
+            Some(obj(&[("question", json!("q"))])),
+            None,
+            Budget::unlimited(),
+        )
+    };
+    let (result, mut trace) = capture(run).await;
+    assert_eq!(result.unwrap().0.output["answer"], "recorded");
+    let count = trace.prompt(&trace.spans[0]).len() + 1;
+    trace.spans[0]
+        .events
+        .insert(0, SpanEvent::HistoryPruned { start: 0, count });
+
+    let ((first, second), report) = replay(&trace, ReplayMode::Strict, || async {
+        (run().await, run().await)
+    })
+    .await;
+    for result in [first, second] {
+        assert!(matches!(
+            result,
+            Err(RunError::Replay {
+                source: ReplayError::Incomplete { seq: 0, .. },
+                ..
+            })
+        ));
+    }
+    assert_eq!((report.served, report.live, client.call_count()), (0, 0, 1));
+
+    let (result, report) = replay(&trace, ReplayMode::UntilDivergence, run).await;
+    assert_eq!(result.unwrap().0.output["answer"], "live");
+    assert!(matches!(
+        report.divergence,
+        Some(ReplayError::Incomplete { seq: 0, .. })
+    ));
+    assert_eq!((report.served, report.live, client.call_count()), (0, 1, 2));
 }

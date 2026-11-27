@@ -10,6 +10,7 @@ use std::fmt::Write as _;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::sync::LazyLock;
 
+use rig::message::{ToolCall, ToolFunction};
 use serde::{Deserialize, Serialize};
 
 use crate::core::lm::url_origin;
@@ -247,7 +248,7 @@ pub struct Trace {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct TraceMeta {
-    /// Format version. This RFC: 1.
+    /// Trace format version. Version 2 is required for chat edits.
     pub v: u32,
     /// Unique id string, minted at capture start.
     pub trace_id: String,
@@ -380,66 +381,101 @@ impl Span {
     /// the continuation chat independently of the policy's completions.
     pub fn completion_messages(&self) -> Vec<Message> {
         let mut messages = Vec::new();
-        self.append_messages(&mut messages, false)
-            .expect("completion export does not apply history edits");
+        self.append_messages(&mut messages, false);
         messages
     }
 
-    pub(crate) fn replay_chat(&self, mut messages: Vec<Message>) -> Option<Chat> {
-        if !self.append_messages(&mut messages, true)?
+    /// Replay admission has validated every pruning range against this chat.
+    pub(crate) fn replay_chat(&self, mut messages: Vec<Message>) -> Chat {
+        if !self.append_messages(&mut messages, true)
             && let Some(raw) = self.raw_output.as_deref().filter(|raw| !raw.is_empty())
         {
             messages.push(Message::assistant(raw));
         }
-        Some(Chat::new(messages))
+        Chat::new(messages)
     }
 
-    /// Returns whether an event appended a message. A malformed history range
-    /// in an imported trace cannot produce a replayable chat.
-    fn append_messages(&self, out: &mut Vec<Message>, apply_edits: bool) -> Option<bool> {
-        fn flush(out: &mut Vec<Message>, pending: &mut Vec<ContentBlock>) {
-            if !pending.is_empty() {
-                out.push(Message::with_content(Role::User, std::mem::take(pending)));
+    pub(crate) fn has_chat_edits(&self) -> bool {
+        self.events.iter().any(|event| {
+            matches!(
+                event,
+                SpanEvent::HistoryPruned { .. } | SpanEvent::ChatMessage { .. }
+            )
+        })
+    }
+
+    pub(crate) fn chat_edits_valid(&self, mut len: usize) -> bool {
+        for step in self.chat_steps() {
+            match step {
+                ChatStep::Prune { start, count } => {
+                    if start > len || count > len - start {
+                        return false;
+                    }
+                    len -= count;
+                }
+                _ => len += 1,
             }
         }
+        true
+    }
 
-        let mut pending = Vec::new();
+    fn append_messages(&self, out: &mut Vec<Message>, apply_edits: bool) -> bool {
         let mut appended = false;
-        let mut exchange: Option<&Message> = None;
-        for event in &self.events {
-            match event {
-                SpanEvent::Exchange { message, .. } => {
-                    flush(out, &mut pending);
+        for step in self.chat_steps() {
+            match step {
+                ChatStep::Exchange(message) => {
                     out.push(message.clone());
-                    exchange = Some(message);
                     appended = true;
                 }
-                SpanEvent::ToolRun { id, result, .. } => {
-                    let call_id = exchange
-                        .and_then(|message| message.tool_calls_iter().find(|call| call.id == *id))
-                        .and_then(|call| call.call_id.as_deref());
-                    pending.push(ContentBlock::tool_result_text(id, call_id, result.clone()));
+                ChatStep::ToolResults { exchange, events } => {
+                    let blocks = tool_runs(exchange, events)
+                        .map(|run| {
+                            ContentBlock::tool_result_text(
+                                run.id,
+                                run.call.and_then(|call| call.call_id.as_deref()),
+                                run.result.to_owned(),
+                            )
+                        })
+                        .collect();
+                    out.push(Message::with_content(Role::User, blocks));
                     appended = true;
                 }
-                SpanEvent::HistoryPruned { start, count } if apply_edits => {
-                    flush(out, &mut pending);
-                    let range = *start..start.checked_add(*count)?;
-                    out.get(range.clone())?;
-                    out.drain(range);
+                ChatStep::Prune { start, count } if apply_edits => {
+                    out.drain(start..start + count);
                 }
-                SpanEvent::ChatMessage { message } if apply_edits => {
-                    flush(out, &mut pending);
+                ChatStep::Inserted(message) if apply_edits => {
                     out.push(message.clone());
                     appended = true;
                 }
                 _ => {}
             }
         }
-        flush(out, &mut pending);
-        Some(appended)
+        appended
     }
 
-    pub(crate) fn recorded_tool_calls(&self) -> Vec<rig::message::ToolCall> {
+    pub(crate) fn recorded_tools(&self) -> (Vec<ToolCall>, Vec<String>) {
+        self.chat_steps()
+            .filter_map(|step| match step {
+                ChatStep::ToolResults { exchange, events } => Some(tool_runs(exchange, events)),
+                _ => None,
+            })
+            .flatten()
+            .map(|run| {
+                let call = run.call.cloned().unwrap_or_else(|| {
+                    ToolCall::new(
+                        run.id.to_owned(),
+                        ToolFunction {
+                            name: run.name.to_owned(),
+                            arguments: run.args.clone(),
+                        },
+                    )
+                });
+                (call, run.result.to_owned())
+            })
+            .unzip()
+    }
+
+    pub(crate) fn requested_tool_calls(&self) -> Vec<ToolCall> {
         self.events
             .iter()
             .filter_map(|event| match event {
@@ -450,6 +486,87 @@ impl Span {
             .cloned()
             .collect()
     }
+
+    fn chat_steps(&self) -> impl Iterator<Item = ChatStep<'_>> {
+        let is_tool_group =
+            |event: &SpanEvent| matches!(event, SpanEvent::ToolRun { .. } | SpanEvent::Unknown);
+        let mut exchange = None;
+        self.events
+            .chunk_by(move |left, right| is_tool_group(left) && is_tool_group(right))
+            .filter_map(move |events| {
+                let first = events
+                    .iter()
+                    .find(|event| !matches!(event, SpanEvent::Unknown))?;
+                Some(match first {
+                    SpanEvent::Exchange { message, .. } => {
+                        exchange = Some(message);
+                        ChatStep::Exchange(message)
+                    }
+                    SpanEvent::ToolRun { .. } => ChatStep::ToolResults { exchange, events },
+                    SpanEvent::HistoryPruned { start, count } => ChatStep::Prune {
+                        start: *start,
+                        count: *count,
+                    },
+                    SpanEvent::ChatMessage { message } => ChatStep::Inserted(message),
+                    SpanEvent::Unknown => return None,
+                })
+            })
+    }
+}
+
+enum ChatStep<'a> {
+    Exchange(&'a Message),
+    ToolResults {
+        exchange: Option<&'a Message>,
+        events: &'a [SpanEvent],
+    },
+    Prune {
+        start: usize,
+        count: usize,
+    },
+    Inserted(&'a Message),
+}
+
+struct RecordedToolRun<'a> {
+    id: &'a str,
+    name: &'a str,
+    args: &'a serde_json::Value,
+    result: &'a str,
+    call: Option<&'a ToolCall>,
+}
+
+fn tool_runs<'a>(
+    exchange: Option<&'a Message>,
+    events: &'a [SpanEvent],
+) -> impl Iterator<Item = RecordedToolRun<'a>> {
+    let mut requests = exchange
+        .into_iter()
+        .flat_map(Message::tool_calls_iter)
+        .peekable();
+    events.iter().filter_map(move |event| {
+        let SpanEvent::ToolRun {
+            id,
+            name,
+            args,
+            result,
+            ..
+        } = event
+        else {
+            return None;
+        };
+        let matches = |call: &&ToolCall| call.id == *id;
+        let call = requests.next_if(matches).or_else(|| {
+            // Live writes preserve request order. Also accept reordered legacy logs.
+            exchange.and_then(|message| message.tool_calls_iter().find(matches))
+        });
+        Some(RecordedToolRun {
+            id,
+            name,
+            args,
+            result,
+            call,
+        })
+    })
 }
 
 #[derive(Clone)]
