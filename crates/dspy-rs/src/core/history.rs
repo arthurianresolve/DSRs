@@ -52,7 +52,10 @@ impl HistoryRecord {
         let record = self.clone();
         let snapshot = OnceLock::new();
         start_write(stores, (), move |store, ()| {
-            store.persist(snapshot.get_or_init(|| record.snapshot()));
+            let entry = snapshot.get_or_init(|| record.snapshot());
+            store.upsert(entry).inspect_err(|error| {
+                tracing::error!(%error, call_id = %entry.id, "interaction persistence failed");
+            })
         })
     }
     /// The invocation ID used to join prediction metadata to this record.

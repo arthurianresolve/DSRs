@@ -32,6 +32,25 @@ pub enum StorageError {
     },
 }
 
+impl StorageError {
+    // Each scope returns an owned error. The first subscriber receives the
+    // original, and nested subscribers receive its kind and diagnostic.
+    fn copy_for_scope(&self) -> Self {
+        match self {
+            Self::Io(error) => Self::Io(match error.raw_os_error() {
+                Some(code) => std::io::Error::from_raw_os_error(code),
+                None => std::io::Error::new(error.kind(), error.to_string()),
+            }),
+            Self::Json(error) => Self::Json(serde::de::Error::custom(error)),
+            Self::Version(version) => Self::Version(*version),
+            Self::Session { source, additional } => Self::Session {
+                source: Box::new(source.copy_for_scope()),
+                additional: *additional,
+            },
+        }
+    }
+}
+
 /// Parsing upserts the same invocation ID rather than creating another call.
 pub trait InteractionStore: std::fmt::Debug + Send + Sync {
     fn upsert(&self, entry: &HistoryEntry) -> Result<(), StorageError>;
@@ -366,19 +385,6 @@ impl StoreSession {
         }
     }
 
-    fn persist_trace(&self, trace: &crate::Trace) {
-        if let Err(error) = self.store.upsert_trace(trace) {
-            tracing::error!(%error, trace_id = %trace.meta.trace_id, "trace persistence failed");
-            self.record_error(error);
-        }
-    }
-    pub(crate) fn persist(&self, entry: &HistoryEntry) {
-        if let Err(error) = self.store.upsert(entry) {
-            tracing::error!(%error, call_id = %entry.id, "interaction persistence failed");
-            self.record_error(error);
-        }
-    }
-
     async fn drain(&self) {
         while self.pending.load(Ordering::Acquire) != 0 {
             self.drained.notified().await;
@@ -396,15 +402,20 @@ pub(crate) async fn persist_trace(trace: crate::Trace) -> crate::Trace {
     if stores.is_empty() {
         return trace;
     }
-    start_write(stores, trace, StoreSession::persist_trace)
-        .finish()
-        .await
+    start_write(stores, trace, |store, trace| {
+        store.upsert_trace(trace).inspect_err(|error| {
+            tracing::error!(%error, trace_id = %trace.meta.trace_id, "trace persistence failed");
+        })
+    })
+    .finish()
+    .await
 }
 
 /// Persist calls, cache hits, failures, cancellation and subsequent parse results.
-/// History capacity may be zero. Nested scopes compose; spawned tasks need their
-/// own scope. Storage errors are returned after the future finishes (provider
-/// errors remain inside T). With Tokio, writes run on an independent blocking
+/// History capacity may be zero. Nested scopes sharing a store instance share
+/// each write. Spawned tasks need their own scope. Storage errors are returned
+/// after the future finishes (provider errors remain inside T).
+/// With Tokio, writes run on an independent blocking
 /// pool with per-backend admission. A completed scope waits for durability,
 /// including writes from dropped calls.
 pub async fn with_interaction_store<T>(

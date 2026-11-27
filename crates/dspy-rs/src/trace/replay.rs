@@ -59,12 +59,16 @@ use std::sync::{Arc, Mutex};
 use tokio::task_local;
 
 use crate::trace::TRACE_FORMAT_VERSION;
-use crate::trace::span::{CompId, ModelEntry, Span, SpanId, Trace, request_hash};
+use crate::trace::span::{CompId, JsonMap, ModelEntry, Span, SpanId, Trace, request_hash};
 use crate::{LMConfig, Message, Role};
 
 task_local! {
     static ACTIVE: ReplaySession;
 }
+
+/// A call-specific step that validates and prepares a recorded output.
+pub(crate) type PrepareReplayOutput<'a> =
+    &'a (dyn Fn(&JsonMap) -> Result<(), String> + Send + Sync);
 
 /// How a replay scope treats a call that does not match its recording.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,25 +214,46 @@ impl ReplaySession {
     }
 
     /// Decides the fate of one `Predict` call: serve, go live, or refuse.
-    fn decide(&self, component: &str, config: &LMConfig, chat: &[Message]) -> ReplayDirective {
+    fn decide(
+        &self,
+        component: &str,
+        config: &LMConfig,
+        chat: &[Message],
+        prepare: impl FnOnce(&JsonMap) -> Result<(), String>,
+    ) -> ReplayDirective {
         // The same preimage `TraceSink::close` hashes: redacted-config hash ++
         // full rendered prompt. The prefix/suffix split does not matter — the
         // hash streams prefix ++ suffix, and `chat` is exactly that.
-        self.decide_request(component, Some(chat.len()), |_, recorded| {
-            let current = request_hash(ModelEntry::from_config(config).config_hash, &[], chat);
-            (current != recorded.request_hash).then_some(current)
-        })
+        self.decide_request(
+            component,
+            Some(chat.len()),
+            |_, recorded| {
+                let current = request_hash(ModelEntry::from_config(config).config_hash, &[], chat);
+                (current != recorded.request_hash).then_some(current)
+            },
+            prepare,
+        )
     }
 
     /// [`decide`] with a caller-computed `request_hash` — the seam for leaves
     /// whose identity is not prompt-shaped (holes: impl hash ++ canonical
     /// input ++ caps, RFC 0003 §4.4). The recorded span's `request_hash` was
     /// stamped from the same preimage at capture time.
-    fn decide_hashed(&self, component: &str, hash: impl FnOnce() -> u64) -> ReplayDirective {
-        self.decide_request(component, None, |_, recorded| {
-            let current = hash();
-            (current != recorded.request_hash).then_some(current)
-        })
+    fn decide_hashed(
+        &self,
+        component: &str,
+        hash: impl FnOnce() -> u64,
+        prepare: impl FnOnce(&JsonMap) -> Result<(), String>,
+    ) -> ReplayDirective {
+        self.decide_request(
+            component,
+            None,
+            |_, recorded| {
+                let current = hash();
+                (current != recorded.request_hash).then_some(current)
+            },
+            prepare,
+        )
     }
 
     fn decide_request(
@@ -236,6 +261,7 @@ impl ReplaySession {
         component: &str,
         chat_len: Option<usize>,
         mismatch: impl FnOnce(&Trace, &Span) -> Option<u64>,
+        prepare: impl FnOnce(&JsonMap) -> Result<(), String>,
     ) -> ReplayDirective {
         let mut inner = self.0.lock().unwrap();
 
@@ -279,7 +305,10 @@ impl ReplaySession {
             span: span_id,
         };
 
-        if !span.complete || span.output.is_none() || inner.trace.meta.v > TRACE_FORMAT_VERSION {
+        let Some(output) = span.output.as_ref() else {
+            return inner.mismatch(Some(span_id), incomplete());
+        };
+        if !span.complete || inner.trace.meta.v > TRACE_FORMAT_VERSION {
             return inner.mismatch(Some(span_id), incomplete());
         }
 
@@ -299,6 +328,18 @@ impl ReplaySession {
 
         if chat_len.is_some_and(|len| !span.chat_edits_valid(len)) {
             return inner.mismatch(Some(span_id), incomplete());
+        }
+
+        if let Err(message) = prepare(output) {
+            return inner.mismatch(
+                Some(span_id),
+                ReplayError::OutputDecode {
+                    component: component.to_string(),
+                    seq,
+                    span: span_id,
+                    message,
+                },
+            );
         }
 
         let span = RecordedSpan {
@@ -379,9 +420,10 @@ pub(crate) fn intercept(
     component: &str,
     config: &LMConfig,
     chat: &[Message],
+    prepare: impl FnOnce(&JsonMap) -> Result<(), String>,
 ) -> Option<ReplayDirective> {
     let session = ACTIVE.try_with(|session| session.clone()).ok()?;
-    Some(session.decide(component, config, chat))
+    Some(session.decide(component, config, chat, prepare))
 }
 
 /// [`intercept`] with a caller-computed `request_hash` — used by leaves whose
@@ -389,9 +431,10 @@ pub(crate) fn intercept(
 pub(crate) fn intercept_hashed(
     component: &str,
     hash: impl FnOnce() -> u64,
+    prepare: impl FnOnce(&JsonMap) -> Result<(), String>,
 ) -> Option<ReplayDirective> {
     let session = ACTIVE.try_with(|session| session.clone()).ok()?;
-    Some(session.decide_hashed(component, hash))
+    Some(session.decide_hashed(component, hash, prepare))
 }
 
 /// Earlier agent hashes can match when the recording protects the same
@@ -403,10 +446,13 @@ pub(crate) fn intercept_agent(
     opening_hash: impl FnOnce() -> u64,
     legacy_agent_hash: impl FnOnce() -> u64,
     request_hash: impl FnOnce() -> u64,
+    prepare: impl FnOnce(&JsonMap) -> Result<(), String>,
 ) -> Option<ReplayDirective> {
     let session = ACTIVE.try_with(Clone::clone).ok()?;
-    Some(
-        session.decide_request(component, Some(chat_len), |trace, span| {
+    Some(session.decide_request(
+        component,
+        Some(chat_len),
+        |trace, span| {
             let same_prefix = |len| {
                 let recorded_len = match span.prefix {
                     Some(id) => trace
@@ -434,8 +480,9 @@ pub(crate) fn intercept_agent(
             } else {
                 Some(current)
             }
-        }),
-    )
+        },
+        prepare,
+    ))
 }
 
 #[cfg(test)]
@@ -472,6 +519,7 @@ mod tests {
                 || 1,
                 || panic!("legacy match needs only the opening hash"),
                 || panic!("legacy match needs only the opening hash"),
+                |_| Ok(()),
             )
         })
         .await;
@@ -506,7 +554,15 @@ mod tests {
         })
         .await;
         let (different, report) = replay(&trace, ReplayMode::Strict, || async {
-            intercept_agent("agent", 4, Some(1), || 1, || 2, || 3)
+            intercept_agent(
+                "agent",
+                4,
+                Some(1),
+                || 1,
+                || 2,
+                || 3,
+                |_| panic!("divergent output is never prepared"),
+            )
         })
         .await;
         assert!(matches!(
@@ -515,7 +571,7 @@ mod tests {
         ));
         assert_eq!(report.served, 0);
         let (same, report) = replay(&trace, ReplayMode::Strict, || async {
-            intercept_agent("agent", 4, Some(3), || 1, || 2, || 4)
+            intercept_agent("agent", 4, Some(3), || 1, || 2, || 4, |_| Ok(()))
         })
         .await;
         assert!(matches!(same, Some(ReplayDirective::Serve(_))));
@@ -537,19 +593,20 @@ mod tests {
         .await;
         let trace = Arc::new(trace);
         let unused_hash = || panic!("request hash is unnecessary");
+        let unused_output = |_: &JsonMap| panic!("recorded output is unavailable");
         let strict = ReplaySession::new(Arc::clone(&trace), ReplayMode::Strict);
         assert!(matches!(
-            strict.decide_hashed("predict", unused_hash),
+            strict.decide_hashed("predict", unused_hash, unused_output),
             ReplayDirective::Refuse(ReplayError::Incomplete { .. })
         ));
         assert!(matches!(
-            strict.decide_hashed("missing", unused_hash),
+            strict.decide_hashed("missing", unused_hash, unused_output),
             ReplayDirective::Refuse(ReplayError::Exhausted { .. })
         ));
         let until_divergence = ReplaySession::new(trace, ReplayMode::UntilDivergence);
         for _ in 0..2 {
             assert!(matches!(
-                until_divergence.decide_hashed("predict", unused_hash),
+                until_divergence.decide_hashed("predict", unused_hash, unused_output),
                 ReplayDirective::Live
             ));
         }

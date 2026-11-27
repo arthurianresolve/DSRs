@@ -3,7 +3,7 @@ use indexmap::IndexMap;
 use rig::tool::ToolDyn;
 use serde_json::{Map, Value};
 use std::marker::PhantomData;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use tracing::{debug, trace};
 
 use crate::core::lm::ToolSet;
@@ -267,11 +267,13 @@ impl<S: Signature> Predict<S> {
         let interpreter = self.interpreter(&program, &lm).await?;
         let input_map = json_map_from_input::<S>(&input)
             .map_err(|err| internal_source("failed to serialize input", err))?;
+        let replayed = ReplayOutput::<S::Output>::new();
+        let prepare = |output: &crate::JsonMap| replayed.prepare(output);
         let run = interpreter
-            .run_collecting(input_map, overlay, Budget::unlimited())
+            .run_collecting_prepared(input_map, overlay, Budget::unlimited(), &prepare)
             .await
             .map_err(map_run_error::<S>)?;
-        predicted_from_run::<S>(run)
+        predicted_from_run::<S>(run, replayed.into_output())
     }
 
     pub async fn inspect_history(&self, n: usize) -> Vec<crate::HistoryEntry> {
@@ -695,11 +697,13 @@ impl<S: Signature> Predict<S> {
         let overlay = self.effective_overlay(&program)?;
         let lm = self.resolve_lm();
         let interpreter = self.interpreter(&program, &lm).await?;
+        let replayed = ReplayOutput::<S::Output>::new();
+        let prepare = |output: &crate::JsonMap| replayed.prepare(output);
         let (run, chat) = interpreter
-            .run_conversation(chat, None, overlay, Budget::unlimited())
+            .run_conversation_prepared(chat, None, overlay, Budget::unlimited(), Some(&prepare))
             .await
             .map_err(map_run_error::<S>)?;
-        let predicted = predicted_from_run::<S>(run)?;
+        let predicted = predicted_from_run::<S>(run, replayed.into_output())?;
         Ok((predicted, chat))
     }
 
@@ -1087,18 +1091,42 @@ fn internal_error(message: String) -> PredictError {
     }
 }
 
+// The predictor has one leaf. Save its typed value when replay admits the span
+// so the predictor can return the same value without decoding it again.
+struct ReplayOutput<T>(Mutex<Option<T>>);
+
+impl<T: serde::de::DeserializeOwned> ReplayOutput<T> {
+    fn new() -> Self {
+        Self(Mutex::new(None))
+    }
+
+    fn prepare(&self, output: &crate::JsonMap) -> std::result::Result<(), String> {
+        let typed = deserialize_output(output).map_err(|err| err.to_string())?;
+        *self.0.lock().unwrap_or_else(|p| p.into_inner()) = Some(typed);
+        Ok(())
+    }
+
+    fn into_output(self) -> Option<T> {
+        self.0.into_inner().unwrap_or_else(|p| p.into_inner())
+    }
+}
+
+fn deserialize_output<T: serde::de::DeserializeOwned>(
+    output: &Map<String, Value>,
+) -> serde_json::Result<T> {
+    serde_json::from_value(Value::Object(output.clone()))
+}
+
 /// Deserializes the canonical output map into the typed output struct —
 /// failure is the historical `ParseError::ExtractionFailed` shape.
 fn typed_output_from_map<S: Signature>(
     output_map: &Map<String, Value>,
     raw_response: &str,
 ) -> std::result::Result<S::Output, ParseError> {
-    serde_json::from_value(Value::Object(output_map.clone())).map_err(|err| {
-        ParseError::ExtractionFailed {
-            field: "<all>".to_string(),
-            raw_response: raw_response.to_string(),
-            reason: err.to_string(),
-        }
+    deserialize_output(output_map).map_err(|err| ParseError::ExtractionFailed {
+        field: "<all>".to_string(),
+        raw_response: raw_response.to_string(),
+        reason: err.to_string(),
     })
 }
 
@@ -1215,7 +1243,10 @@ fn map_run_error<S: Signature>(err: RunError) -> PredictError {
 /// with `FieldMeta` re-keyed from canonical names to the static lane's
 /// `rust_name` keying (schema field order preserved).
 #[allow(clippy::result_large_err)]
-fn predicted_from_run<S: Signature>(run: RunOutput) -> Result<Predicted<S::Output>, PredictError>
+fn predicted_from_run<S: Signature>(
+    run: RunOutput,
+    replayed: Option<S::Output>,
+) -> Result<Predicted<S::Output>, PredictError>
 where
     S::Output: Schema,
 {
@@ -1244,14 +1275,16 @@ where
         ),
     };
 
-    let typed: S::Output =
-        typed_output_from_map::<S>(&run.output, &raw_response).map_err(|err| {
+    let typed = match replayed {
+        Some(output) => output,
+        None => typed_output_from_map::<S>(&run.output, &raw_response).map_err(|source| {
             PredictError::Parse {
-                source: err,
+                source,
                 raw_response: raw_response.clone(),
                 lm_usage,
             }
-        })?;
+        })?,
+    };
     let field_meta = translate_field_meta::<S>(&leaf_meta);
 
     let checks_total = field_meta

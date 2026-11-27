@@ -4,6 +4,7 @@
 //! loop, stop-tool and budget parity across dispatching and suspending modes,
 //! and replay of recorded conversation runs.
 
+use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -12,7 +13,10 @@ use dspy_rs::ir::{
     NodeBudget, Program, ProgramBuilder, RunError, RuntimeEnv, SignatureDef,
 };
 use dspy_rs::trace::{ReplayError, ReplayMode, SpanEvent, Trace, capture, replay};
-use dspy_rs::{LM, LMClient, LMConfig, Message, Role, TestCompletionModel};
+use dspy_rs::{
+    LM, LMClient, LMConfig, Message, Role, SamplingOptions, TestCompletionModel,
+    with_sampling_options,
+};
 use rig::completion::{AssistantContent, ToolDefinition};
 use rig::message::{Text, ToolCall, ToolFunction};
 use serde_json::json;
@@ -484,14 +488,19 @@ async fn caller_managed_turn_suspends_on_tool_calls_and_resumes_with_results() {
     let interp = load_agent(agent_program(None, false), lm, &executed).await;
 
     let (result, trace) = capture(|| async {
-        let turn = interp
-            .run_conversation_caller_managed(
+        let turn = with_sampling_options(
+            SamplingOptions {
+                id: Some("opening".into()),
+                temperature: Some(0.2),
+            },
+            pin!(interp.run_conversation_caller_managed(
                 dspy_rs::Chat::new(Vec::new()),
                 Some(obj(&[("question", json!("what is dsrs?"))])),
                 None,
                 Budget::unlimited(),
-            )
-            .await?;
+            )),
+        )
+        .await?;
         let suspension = match turn {
             ConversationTurn::Suspended(suspension) => suspension,
             ConversationTurn::Complete { .. } => panic!("expected a suspension"),
@@ -502,12 +511,20 @@ async fn caller_managed_turn_suspends_on_tool_calls_and_resumes_with_results() {
             suspension.chat().messages.last().unwrap().has_tool_calls(),
             "the assistant tool-call turn is already in the conversation"
         );
-        let tools = serde_json::to_value(client.last_request().unwrap().tools).unwrap();
+        let opening = client.last_request().unwrap();
+        assert_eq!(opening.temperature, Some(f64::from(0.2_f32)));
+        let tools = serde_json::to_value(opening.tools).unwrap();
 
         // The caller executes the tool and feeds the result back.
-        let turn = interp
-            .resume_conversation(suspension, vec!["caller says: rust".to_string()])
-            .await?;
+        let resume_options = SamplingOptions {
+            id: Some("resume".into()),
+            temperature: Some(0.8),
+        };
+        let turn = with_sampling_options(
+            resume_options.clone(),
+            pin!(interp.resume_conversation(suspension, vec!["caller says: rust".into()])),
+        )
+        .await?;
         let ConversationTurn::Suspended(suspension) = turn else {
             panic!("expected a second suspension");
         };
@@ -516,12 +533,22 @@ async fn caller_managed_turn_suspends_on_tool_calls_and_resumes_with_results() {
             serde_json::to_value(client.last_request().unwrap().tools).unwrap(),
             tools
         );
-        let turn = interp
-            .resume_conversation(
+        assert_eq!(
+            client.last_request().unwrap().temperature,
+            opening.temperature
+        );
+        let turn = with_sampling_options(
+            resume_options,
+            pin!(interp.resume_conversation(
                 suspension,
                 vec!["caller says: dsrs is a rust dspy".to_string()],
-            )
-            .await?;
+            )),
+        )
+        .await?;
+        assert_eq!(
+            client.last_request().unwrap().temperature,
+            opening.temperature
+        );
         let (run, chat) = match turn {
             ConversationTurn::Complete { run, chat } => (run, chat),
             ConversationTurn::Suspended(_) => panic!("expected completion"),
@@ -549,10 +576,10 @@ async fn caller_managed_turn_suspends_on_tool_calls_and_resumes_with_results() {
         );
         assert!(chat.messages[3].has_tool_results());
         assert!(chat.messages[5].has_tool_results());
-        Ok::<_, RunError>(())
+        Ok::<_, RunError>(run.leaves[0].model_config_hash)
     })
     .await;
-    result.unwrap();
+    let model_config_hash = result.unwrap();
 
     // The interpreter never dispatched the tool.
     assert_eq!(executed.load(Ordering::SeqCst), 0);
@@ -561,6 +588,11 @@ async fn caller_managed_turn_suspends_on_tool_calls_and_resumes_with_results() {
     // exchange/tool_run/exchange stream a dispatched loop records.
     assert_eq!(trace.spans.len(), 1);
     let span = &trace.spans[0];
+    assert_eq!(trace.model(span).temperature, 0.2);
+    assert_eq!(
+        model_config_hash,
+        trace.models[span.model.0 as usize].config_hash
+    );
     let kinds: Vec<&str> = span
         .events
         .iter()

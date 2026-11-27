@@ -36,6 +36,7 @@ use crate::ir::params::{ContextPolicy, DemoRow, Overlay, ParamId, ParamOwner, Pa
 use crate::ir::sig::SignatureDef;
 use crate::ir::validate::{ValidateError, json_matches_type};
 use crate::trace::capture::{begin_span_lazy, in_span};
+use crate::trace::replay::PrepareReplayOutput;
 use crate::trace::{JsonMap, SpanEvent, SpanGuard, SpanOutcome, SpanRequest};
 pub use crate::typesys::json_schema::input_schema_of;
 use crate::typesys::{FieldType, TypeTable, json_schema_compatible, json_schema_for_outputs};
@@ -873,7 +874,7 @@ impl Interpreter {
         overlay: Option<Arc<Overlay>>,
         budget: Budget,
     ) -> Result<JsonMap, RunError> {
-        self.run_inner(input, overlay, budget, false)
+        self.run_inner(input, overlay, budget, false, None)
             .await
             .map(|out| out.output)
     }
@@ -888,7 +889,18 @@ impl Interpreter {
         overlay: Option<Arc<Overlay>>,
         budget: Budget,
     ) -> Result<RunOutput, RunError> {
-        self.run_inner(input, overlay, budget, true).await
+        self.run_inner(input, overlay, budget, true, None).await
+    }
+
+    pub(crate) async fn run_collecting_prepared(
+        &self,
+        input: JsonMap,
+        overlay: Option<Arc<Overlay>>,
+        budget: Budget,
+        prepare: PrepareReplayOutput<'_>,
+    ) -> Result<RunOutput, RunError> {
+        self.run_inner(input, overlay, budget, true, Some(prepare))
+            .await
     }
 
     /// Conversation-in/conversation-out evaluation (RFC 0004 §1): one turn
@@ -927,8 +939,19 @@ impl Interpreter {
         overlay: Option<Arc<Overlay>>,
         budget: Budget,
     ) -> Result<(RunOutput, Chat), RunError> {
+        pin!(self.run_conversation_prepared(chat, input, overlay, budget, None)).await
+    }
+
+    pub(crate) async fn run_conversation_prepared(
+        &self,
+        chat: Chat,
+        input: Option<JsonMap>,
+        overlay: Option<Arc<Overlay>>,
+        budget: Budget,
+        prepare: Option<PrepareReplayOutput<'_>>,
+    ) -> Result<(RunOutput, Chat), RunError> {
         match self
-            .conversation_turn(chat, input, overlay, budget, false)
+            .conversation_turn(chat, input, overlay, budget, false, prepare)
             .await?
         {
             ConversationTurn::Complete { run, chat } => Ok((run, chat)),
@@ -958,7 +981,7 @@ impl Interpreter {
         overlay: Option<Arc<Overlay>>,
         budget: Budget,
     ) -> Result<ConversationTurn, RunError> {
-        self.conversation_turn(chat, input, overlay, budget, true)
+        self.conversation_turn(chat, input, overlay, budget, true, None)
             .await
     }
 
@@ -1044,7 +1067,11 @@ impl Interpreter {
             .expect("conversation leaves are named")
             .to_string();
         self.validate_input(&at, self.leaf_sig(node), input)?;
-        let cx = self.conversation_cx(overlay, Arc::new(BudgetMeter::new(Budget::unlimited())));
+        let cx = self.conversation_cx(
+            overlay,
+            Arc::new(BudgetMeter::new(Budget::unlimited())),
+            None,
+        );
         let (mut messages, suffix) = self.render_leaf_opening(node, input, &cx)?;
         messages.extend(suffix);
         Ok(Chat::new(messages))
@@ -1061,6 +1088,7 @@ impl Interpreter {
         overlay: Option<Arc<Overlay>>,
         budget: Budget,
         suspend_on_tools: bool,
+        prepare: Option<PrepareReplayOutput<'_>>,
     ) -> Result<ConversationTurn, RunError> {
         self.check_overlay(overlay.as_ref())?;
         let node = self.conversation_leaf()?;
@@ -1071,7 +1099,7 @@ impl Interpreter {
             .to_string();
         let sig = self.leaf_sig_id(node);
         let def = &p.sigs[sig];
-        let cx = self.conversation_cx(overlay.clone(), Arc::new(BudgetMeter::new(budget)));
+        let cx = self.conversation_cx(overlay.clone(), Arc::new(BudgetMeter::new(budget)), prepare);
         let lm = match &p.nodes[node] {
             Node::Predict(n) => self.p_model(&at, &cx, n.model)?,
             Node::AgentLoop(n) => self.p_model(&at, &cx, n.model)?,
@@ -1132,7 +1160,9 @@ impl Interpreter {
             Some(agent) => self.begin_agent_request(&cx, agent, opening, prefix_len),
             None => (
                 opening.open_span(|| None),
-                crate::trace::replay::intercept(&at, &lm.config, &messages),
+                crate::trace::replay::intercept(&at, &lm.config, &messages, |output| {
+                    self.prepare_replay_output(def, cx.prepare_replay, output)
+                }),
             ),
         };
         match replay {
@@ -1197,12 +1227,16 @@ impl Interpreter {
                     self.build_agent_surface(&at, &cx, agent).await,
                 )?;
                 let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
+                let model_config_hash =
+                    crate::trace::ModelEntry::from_config(&lm.config).config_hash;
                 self.drive_agent_turn(
                     AgentTurn {
                         program: Arc::clone(&self.program),
                         node,
                         at,
                         lm,
+                        sampling: crate::current_sampling_options(),
+                        model_config_hash,
                         surface,
                         meter,
                         run_meter: Arc::clone(&cx.meter),
@@ -1419,16 +1453,19 @@ impl Interpreter {
             meter: &turn.meter,
             run_meter: &turn.run_meter,
         };
-        let outcome = in_span(
-            turn.guard.as_ref(),
-            pin!(self.agent_loop(&lc, chat, &mut turn.run, next_turn)),
+        let outcome = crate::with_sampling_options(
+            turn.sampling.clone(),
+            pin!(in_span(
+                turn.guard.as_ref(),
+                pin!(self.agent_loop(&lc, chat, &mut turn.run, next_turn)),
+            )),
         )
         .await;
         match outcome {
             Ok(LoopOutcome::Done(done)) => {
                 let (output, leaf, chat) =
                     turn.run
-                        .finish(turn.guard, done, Some((&turn.at, &turn.lm.config)));
+                        .finish(turn.guard, done, Some((&turn.at, turn.model_config_hash)));
                 Ok(ConversationTurn::Complete {
                     run: RunOutput {
                         output,
@@ -1598,11 +1635,12 @@ impl Interpreter {
 
     /// A conversation's run state: overlay + run meter, no frames, no
     /// collection — conversation turns build their [`LeafOutcome`] directly.
-    fn conversation_cx(
+    fn conversation_cx<'a>(
         &self,
         overlay: Option<Arc<Overlay>>,
         meter: Arc<BudgetMeter>,
-    ) -> Cx<'static> {
+        prepare_replay: Option<PrepareReplayOutput<'a>>,
+    ) -> Cx<'a> {
         Cx {
             overlay,
             meter,
@@ -1612,6 +1650,7 @@ impl Interpreter {
             feedback: None,
             refine_feedback: None,
             leaves: None,
+            prepare_replay,
         }
     }
 
@@ -1660,12 +1699,38 @@ impl Interpreter {
         Ok(())
     }
 
+    fn prepare_replay_output(
+        &self,
+        sig: &SignatureDef,
+        prepare: Option<PrepareReplayOutput<'_>>,
+        output: &JsonMap,
+    ) -> Result<(), String> {
+        for field in sig.outputs.iter() {
+            match output.get(&*field.name) {
+                Some(value) if json_matches_type(value, &field.ty, &self.program.types) => {}
+                Some(_) => {
+                    return Err(format!(
+                        "field `{}` does not match its declared type",
+                        field.name
+                    ));
+                }
+                None if field.ty.is_optional() => {}
+                None => return Err(format!("missing output field `{}`", field.name)),
+            }
+        }
+        if let Some(prepare) = prepare {
+            prepare(output)?;
+        }
+        Ok(())
+    }
+
     async fn run_inner(
         &self,
         input: JsonMap,
         overlay: Option<Arc<Overlay>>,
         budget: Budget,
         collect: bool,
+        prepare_replay: Option<PrepareReplayOutput<'_>>,
     ) -> Result<RunOutput, RunError> {
         self.check_overlay(overlay.as_ref())?;
 
@@ -1681,6 +1746,7 @@ impl Interpreter {
             feedback: None,
             refine_feedback: None,
             leaves: collect.then(Vec::new),
+            prepare_replay,
         };
         let output = self.eval(self.program.root, &mut cx).await?;
         Ok(RunOutput {
@@ -1942,7 +2008,10 @@ impl Interpreter {
         // Replay scope (RFC 0001 §4d/e, RFC 0003 M-1): intercept above the
         // LM. A served call reserves no budget, constructs no client, and
         // reaches no provider.
-        match crate::trace::replay::intercept(&at, &lm.config, &messages) {
+        let replay = crate::trace::replay::intercept(&at, &lm.config, &messages, |output| {
+            self.prepare_replay_output(def, cx.prepare_replay, output)
+        });
+        match replay {
             Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
                 let span = span.span();
                 let output = span
@@ -2066,7 +2135,9 @@ impl Interpreter {
             });
             (
                 guard,
-                crate::trace::replay::intercept_hashed(at, request_hash),
+                crate::trace::replay::intercept_hashed(at, request_hash, |output| {
+                    self.prepare_replay_output(def, cx.prepare_replay, output)
+                }),
             )
         };
 
@@ -2321,7 +2392,12 @@ impl Interpreter {
         .await;
         match outcome {
             Ok(LoopOutcome::Done(done)) => {
-                let collect = cx.leaves.is_some().then_some((at.as_str(), &lm.config));
+                let collect = cx.leaves.is_some().then(|| {
+                    (
+                        at.as_str(),
+                        crate::trace::ModelEntry::from_config(&lm.config).config_hash,
+                    )
+                });
                 let (output, leaf, _) = run.finish(guard, done, collect);
                 if let Some(leaves) = cx.leaves.as_mut() {
                     leaves.extend(leaf);
@@ -2650,6 +2726,13 @@ impl Interpreter {
             opening_hash,
             legacy_agent_hash,
             request_hash,
+            |output| {
+                self.prepare_replay_output(
+                    &self.program.sigs[agent.node.sig],
+                    cx.prepare_replay,
+                    output,
+                )
+            },
         );
         let guard = opening.open_span(|| {
             // Copies without chat edits retain their original matching contract.
@@ -3096,7 +3179,7 @@ impl AgentRun {
         self,
         guard: Option<SpanGuard>,
         done: AgentCompletion,
-        leaf: Option<(&str, &LMConfig)>,
+        leaf: Option<(&str, u64)>,
     ) -> (JsonMap, Option<LeafOutcome>, Chat) {
         let AgentCompletion {
             output,
@@ -3104,13 +3187,13 @@ impl AgentRun {
             field_meta,
             chat,
         } = done;
-        let leaf = leaf.map(|(at, config)| LeafOutcome {
+        let leaf = leaf.map(|(at, model_config_hash)| LeafOutcome {
             name: at.to_string(),
             raw_response: raw.clone(),
             field_meta,
             call_ids: self.call_ids,
             usage: self.usage,
-            model_config_hash: crate::trace::ModelEntry::from_config(config).config_hash,
+            model_config_hash,
             span_id: guard.as_ref().map(SpanGuard::id),
             tool_calls: self.tool_calls,
             tool_executions: self.tool_executions,
@@ -3253,6 +3336,8 @@ struct AgentTurn {
     node: NodeId,
     at: String,
     lm: Arc<LM>,
+    sampling: crate::SamplingOptions,
+    model_config_hash: u64,
     surface: AgentSurface,
     meter: Arc<BudgetMeter>,
     run_meter: Arc<BudgetMeter>,
@@ -3807,6 +3892,7 @@ struct Cx<'a> {
     /// ([`Interpreter::run_collecting`]); successful `Predict` leaves push
     /// here in execution order. `None` = plain `run`, zero collection cost.
     leaves: Option<Vec<LeafOutcome>>,
+    prepare_replay: Option<PrepareReplayOutput<'a>>,
 }
 
 impl Cx<'_> {
@@ -3834,6 +3920,7 @@ impl Cx<'_> {
             feedback: None,
             refine_feedback: None,
             leaves: self.leaves.as_ref().map(|_| Vec::new()),
+            prepare_replay: self.prepare_replay,
         }
     }
 }

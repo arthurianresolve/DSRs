@@ -372,14 +372,24 @@ async fn captured_traces_are_reopened_and_joined_to_call_ids() {
     let predict = Predict::<QA>::new().with_lm(lm(vec![answer("Paris")]).await);
     let (result, trace) = with_interaction_store(
         store.clone(),
-        dspy_rs::capture(|| {
-            predict.call(QAInput {
-                question: "France?".into(),
-            })
-        }),
+        Box::pin(with_interaction_store(
+            store.clone(),
+            dspy_rs::capture(|| {
+                predict.call(QAInput {
+                    question: "France?".into(),
+                })
+            }),
+        )),
     )
     .await
+    .unwrap()
     .unwrap();
+    let journal = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        journal.lines().count(),
+        3,
+        "one call, parse update, and trace"
+    );
     let id = result.unwrap().metadata().call_ids[0].clone();
     let handle = Arc::downgrade(&store);
     drop(store);
@@ -390,9 +400,20 @@ async fn captured_traces_are_reopened_and_joined_to_call_ids() {
         entry.trace_id.as_deref(),
         Some(trace.meta.trace_id.as_str())
     );
-    let saved = reopened.get_trace(&trace.meta.trace_id).unwrap().unwrap();
+    let mut saved = reopened.get_trace(&trace.meta.trace_id).unwrap().unwrap();
     assert_eq!(saved.spans.len(), 1);
     assert_eq!(saved.spans[0].output.as_ref().unwrap()["answer"], "Paris");
+
+    saved.meta.v = 1;
+    saved.spans[0].events.push(dspy_rs::SpanEvent::ChatMessage {
+        message: Message::user("one more question"),
+    });
+    reopened.upsert_trace(&saved).unwrap();
+    let journal = std::fs::read_to_string(&path).unwrap();
+    let last: serde_json::Value = serde_json::from_str(journal.lines().last().unwrap()).unwrap();
+    let portable = dspy_rs::Trace::from_jsonl(&saved.to_jsonl().unwrap()).unwrap();
+    assert_eq!(portable.meta.v, 2);
+    assert_eq!(last["trace"]["meta"]["v"], portable.meta.v);
 }
 
 #[tokio::test]
@@ -429,6 +450,24 @@ async fn persistence_keeps_the_first_error_and_counts_later_failures() {
         dspy_rs::StorageError::Session { source, additional: 4 }
             if source.to_string().contains("disk full")
     ));
+}
+
+#[tokio::test]
+async fn nested_scopes_sharing_a_store_both_receive_write_failures() {
+    let store = Arc::new(Broken);
+    let check = |error| {
+        assert!(matches!(
+            error,
+            dspy_rs::StorageError::Session { source, additional: 0 }
+                if matches!(*source, dspy_rs::StorageError::Io(ref io) if io.to_string() == "disk full")
+        ));
+    };
+    let outer = with_interaction_store(store.clone(), async {
+        let inner = with_interaction_store(store, dspy_rs::capture(|| async {})).await;
+        check(inner.unwrap_err());
+    })
+    .await;
+    check(outer.unwrap_err());
 }
 
 #[tokio::test]

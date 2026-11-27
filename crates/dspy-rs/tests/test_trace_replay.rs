@@ -301,6 +301,67 @@ async fn strict_replay_refuses_incomplete_spans() {
     assert_eq!(report.diverged_at, Some(trace.spans[0].id));
 }
 
+#[derive(Signature, Clone, Debug)]
+struct RepCount {
+    #[input]
+    question: String,
+    #[output]
+    count: u16,
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[rstest::rstest]
+#[case::graph_call(false)]
+#[case::chat_call(true)]
+#[tokio::test]
+async fn replay_decodes_typed_output_before_consuming_it(#[case] chat_call: bool) {
+    let response = |count| AssistantContent::text(response_with_fields(&[("count", count)]));
+    let predict = Predict::<RepCount>::builder()
+        .lm(make_test_lm(vec![response("1"), response("2")]).await)
+        .build();
+    let input = || RepCountInput {
+        question: "How many?".into(),
+    };
+    let chat = predict.build_chat(&input()).await.unwrap();
+    let call = || async {
+        if chat_call {
+            predict
+                .call_and_parse(chat.clone())
+                .await
+                .map(|(out, _)| out)
+        } else {
+            predict.call(input()).await
+        }
+    };
+    let (recorded, mut trace) = capture(call).await;
+    assert_eq!(recorded.unwrap().count, 1);
+    // The IR accepts integers wider than the predictor's output field.
+    trace.spans[0].output.as_mut().unwrap()["count"] = serde_json::json!(u64::from(u16::MAX) + 1);
+
+    let ((first, second), report) = replay(&trace, ReplayMode::Strict, || async {
+        (call().await, call().await)
+    })
+    .await;
+    for result in [first, second] {
+        assert!(matches!(
+            result,
+            Err(PredictError::Replay {
+                source: ReplayError::OutputDecode { seq: 0, .. },
+            })
+        ));
+    }
+    assert_eq!((report.served, report.live), (0, 0));
+    assert_eq!(report.diverged_at, Some(trace.spans[0].id));
+
+    let (fallback, report) = replay(&trace, ReplayMode::UntilDivergence, call).await;
+    assert_eq!(fallback.unwrap().count, 2);
+    assert_eq!((report.served, report.live), (0, 1));
+    assert!(matches!(
+        report.divergence,
+        Some(ReplayError::OutputDecode { .. })
+    ));
+}
+
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn strict_replay_exhausts_when_live_run_calls_more() {

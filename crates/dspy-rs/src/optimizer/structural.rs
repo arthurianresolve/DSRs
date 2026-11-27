@@ -541,7 +541,7 @@ impl Structural {
             return Err(anyhow!("no examples to optimize over"));
         }
         let mut program = Arc::clone(interp.program());
-        let mut incumbent = overlay.unwrap_or_else(|| Overlay::new(&program));
+        let mut incumbent = Arc::new(overlay.unwrap_or_else(|| Overlay::new(&program)));
         if incumbent.base != program.meta.program_hash {
             return Err(anyhow!(
                 "overlay minted against program {:016x}, expected {:016x}",
@@ -550,7 +550,7 @@ impl Structural {
             ));
         }
 
-        let mut engine = Engine::for_structural(self.engine_config());
+        let mut engine = Engine::for_structural(self.engine_config(), Arc::clone(&incumbent));
         let reflector = self
             .prompt_model
             .as_ref()
@@ -564,7 +564,7 @@ impl Structural {
         // Baseline: the incumbent (+ overlay) over the full example set,
         // traced. Seeds the rollout store and the cache — every later parent
         // minibatch read is served for free.
-        let mut incumbent_row = engine.register_overlay(incumbent.clone());
+        let incumbent_row = 0;
         let mut incumbent_context = EvaluationContext::new();
         let baseline_eval = {
             let target = OptimizeTarget::program_with_examples(
@@ -694,8 +694,11 @@ impl Structural {
                     continue;
                 }
             };
-            let migrated = migrate_overlay(&program, &incumbent, child_interp.program());
-            let child_row = engine.register_overlay(migrated.clone());
+            let migrated = Arc::new(migrate_overlay(
+                &program,
+                &incumbent,
+                child_interp.program(),
+            ));
             let child_context = EvaluationContext::new();
 
             // 5. The gate: child vs parent on the shared minibatch; only a
@@ -708,7 +711,7 @@ impl Structural {
                     child_context,
                 );
                 engine
-                    .evaluate_child(&child_target, child_row, &minibatch, threshold)
+                    .evaluate_child(&child_target, Arc::clone(&migrated), &minibatch, threshold)
                     .await?
             };
             match gate {
@@ -746,23 +749,24 @@ impl Structural {
 
                     program = Arc::clone(child_interp.program());
                     incumbent = migrated;
-                    incumbent_row = child_row;
                     incumbent_context = child_context;
                     owned = Some(child_interp);
                 }
             }
         }
 
+        let spend = *engine.spend();
+        drop(engine);
         Ok(StructuralReport {
             program,
-            overlay: incumbent,
+            overlay: Arc::unwrap_or_clone(incumbent),
             baseline_score,
             final_score,
             edits,
             steps,
             accepted,
             rejected,
-            spend: *engine.spend(),
+            spend,
         })
     }
 }

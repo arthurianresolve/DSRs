@@ -224,7 +224,7 @@ pub struct PrefixEntry {
 }
 
 /// One rollout: ordered spans plus per-trace intern tables.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct Trace {
     pub meta: TraceMeta,
     /// `CompId` -> component name (fx name / dotted path).
@@ -235,7 +235,7 @@ pub struct Trace {
     /// [`attach_program`](Trace::attach_program) fills it; a `None` entry is
     /// a component the program has no leaf for (static-lane harnesses leave
     /// the whole column empty). Additive — no format version bump.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub param_ids: Vec<Option<Vec<crate::ir::ParamId>>>,
     pub models: Vec<ModelEntry>,
     pub prefixes: Vec<PrefixEntry>,

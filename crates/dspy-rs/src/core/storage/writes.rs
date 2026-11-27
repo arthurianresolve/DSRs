@@ -8,7 +8,7 @@ use futures::future::join_all;
 use tokio::runtime::{Builder, Handle, Runtime};
 use tokio::task::JoinHandle;
 
-use super::{InteractionStore, StoreSession};
+use super::{InteractionStore, StorageError, StoreSession};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum StoreKey {
@@ -101,14 +101,41 @@ static WRITER: LazyLock<std::io::Result<Runtime>> = LazyLock::new(|| {
         .build()
 });
 
+fn unique_writes(
+    stores: &[Arc<StoreSession>],
+) -> impl Iterator<Item = (usize, &Arc<StoreSession>)> {
+    stores.iter().enumerate().filter(|(index, session)| {
+        !stores[..*index]
+            .iter()
+            .any(|earlier| Arc::ptr_eq(&earlier.store, &session.store))
+    })
+}
+
+fn write_once<T>(
+    stores: &[Arc<StoreSession>],
+    index: usize,
+    value: &T,
+    write: impl FnOnce(&dyn InteractionStore, &T) -> Result<(), StorageError>,
+) {
+    let primary = &stores[index];
+    if let Err(error) = write(primary.store.as_ref(), value) {
+        for session in &stores[index + 1..] {
+            if Arc::ptr_eq(&primary.store, &session.store) {
+                session.record_error(error.copy_for_scope());
+            }
+        }
+        primary.record_error(error);
+    }
+}
+
 pub(crate) fn start_write<T: Send + Sync + 'static>(
     stores: Vec<Arc<StoreSession>>,
     value: T,
-    write: impl Fn(&StoreSession, &T) + Send + Sync + 'static,
+    write: impl Fn(&dyn InteractionStore, &T) -> Result<(), StorageError> + Send + Sync + 'static,
 ) -> StoreWrite<T> {
     let inline = || {
-        for store in &stores {
-            write(store, &value);
+        for (index, _) in unique_writes(&stores) {
+            write_once(&stores, index, &value, &write);
         }
     };
     let Ok(caller) = Handle::try_current() else {
@@ -125,18 +152,19 @@ pub(crate) fn start_write<T: Send + Sync + 'static>(
     };
     let pending = PendingWrites::new(stores);
     StoreWrite::Pending(writer.spawn(async move {
-        let value = Arc::new(value);
+        let batch = Arc::new((pending, value));
         let write = Arc::new(write);
-        let jobs = pending.0.iter().map(|store| {
-            let value = Arc::clone(&value);
+        let (pending, _) = batch.as_ref();
+        let jobs = unique_writes(&pending.0).map(|(index, session)| {
+            let batch = Arc::clone(&batch);
             let write = Arc::clone(&write);
             let caller = caller.clone();
             async move {
-                let _turn = store.queue.turn.lock().await;
-                let store = Arc::clone(store);
+                let _turn = session.queue.turn.lock().await;
                 tokio::task::spawn_blocking(move || {
                     let _caller = caller.enter();
-                    write(&store, &value);
+                    let (pending, value) = &*batch;
+                    write_once(&pending.0, index, value, write.as_ref());
                 })
                 .await
             }
@@ -144,7 +172,9 @@ pub(crate) fn start_write<T: Send + Sync + 'static>(
         for result in join_all(jobs).await {
             result.expect("interaction storage write failed");
         }
-        Arc::into_inner(value).expect("all interaction storage writes have finished")
+        let (_pending, value) =
+            Arc::into_inner(batch).expect("all interaction storage writes have finished");
+        value
     }))
 }
 
@@ -180,6 +210,7 @@ mod tests {
                         start_write(current_stores(), Arc::clone(&blocked), |_, blocked| {
                             blocked.0.notify_one();
                             let _ = blocked.1.lock().unwrap().recv();
+                            Ok(())
                         })
                     })
                     .collect();
@@ -199,7 +230,9 @@ mod tests {
         let progress = tokio::time::timeout(
             deadline,
             with_interaction_store(other, async {
-                start_write(current_stores(), 42, |_, _| {}).finish().await
+                start_write(current_stores(), 42, |_, _| Ok(()))
+                    .finish()
+                    .await
             }),
         )
         .await;

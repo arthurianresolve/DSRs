@@ -15,6 +15,7 @@ use std::borrow::Cow;
 use std::io::{self, Write};
 
 use anyhow::{Context, Result, anyhow};
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 
 use crate::trace::span::{
@@ -62,6 +63,23 @@ struct Footer<T> {
     f: T,
 }
 
+impl Serialize for Trace {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let has_param_ids = !self.param_ids.is_empty();
+        let mut state = serializer.serialize_struct("Trace", 6 + usize::from(has_param_ids))?;
+        state.serialize_field("meta", self.wire_meta().as_ref())?;
+        state.serialize_field("components", &self.components)?;
+        if has_param_ids {
+            state.serialize_field("param_ids", &self.param_ids)?;
+        }
+        state.serialize_field("models", &self.models)?;
+        state.serialize_field("prefixes", &self.prefixes)?;
+        state.serialize_field("spans", &self.spans)?;
+        state.serialize_field("outcome", &self.outcome)?;
+        state.end()
+    }
+}
+
 impl Trace {
     pub(crate) fn wire_version(&self) -> u32 {
         if self.meta.v < CHAT_EDIT_VERSION && self.spans.iter().any(Span::has_chat_edits) {
@@ -71,19 +89,23 @@ impl Trace {
         }
     }
 
-    /// Serializes to canonical JSONL: one header line, one line per span, one
-    /// footer line when an outcome is recorded.
-    pub fn to_jsonl(&self) -> Result<String> {
+    fn wire_meta(&self) -> Cow<'_, TraceMeta> {
         let mut meta = Cow::Borrowed(&self.meta);
         let version = self.wire_version();
         if version != meta.v {
             meta.to_mut().v = version;
         }
+        meta
+    }
+
+    /// Serializes to canonical JSONL: one header line, one line per span, one
+    /// footer line when an outcome is recorded.
+    pub fn to_jsonl(&self) -> Result<String> {
         let mut out = Vec::new();
         serde_json::to_writer(
             &mut out,
             &HeaderRef {
-                h: &meta,
+                h: self.wire_meta().as_ref(),
                 components: &self.components,
                 param_ids: &self.param_ids,
                 models: &self.models,

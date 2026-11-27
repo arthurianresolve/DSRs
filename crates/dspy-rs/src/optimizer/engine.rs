@@ -933,6 +933,20 @@ struct ScoredRollouts {
     cache: RolloutCache,
 }
 
+struct StructuralTrial<'a> {
+    engine: &'a mut Engine,
+    incumbent: Option<((u64, CandidatePayload), ScoredRollouts)>,
+}
+
+impl Drop for StructuralTrial<'_> {
+    fn drop(&mut self) {
+        if let Some((candidate, scores)) = self.incumbent.take() {
+            self.engine.candidates[0] = candidate;
+            self.engine.scores = scores;
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ScoreScope {
     baseline: u64,
@@ -965,9 +979,10 @@ impl Engine {
         }
     }
 
-    /// Structural search uses the returned rollouts and cache directly.
-    pub(super) fn for_structural(config: EngineConfig) -> Self {
+    /// Structural search keeps its incumbent in the first and only registry row.
+    pub(super) fn for_structural(config: EngineConfig, incumbent: Arc<crate::ir::Overlay>) -> Self {
         Self {
+            candidates: vec![(incumbent.hash(), CandidatePayload::Overlay(incumbent))],
             record_matrix: false,
             ..Self::new(config)
         }
@@ -1621,21 +1636,30 @@ impl Engine {
         .await
     }
 
-    /// Keeps a structural child's scores only if it becomes the incumbent.
-    /// The search owns the engine for the duration of the operation.
+    /// Evaluates a trial in the structural row, restoring the incumbent and
+    /// its scores on rejection, failure, or cancellation. Spend is cumulative.
     pub(super) async fn evaluate_child(
         &mut self,
         target: &OptimizeTarget<'_>,
-        candidate: usize,
+        child: Arc<crate::ir::Overlay>,
         minibatch: &[usize],
         threshold: f64,
     ) -> Result<GateOutcome> {
-        let incumbent = std::mem::take(&mut self.scores);
-        let outcome = self
-            .evaluate_gated(target, candidate, minibatch, threshold)
+        let candidate = std::mem::replace(
+            &mut self.candidates[0],
+            (child.hash(), CandidatePayload::Overlay(child)),
+        );
+        let scores = std::mem::take(&mut self.scores);
+        let mut trial = StructuralTrial {
+            engine: self,
+            incumbent: Some((candidate, scores)),
+        };
+        let outcome = trial
+            .engine
+            .evaluate_gated(target, 0, minibatch, threshold)
             .await;
-        if !matches!(outcome, Ok(GateOutcome::Promoted { .. })) {
-            self.scores = incumbent;
+        if matches!(outcome, Ok(GateOutcome::Promoted { .. })) {
+            trial.incumbent = None;
         }
         outcome
     }
@@ -1852,7 +1876,8 @@ mod tests {
     ) -> Result<()> {
         use crate::core::lm::tests::test_lm_with_model;
         use crate::ir::{
-            self, DemoRow, FieldType, Interpreter, ProgramBuilder, RuntimeEnv, SignatureDef,
+            self, DemoRow, FieldType, Interpreter, Overlay, ProgramBuilder, RuntimeEnv,
+            SignatureDef,
         };
         use crate::{LMConfig, ProgramMetric, TestCompletionModel};
         use rig::completion::{AssistantContent, Usage};
@@ -1926,12 +1951,15 @@ mod tests {
             },
             ..EngineConfig::default()
         };
-        let mut engine = if record_matrix {
-            Engine::new(config)
+        let incumbent = Arc::new(Overlay::new(interp.program()));
+        let original_overlay = Arc::downgrade(&incumbent);
+        let (mut engine, base) = if record_matrix {
+            let mut engine = Engine::new(config);
+            let base = engine.register(Candidate::new());
+            (engine, base)
         } else {
-            Engine::for_structural(config)
+            (Engine::for_structural(config, incumbent), 0)
         };
-        let base = engine.register(Candidate::new());
         let evals = engine
             .evaluate_scores_many(&target, &[base, base], Some(&[1, 0, 1]))
             .await?
@@ -1959,41 +1987,68 @@ mod tests {
         assert_eq!(cached.scores(), [1.0, 0.0]);
         assert!(cached.rollouts.iter().all(|r| r.trace.is_none()));
         assert_eq!(engine.spend().cache_hits, 2);
-        let other = engine.register(Candidate::with_instruction("answerer", "different"));
+        if record_matrix {
+            let other = engine.register(Candidate::with_instruction("answerer", "different"));
+            assert!(matches!(
+                engine.evaluate_scores(&target, other, None).await?,
+                EvalOutcome::BudgetExhausted { needed: 2 }
+            ));
+            assert_eq!(provider.call_count(), 2);
+            return Ok(());
+        }
+
+        // Structural trials share one row and release their overlays unless promoted.
+        let child = OptimizeTarget::program(&interp, &rows, &ExactMatch);
+        let slot = interp
+            .program()
+            .slot_of::<ir::Instruction>("answerer.instruction")
+            .unwrap();
+        let make_overlay = || {
+            let mut overlay = Overlay::new(interp.program());
+            overlay.set_instruction(slot, "different");
+            Arc::new(overlay)
+        };
+        let exhausted = make_overlay();
+        let exhausted_overlay = Arc::downgrade(&exhausted);
         assert!(matches!(
-            engine.evaluate_scores(&target, other, None).await?,
-            EvalOutcome::BudgetExhausted { needed: 2 }
+            engine.evaluate_child(&child, exhausted, &[0], 0.0).await?,
+            GateOutcome::BudgetExhausted { needed: 1 }
         ));
+        assert!(exhausted_overlay.upgrade().is_none());
         assert_eq!(provider.call_count(), 2);
 
-        // Structural search keeps only the current incumbent's score state.
         engine.config.budget.max_metric_calls = Some(5);
-        let child = OptimizeTarget::program(&interp, &rows, &ExactMatch);
         let response =
             || AssistantContent::text("[[ ## answer ## ]]\nyes\n\n[[ ## completed ## ]]");
         provider.push_response(response());
+        let rejected = make_overlay();
+        let rejected_overlay = Arc::downgrade(&rejected);
         assert!(matches!(
-            engine.evaluate_child(&child, other, &[0], 1.0).await?,
+            engine.evaluate_child(&child, rejected, &[0], 1.0).await?,
             GateOutcome::Rejected { .. }
         ));
+        assert!(rejected_overlay.upgrade().is_none());
+        assert!(original_overlay.upgrade().is_some());
         assert_eq!(engine.cache().len(), rows.len());
-        assert_eq!(engine.matrix_for(&target).is_some(), record_matrix);
-        assert!(engine.matrix_for(&child).is_none());
+        assert_eq!(engine.spend().metric_calls, 3);
 
         provider.push_response(response());
         provider.push_response(response());
+        let promoted = make_overlay();
+        let promoted_overlay = Arc::downgrade(&promoted);
         assert!(matches!(
-            engine.evaluate_child(&child, other, &[0], 0.0).await?,
+            engine.evaluate_child(&child, promoted, &[0], 0.0).await?,
             GateOutcome::Promoted { .. }
         ));
+        assert!(promoted_overlay.upgrade().is_some());
+        assert!(original_overlay.upgrade().is_none());
+        assert_eq!(engine.candidates.len(), 1);
         assert_eq!(engine.cache().len(), rows.len());
         assert!(engine.matrix_for(&target).is_none());
-        assert_eq!(engine.matrix_for(&child).is_some(), record_matrix);
+        assert!(engine.matrix_for(&child).is_none());
         assert_eq!(engine.spend().metric_calls, 5);
-        if !record_matrix {
-            assert_eq!(engine.matrix().candidates(), 0);
-            assert_eq!(engine.matrix().examples(), 0);
-        }
+        assert_eq!(engine.matrix().candidates(), 0);
+        assert_eq!(engine.matrix().examples(), 0);
         Ok(())
     }
 
